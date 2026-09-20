@@ -165,6 +165,29 @@ app.get('/api/magnet', async (req, res) => {
 async function getOrAddTorrent(magnetURI, opts = {}) {
   magnetURI = withFallbackTrackers(magnetURI);
   let torrent = await client.get(magnetURI);
+
+  // A stream torrent uses MemoryChunkStore and cannot be converted into a
+  // disk download by changing flags later. Recreate it with WebTorrent's
+  // filesystem store when the user explicitly asks to download the file.
+  if (torrent && opts.isPermanentDownload) {
+    const materializedFile = torrent.files?.some((file) => {
+      const filePath = path.join(DOWNLOAD_DIR, file.path || '');
+      return fs.existsSync(filePath);
+    });
+    const needsDiskStore = torrent._isStreamOnly || torrent._diskBacked !== true;
+    if (needsDiskStore && !materializedFile) {
+      await new Promise((resolve) => {
+        try {
+          torrent.destroy({ destroyStore: false }, resolve);
+        } catch (err) {
+          console.warn('Could not release in-memory stream torrent:', err.message);
+          resolve();
+        }
+      });
+      torrent = null;
+    }
+  }
+
   if (!torrent) {
     const isPermanent = opts.isPermanentDownload === true || (!opts.isStreamOnly && opts.path === DOWNLOAD_DIR);
 
@@ -179,6 +202,7 @@ async function getOrAddTorrent(magnetURI, opts = {}) {
 
     torrent._isPermanentDownload = isPermanent;
     torrent._isStreamOnly = !isPermanent;
+    torrent._diskBacked = isPermanent;
     torrent._addedAt = Date.now();
     torrent.on('error', (err) => {
       console.error('Torrent runtime error:', err.message);
@@ -206,6 +230,7 @@ async function getOrAddTorrent(magnetURI, opts = {}) {
   } else if (opts.isPermanentDownload) {
     torrent._isPermanentDownload = true;
     torrent._isStreamOnly = false;
+    torrent._diskBacked = true;
   }
   return torrent;
 }

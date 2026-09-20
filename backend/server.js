@@ -1173,21 +1173,17 @@ app.get('/api/stream/remux', async (req, res) => {
       // Safari can reject otherwise-valid 4K HDR HEVC fMP4 streams. Keep the
       // original 4K dimensions, but hardware-transcode to universally playable
       // H.264 instead of dropping all the way down to 1080p.
-      vCodecArgs = isDarwin
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '16M', '-vf', 'scale=-2:2160', '-pix_fmt', 'yuv420p']
-        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '16M', '-vf', 'scale=-2:2160', '-pix_fmt', 'yuv420p'];
+      vCodecArgs = ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
+        '-profile:v', 'main', '-level', '5.1', '-b:v', '16M', '-vf', 'scale=-2:2160', '-pix_fmt', 'yuv420p'];
     } else if (mode === 'transcode' || mode === '1080p') {
-      vCodecArgs = isDarwin
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '8M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p']
-        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '8M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p'];
+      vCodecArgs = ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
+        '-profile:v', 'main', '-level', '4.2', '-b:v', '8M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p'];
     } else if (mode === '720p') {
-      vCodecArgs = isDarwin
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '4M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p']
-        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '4M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p'];
+      vCodecArgs = ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
+        '-profile:v', 'main', '-level', '3.1', '-b:v', '4M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p'];
     } else if (mode === '480p') {
-      vCodecArgs = isDarwin
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '1.5M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p']
-        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '1.5M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p'];
+      vCodecArgs = ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
+        '-profile:v', 'main', '-level', '3.0', '-b:v', '1.5M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p'];
     }
 
     // Safari identifies copied HEVC in MP4 by the hvc1 sample entry. Many
@@ -1223,20 +1219,11 @@ app.get('/api/stream/remux', async (req, res) => {
       '-b:a', '192k',
       '-ac', '2',
       '-ar', '48000',
-      '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+      '-movflags', 'frag_keyframe+empty_moov+default_base_moof+separate_moof',
       '-flush_packets', '1',
       '-f', 'mp4',
       'pipe:1',
     ];
-
-    res.writeHead(200, {
-      'Content-Type': 'video/mp4',
-      'Accept-Ranges': 'none',
-      'Cache-Control': 'no-cache, no-store',
-      'Connection': 'keep-alive',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Range, Content-Type, Accept',
-    });
 
     const ff = spawn(FFMPEG_BIN, ffmpegArgs);
     const readStream = file.createReadStream();
@@ -1246,7 +1233,27 @@ app.get('/api/stream/remux', async (req, res) => {
     ff.stdout.on('error', () => {});
 
     readStream.pipe(ff.stdin);
-    ff.stdout.pipe(res);
+    // Do not expose an empty MP4 response to Safari. It treats a chunked
+    // response whose first bytes arrive later as an invalid media resource.
+    // Hold only FFmpeg's initialization fragment in RAM, then stream the rest.
+    let responseStarted = false;
+    ff.stdout.on('data', (chunk) => {
+      if (!responseStarted) {
+        responseStarted = true;
+        res.writeHead(200, {
+          'Content-Type': 'video/mp4',
+          'Accept-Ranges': 'none',
+          'Cache-Control': 'no-cache, no-store',
+          'Connection': 'keep-alive',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Headers': 'Range, Content-Type, Accept',
+        });
+      }
+      res.write(chunk);
+    });
+    ff.stdout.on('end', () => {
+      if (!res.writableEnded) res.end();
+    });
 
     ff.stderr.on('data', (data) => {
       console.error('FFmpeg stderr:', data.toString());

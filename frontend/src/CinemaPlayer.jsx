@@ -34,6 +34,7 @@ export function CinemaPlayer() {
     if (!filename) return false;
     return /\.(mp4|m4v|webm)$/i.test(filename);
   };
+  const isSafariBrowser = /safari/i.test(navigator.userAgent) && !/chrome|chromium|android/i.test(navigator.userAgent);
 
   // Quality / Stream Mode: 'direct' | 'remux' | '1080p' | '720p' | '480p'
   const [streamMode, setStreamMode] = useState(() => {
@@ -145,7 +146,7 @@ export function CinemaPlayer() {
         // Direct once at that point incorrectly sends MKV into Safari/Chrome.
         if (data.fileName) {
           const nativeCompatible = data.isNativeCompatible === true && isNativeVideoFile(data.fileName);
-          const desiredMode = nativeCompatible ? 'direct' : 'remux';
+          const desiredMode = nativeCompatible && !isSafariBrowser ? 'direct' : 'remux';
           hasAutoSelectedModeRef.current = true;
           // Use a functional update so this remains correct even while the
           // polling effect holds an older render in its closure.
@@ -202,7 +203,8 @@ export function CinemaPlayer() {
     if (streamMode === 'direct') {
       return `http://localhost:3001/api/torrent/${infoHash}/stream`;
     } else if (streamMode === 'remux') {
-      return `http://localhost:3001/api/stream/remux?mode=copy&attempt=${remuxAttempt}&magnet=${encodeURIComponent(effectiveMagnet)}`;
+      const mode = status?.isNativeCompatible && isSafariBrowser ? 'safari' : 'copy';
+      return `http://localhost:3001/api/stream/remux?mode=${mode}&attempt=${remuxAttempt}&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else if (streamMode === '1080p') {
       return `http://localhost:3001/api/stream/remux?mode=1080p&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else if (streamMode === '720p') {

@@ -1147,7 +1147,10 @@ app.get('/api/stream/remux', async (req, res) => {
     const isNativeMp4 = /\.(mp4|m4v|webm)$/i.test(file.name);
     // If the file is already native browser-compatible (MP4/WebM) and no transcoding is requested:
     // Bypass FFmpeg entirely and serve native seekable HTTP 206 Partial Content Range stream.
-    if (isNativeMp4 && (mode === 'copy' || !mode || mode === 'direct')) {
+    // Safari needs a fragmented MP4 wrapper even for MP4 files whose moov
+    // atom is at the end of the torrent. The safari mode intentionally skips
+    // this native byte-range shortcut and uses the FFmpeg fMP4 path below.
+    if (isNativeMp4 && mode !== 'safari' && (mode === 'copy' || !mode || mode === 'direct')) {
       const mimeType = getMimeType(file.name);
       const corsHeaders = {
         'Access-Control-Allow-Origin': '*',

@@ -5,7 +5,19 @@ import WebTorrent from 'webtorrent';
 
 const app = express();
 const port = process.env.PORT || 3001;
-const client = new WebTorrent();
+
+// Initialize WebTorrent with secure: 0 to prevent Node 24 OpenSSL 3.x Diffie-Hellman MSE keylength incompatibility
+const client = new WebTorrent({
+  secure: 0,
+});
+
+// Guard against unhandled torrent errors crashing the server process
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err.message);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled Rejection:', reason);
+});
 
 app.use(cors());
 app.use(express.json());

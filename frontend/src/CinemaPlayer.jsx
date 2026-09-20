@@ -50,6 +50,7 @@ export function CinemaPlayer() {
   const [remuxAttempt, setRemuxAttempt] = useState(0);
   const hasAutoSelectedModeRef = useRef(false);
   const remuxFailureCountRef = useRef(0);
+  const recoveryTimerRef = useRef(null);
 
   // Playback Speed State
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
@@ -229,6 +230,10 @@ export function CinemaPlayer() {
       savedPositionRef.current = videoRef.current.currentTime || 0;
     }
     remuxFailureCountRef.current = 0;
+    if (recoveryTimerRef.current) {
+      clearTimeout(recoveryTimerRef.current);
+      recoveryTimerRef.current = null;
+    }
     setStreamMode(newMode);
     setActionFeedback(`Switching quality to ${newMode.toUpperCase()}...`);
     setTimeout(() => setActionFeedback(''), 2500);
@@ -249,23 +254,28 @@ export function CinemaPlayer() {
 
   const handleVideoError = (e) => {
     console.warn('Video element playback error:', e.nativeEvent?.message || e);
+    if (forcePlayTimerRef.current) {
+      clearTimeout(forcePlayTimerRef.current);
+      forcePlayTimerRef.current = null;
+    }
     if (streamMode === 'direct') {
       // Direct stream failed — try remux as fallback
       setActionFeedback('Direct stream unavailable — trying remux fallback...');
       setTimeout(() => handleQualityChange('remux'), 800);
     } else if (streamMode === 'remux') {
-      // Retry remux while more torrent data arrives. Do not silently switch to
-      // a lossy 1080p transcode; that is a manual user choice.
+      // Safari emits repeated media errors while the torrent buffer is still
+      // filling. Changing the URL on every error destroys the partial buffer
+      // and creates an endless retry/jitter loop. Allow one delayed recovery,
+      // then leave the source stable for a deliberate quality change.
       remuxFailureCountRef.current += 1;
-      if (remuxFailureCountRef.current <= 8) {
-        setActionFeedback(`Remux is still buffering — retrying (${remuxFailureCountRef.current}/8)...`);
-        setRemuxAttempt((attempt) => attempt + 1);
+      if (remuxFailureCountRef.current === 1) {
+        setActionFeedback('Browser stream paused while the swarm catches up — retrying once...');
+        recoveryTimerRef.current = setTimeout(() => {
+          recoveryTimerRef.current = null;
+          setRemuxAttempt((attempt) => attempt + 1);
+        }, 4000);
       } else {
-        // Keep a normal MKV on a browser-safe fallback. The old browser4k
-        // fallback was wrong for ordinary 720p H.264 files and produced an
-        // invalid Safari source after only three transient read errors.
-        setActionFeedback('Remux is unavailable for this swarm — switching to a fast 720p stream...');
-        setTimeout(() => handleQualityChange('720p'), 500);
+        setActionFeedback('Browser stream paused. Choose 720p or press Play Now to retry without restarting repeatedly.');
       }
     }
   };

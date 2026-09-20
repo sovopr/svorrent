@@ -72,6 +72,7 @@ export function CinemaPlayer() {
   const savedPositionRef = useRef(0);
   const forcePlayTimerRef = useRef(null); // Auto-dismiss overlay if video stalls
   const firstPieceReadyAtRef = useRef(null); // Timestamp when piece 0 was first seen
+  const userPausedRef = useRef(false);
 
   // Online Subtitles Search Method
   const searchOnlineSubtitles = async (searchTarget, langCode = subtitleLang) => {
@@ -841,13 +842,31 @@ export function CinemaPlayer() {
                       controls
                       playsInline
                       crossOrigin="anonymous"
+                      preload="auto"
                       className="cinema-video"
                       src={streamUrl}
-                      onWaiting={() => setIsVideoLoading(true)}
+                      onWaiting={() => {
+                        setIsVideoLoading(true);
+                        // A slow swarm can temporarily exhaust the buffer.
+                        // Keep the player in a recoverable state and let the
+                        // canplay event resume it when the next pieces arrive.
+                      }}
                       onPlaying={() => setIsVideoLoading(false)}
-                      onPlay={() => setIsVideoLoading(false)}
+                      onPlay={() => {
+                        userPausedRef.current = false;
+                        setIsVideoLoading(false);
+                      }}
+                      onPause={() => {
+                        if (!isVideoLoading) userPausedRef.current = true;
+                      }}
                       onLoadedData={() => setIsVideoLoading(false)}
-                      onCanPlay={handleVideoCanPlay}
+                      onCanPlay={() => {
+                        handleVideoCanPlay();
+                        const video = videoRef.current;
+                        if (video && video.paused && !userPausedRef.current) {
+                          video.play().catch(() => {});
+                        }
+                      }}
                       onError={handleVideoError}
                     >
                       {activeSubtitle && (

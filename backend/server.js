@@ -193,8 +193,11 @@ async function getOrAddTorrent(magnetURI, opts = {}) {
           if (typeof largestFile.select === 'function') largestFile.select();
         }
         if (typeof torrent.select === 'function' && typeof largestFile._startPiece === 'number') {
-          torrent.select(largestFile._startPiece, Math.min(largestFile._startPiece + 2, largestFile._endPiece || largestFile._startPiece), 7);
-          if (typeof largestFile._endPiece === 'number' && largestFile._endPiece > largestFile._startPiece + 2) {
+          // Keep a real read-ahead window so browser/VLC playback does not
+          // outrun the swarm after the first fragment.
+          const readAheadPieces = 24;
+          torrent.select(largestFile._startPiece, Math.min(largestFile._startPiece + readAheadPieces, largestFile._endPiece || largestFile._startPiece), 7);
+          if (typeof largestFile._endPiece === 'number' && largestFile._endPiece > largestFile._startPiece + readAheadPieces) {
             torrent.select(largestFile._endPiece - 1, largestFile._endPiece, 7);
           }
         }
@@ -566,8 +569,9 @@ app.get('/api/torrent/:id/stream', async (req, res) => {
       });
       if (typeof file.select === 'function') file.select();
       if (typeof torrent.select === 'function' && typeof file._startPiece === 'number') {
-        torrent.select(file._startPiece, Math.min(file._startPiece + 2, file._endPiece || file._startPiece), 7);
-        if (typeof file._endPiece === 'number' && file._endPiece > file._startPiece + 2) {
+        const readAheadPieces = 24;
+        torrent.select(file._startPiece, Math.min(file._startPiece + readAheadPieces, file._endPiece || file._startPiece), 7);
+        if (typeof file._endPiece === 'number' && file._endPiece > file._startPiece + readAheadPieces) {
           torrent.select(file._endPiece - 1, file._endPiece, 7);
         }
       }
@@ -641,7 +645,11 @@ app.post('/api/torrent/:id/play-native', async (req, res) => {
     ? torrent.files.reduce((a, b) => (a.length > b.length ? a : b))
     : null;
 
-  const fullPath = largestFile ? path.join(torrent.path || DOWNLOAD_DIR, largestFile.path) : null;
+  // Stream-only torrents live in RAM. Never derive a native-player path from
+  // torrent.path: stale cache paths make VLC try to open deleted files.
+  const fullPath = !torrent._isStreamOnly && largestFile
+    ? path.join(torrent.path || DOWNLOAD_DIR, largestFile.path)
+    : null;
   const fileExistsOnDisk = fullPath && fs.existsSync(fullPath) && fs.statSync(fullPath).size > 1048576;
 
   let targetUrlOrPath = '';
@@ -651,6 +659,9 @@ app.post('/api/torrent/:id/play-native', async (req, res) => {
     targetUrlOrPath = fullPath;
   } else {
     streamModeUsed = true;
+    // The torrent is already registered above, so VLC only needs the short
+    // stream URL. Avoid embedding the full magnet (and its encoded trackers)
+    // in the MRL; some VLC builds reject that very long URL.
     targetUrlOrPath = `http://localhost:3001/api/torrent/${torrent.infoHash}/stream`;
   }
 
@@ -663,8 +674,12 @@ app.post('/api/torrent/:id/play-native', async (req, res) => {
       cmd = `open -a "/Applications/IINA.app" "${targetUrlOrPath}"`;
       playerName = 'IINA';
     } else if (fs.existsSync('/Applications/VLC.app')) {
-      // Use AppleScript to activate VLC, open URL and trigger play immediately
-      cmd = `osascript -e 'tell application "VLC" to activate' -e 'tell application "VLC" to OpenURL "${targetUrlOrPath}"' -e 'tell application "VLC" to play' 2>/dev/null || open -a "/Applications/VLC.app" "${targetUrlOrPath}"`;
+      // VLC's OpenURL AppleScript verb is unreliable and can turn a local
+      // HTTP URL into a bogus :554 MRL. Let macOS pass the URL directly to
+      // VLC, which handles HTTP range requests correctly.
+      // Launch VLC's executable directly so the URL is opened and played,
+      // instead of being merely queued by an already-running VLC instance.
+      cmd = `"/Applications/VLC.app/Contents/MacOS/VLC" "${targetUrlOrPath}" >/dev/null 2>&1 &`;
       playerName = 'VLC Media Player';
     } else {
       cmd = `open -a VLC "${targetUrlOrPath}" 2>/dev/null || open "${targetUrlOrPath}"`;
@@ -1004,8 +1019,9 @@ app.get('/api/stream', async (req, res) => {
       });
       if (typeof file.select === 'function') file.select();
       if (typeof torrent.select === 'function' && typeof file._startPiece === 'number') {
-        torrent.select(file._startPiece, Math.min(file._startPiece + 2, file._endPiece || file._startPiece), 7);
-        if (typeof file._endPiece === 'number' && file._endPiece > file._startPiece + 2) {
+        const readAheadPieces = 24;
+        torrent.select(file._startPiece, Math.min(file._startPiece + readAheadPieces, file._endPiece || file._startPiece), 7);
+        if (typeof file._endPiece === 'number' && file._endPiece > file._startPiece + readAheadPieces) {
           torrent.select(file._endPiece - 1, file._endPiece, 7);
         }
       }
@@ -1108,8 +1124,9 @@ app.get('/api/stream/remux', async (req, res) => {
         file.select();
       }
       if (typeof torrent.select === 'function' && typeof file._startPiece === 'number') {
-        torrent.select(file._startPiece, Math.min(file._startPiece + 2, file._endPiece || file._startPiece), 7);
-        if (typeof file._endPiece === 'number' && file._endPiece > file._startPiece + 2) {
+        const readAheadPieces = 24;
+        torrent.select(file._startPiece, Math.min(file._startPiece + readAheadPieces, file._endPiece || file._startPiece), 7);
+        if (typeof file._endPiece === 'number' && file._endPiece > file._startPiece + readAheadPieces) {
           torrent.select(file._endPiece - 1, file._endPiece, 7);
         }
       }

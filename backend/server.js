@@ -1208,8 +1208,8 @@ app.get('/api/stream/remux', async (req, res) => {
       // Large remuxes often contain many PGS subtitle tracks. Give FFmpeg
       // enough header data to identify the selected video/audio streams, but
       // never map or transcode the subtitle payloads into the browser stream.
-      '-probesize', '10M',
-      '-analyzeduration', '2M',
+      '-probesize', mode === 'browser4k' ? '2M' : '10M',
+      '-analyzeduration', mode === 'browser4k' ? '500k' : '2M',
       '-i', 'pipe:0',
       '-avoid_negative_ts', 'make_zero',    // fix DTS/PTS so browser timeline starts at 0
       '-map', '0:v:0?',

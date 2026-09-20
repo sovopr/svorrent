@@ -188,11 +188,15 @@ export function CinemaPlayer() {
   const getStreamUrl = () => {
     const effectiveMagnet = status?.magnet || params.magnet;
     const infoHash = status?.infoHash;
+    // Remux/transcode needs more than the first torrent piece because FFmpeg
+    // must inspect MKV headers before it can emit the first MP4 fragment.
+    const hasRemuxBuffer = (status?.downloaded || 0) >= 8 * 1024 * 1024;
 
     // Don't expose src until we have piece 0 + infoHash.
     // If we set src too early, the video element fires onerror immediately which
     // cascades: direct → remux → 1080p even for native MP4 files.
     if (!status?.hasFirstPiece || !infoHash) return '';
+    if (streamMode !== 'direct' && !hasRemuxBuffer) return '';
 
     if (streamMode === 'direct') {
       return `http://localhost:3001/api/torrent/${infoHash}/stream`;
@@ -213,6 +217,7 @@ export function CinemaPlayer() {
   };
 
   const streamUrl = getStreamUrl();
+  const streamReady = Boolean(streamUrl);
 
   // Seamless Quality Switching (preserves playback position)
   const handleQualityChange = (newMode) => {
@@ -868,10 +873,10 @@ export function CinemaPlayer() {
                           <div className="buffer-spinner-glow"></div>
                           <div>
                             <h3 className="buffer-title">
-                              {status?.hasFirstPiece ? 'Ready to Play!' : 'Buffering BitTorrent Stream'}
+                              {streamReady ? 'Ready to Play!' : 'Buffering BitTorrent Stream'}
                             </h3>
                             <p className="buffer-desc">
-                              {status?.hasFirstPiece
+                              {streamReady
                                 ? streamMode === 'direct'
                                   ? 'First piece downloaded — click Play or wait for auto-start'
                                   : 'First piece ready — FFmpeg starting stream...'
@@ -881,7 +886,7 @@ export function CinemaPlayer() {
                         </div>
 
                         {/* Play Now CTA — shown once piece 0 is ready */}
-                        {status?.hasFirstPiece && (
+                        {streamReady && (
                           <button
                             className="buffer-play-now-btn"
                             onClick={() => {
@@ -898,7 +903,7 @@ export function CinemaPlayer() {
                         )}
 
                         {/* Piece Progress Bar — shown while waiting for piece 0 */}
-                        {!status?.hasFirstPiece && (
+                        {!streamReady && (
                         <div className="buffer-piece-meter">
                           <div className="meter-label-row">
                             <span className="meter-main-text">
@@ -921,7 +926,7 @@ export function CinemaPlayer() {
                         )}
 
                         {/* Speed + peers mini-stats when piece is ready */}
-                        {status?.hasFirstPiece && (
+                        {streamReady && (
                           <div style={{ textAlign: 'center', fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', marginTop: '2px' }}>
                             ⚡ {formatBytes(status?.downloadSpeed || 0)}/s • {status?.numPeers || 0} peers
                           </div>

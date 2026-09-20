@@ -362,16 +362,40 @@ app.get('/api/magnet', async (req, res) => {
   }
 });
 
+function cleanMagnet(uri) {
+  if (!uri) return '';
+  let str = decodeURIComponent(String(uri));
+  const m = str.match(/btih:([a-fA-F0-9]{40,42}|[a-zA-Z2-7]{32})/i);
+  if (m) {
+    let hash = m[1].toLowerCase();
+    if (hash.length === 42 && hash.startsWith('3a')) hash = hash.slice(2);
+    str = str.replace(/btih:[a-fA-F0-9]{40,42}/i, 'btih:' + hash);
+    if (!str.startsWith('magnet:?')) {
+      str = 'magnet:?' + str.replace(/^magnet:?\/?\/?\??/, '');
+    }
+  }
+  return str;
+}
+
+function extractInfoHash(uri) {
+  if (!uri) return null;
+  const cleaned = cleanMagnet(uri);
+  const m = cleaned.match(/btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
+  return m ? m[1].toLowerCase() : null;
+}
+
 // Helper to get or add torrent
 async function getOrAddTorrent(magnetURI, opts = {}) {
+  magnetURI = cleanMagnet(magnetURI);
+  const targetInfoHash = extractInfoHash(magnetURI);
   magnetURI = withFallbackTrackers(magnetURI);
-  let torrent = await client.get(magnetURI);
+  let torrent = targetInfoHash ? await client.get(targetInfoHash) : await client.get(magnetURI);
 
   // If starting/streaming a movie, purge previous in-memory stream torrents
   // so 100% of bandwidth and RAM is dedicated to the active movie
-  if (opts.isStreamOnly) {
+  if (opts.isStreamOnly && targetInfoHash) {
     client.torrents.forEach((t) => {
-      if (t._isStreamOnly && t.magnetURI !== magnetURI && (!torrent || t.infoHash !== torrent.infoHash)) {
+      if (t._isStreamOnly && t.infoHash && t.infoHash.toLowerCase() !== targetInfoHash) {
         try {
           console.log(`[Stream Purge] Removing previous stream torrent ${t.name || t.infoHash} to reclaim bandwidth & RAM`);
           client.remove(t.infoHash, { destroyStore: true });
@@ -414,16 +438,28 @@ async function getOrAddTorrent(magnetURI, opts = {}) {
       ? { path: opts.path || DOWNLOAD_DIR }
       : { store: MemoryChunkStore };
 
-    torrent = client.add(magnetURI, addOpts);
+    try {
+      torrent = client.add(magnetURI, addOpts);
+    } catch (addErr) {
+      console.warn('client.add error:', addErr.message);
+      if (targetInfoHash) torrent = await client.get(targetInfoHash);
+    }
 
-    torrent._isPermanentDownload = isPermanent;
-    torrent._isStreamOnly = !isPermanent;
-    torrent._diskBacked = isPermanent;
-    torrent._addedAt = Date.now();
-    torrent.on('error', (err) => {
-      console.error('Torrent runtime error:', err.message);
-    });
-    torrent.once('ready', () => {
+    if (!torrent && targetInfoHash) {
+      torrent = await client.get(targetInfoHash);
+    }
+
+    if (torrent) {
+      torrent._isPermanentDownload = isPermanent;
+      torrent._isStreamOnly = !isPermanent;
+      torrent._diskBacked = isPermanent;
+      torrent._addedAt = Date.now();
+      torrent.on('error', (err) => {
+        console.error('Torrent runtime error:', err.message);
+      });
+    }
+    if (torrent) {
+      torrent.once('ready', () => {
       if (torrent.files && torrent.files.length > 0) {
         const largestFile = torrent.files.reduce((a, b) => (a.length > b.length ? a : b));
         if (torrent._isStreamOnly) {
@@ -467,7 +503,8 @@ async function getOrAddTorrent(magnetURI, opts = {}) {
         }
       }
     });
-  } else if (opts.isPermanentDownload) {
+  }
+  } else if (opts.isPermanentDownload && torrent) {
     torrent._isPermanentDownload = true;
     torrent._isStreamOnly = false;
     torrent._diskBacked = true;
@@ -1055,6 +1092,9 @@ app.get('/api/torrent/status', async (req, res) => {
   }
 
   let torrent = await getOrAddTorrent(magnetURI, { isStreamOnly: true });
+  if (!torrent) {
+    return res.status(404).json({ error: 'Could not resolve torrent from swarm' });
+  }
 
   const clientCurrentTime = Math.max(0, parseFloat(req.query.currentTime) || 0);
   const isPaused = req.query.paused === 'true';
@@ -1194,7 +1234,8 @@ app.get('/api/torrent/status', async (req, res) => {
     speedDeficitRatio,
     etaSeconds,
     isNativeCompatible,
-    recommendedMode: isNativeCompatible ? 'direct' : 'remux',
+    recommendedMode: isNativeCompatible ? 'direct' : (/(?:hevc|h\.?265|x265|2160p|4k)/i.test(largestFile?.name || torrent.name || '') ? '1080p' : 'remux'),
+    isHevcOr4K: /(?:hevc|h\.?265|x265|2160p|4k)/i.test(largestFile?.name || torrent.name || ''),
     sourceContainer: largestFile ? (largestFile.name.split('.').pop() || '').toLowerCase() : null,
     sourceIsRemuxRelease: /(?:remux|bluray[ ._-]*remux)/i.test(largestFile?.name || ''),
     streamUrl: `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(magnetURI)}`,
@@ -1457,6 +1498,9 @@ app.get('/api/stream/remux', async (req, res) => {
   }
 
   let torrent = await getOrAddTorrent(magnetURI, { isStreamOnly: true });
+  if (!torrent) {
+    return res.status(500).send('Could not initialize stream torrent from swarm.');
+  }
 
   const swarmTimeout = setTimeout(() => {
     if (!res.headersSent) {
@@ -1551,22 +1595,34 @@ app.get('/api/stream/remux', async (req, res) => {
     }
 
     // Video codec handling for MKV or requested transcode:
+    const isHevc = /(?:hevc|h\.?265|x265|2160p|4k)/i.test(file.name);
+    const userAgent = (req.headers['user-agent'] || '').toLowerCase();
+    const isSafari = userAgent.includes('safari') && !userAgent.includes('chrome') && !userAgent.includes('chromium');
+
+    let effectiveMode = mode || 'copy';
+    // Chrome/Edge/Firefox on macOS fail to decode 10-bit HEVC inside fragmented MP4, causing a frozen black screen.
+    // If client requested 'copy' or 'remux' on 4K/HEVC in Chrome, automatically use 1080p Apple Silicon hardware transcode.
+    if ((effectiveMode === 'copy' || effectiveMode === 'remux') && isHevc && !isSafari && req.query.forceCopy !== 'true') {
+      console.log(`[Stream Transcode] HEVC 10-bit detected for Chrome/Edge. Auto-switching to 1080p hardware transcode to avoid black screen.`);
+      effectiveMode = '1080p';
+    }
+
     let vCodecArgs = ['-c:v', 'copy'];
     const isDarwin = process.platform === 'darwin';
 
-    if (mode === 'browser4k') {
+    if (effectiveMode === 'browser4k') {
       vCodecArgs = isDarwin
         ? ['-c:v', 'h264_videotoolbox', '-b:v', '14M', '-maxrate', '18M', '-bufsize', '24M', '-vf', 'scale=-2:2160', '-pix_fmt', 'yuv420p']
         : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'main', '-level', '5.1', '-b:v', '14M', '-vf', 'scale=-2:2160', '-pix_fmt', 'yuv420p', '-bf', '0'];
-    } else if (mode === 'transcode' || mode === '1080p') {
+    } else if (effectiveMode === 'transcode' || effectiveMode === '1080p') {
       vCodecArgs = isDarwin
         ? ['-c:v', 'h264_videotoolbox', '-b:v', '4.5M', '-maxrate', '6M', '-bufsize', '8M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p']
         : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'main', '-level', '4.2', '-b:v', '4.5M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p', '-bf', '0'];
-    } else if (mode === '720p') {
+    } else if (effectiveMode === '720p') {
       vCodecArgs = isDarwin
         ? ['-c:v', 'h264_videotoolbox', '-b:v', '2.5M', '-maxrate', '3.5M', '-bufsize', '5M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p']
         : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'baseline', '-level', '3.1', '-b:v', '2.5M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p', '-bf', '0'];
-    } else if (mode === '480p') {
+    } else if (effectiveMode === '480p') {
       vCodecArgs = isDarwin
         ? ['-c:v', 'h264_videotoolbox', '-b:v', '1.2M', '-maxrate', '1.8M', '-bufsize', '2.5M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p']
         : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'baseline', '-level', '3.0', '-b:v', '1.2M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p', '-bf', '0'];
@@ -1574,12 +1630,12 @@ app.get('/api/stream/remux', async (req, res) => {
 
     // Safari identifies copied HEVC in MP4 by the hvc1 sample entry. Many
     // remuxes arrive tagged hev1, which can produce a silent black player.
-    const hevcTagArgs = mode === 'copy' && /(?:hevc|h\.265|x265)/i.test(file.name)
+    const hevcTagArgs = (effectiveMode === 'copy' || effectiveMode === 'remux') && /(?:hevc|h\.265|x265)/i.test(file.name)
       ? ['-tag:v', 'hvc1']
       : [];
 
     // For transcode modes, force IDR keyframes every 2s so the browser can seek/start cleanly
-    const gopArgs = (mode === 'copy' || mode === 'remux')
+    const gopArgs = (effectiveMode === 'copy' || effectiveMode === 'remux')
       ? []  // copy mode: no transcoding, no forced GOP
       : ['-g', '48', '-keyint_min', '24'];  // ~2s keyframe interval at 24fps
 
@@ -1589,8 +1645,8 @@ app.get('/api/stream/remux', async (req, res) => {
       '-hide_banner',
       '-loglevel', 'warning',
       '-fflags', '+discardcorrupt+genpts+igndts',
-      '-probesize', mode === 'browser4k' ? '2M' : '8M',
-      '-analyzeduration', mode === 'browser4k' ? '500k' : '1500k',
+      '-probesize', '3M',
+      '-analyzeduration', '1000k',
       '-i', 'pipe:0',
       ...seekArgs,
       '-avoid_negative_ts', 'make_zero',

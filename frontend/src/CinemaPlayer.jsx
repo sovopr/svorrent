@@ -17,12 +17,42 @@ function convertSrtToVtt(srtText) {
   return 'WEBVTT\n\n' + converted;
 }
 
+// Helper to clean and normalize magnet URIs
+function cleanMagnet(uri) {
+  if (!uri) return '';
+  let str = decodeURIComponent(String(uri));
+  const m = str.match(/btih:([a-fA-F0-9]{40,42}|[a-zA-Z2-7]{32})/i);
+  if (m) {
+    let hash = m[1].toLowerCase();
+    if (hash.length === 42 && hash.startsWith('3a')) hash = hash.slice(2);
+    str = str.replace(/btih:[a-fA-F0-9]{40,42}/i, 'btih:' + hash);
+    if (!str.startsWith('magnet:?')) {
+      str = 'magnet:?' + str.replace(/^magnet:?\/?\/?\??/, '');
+    }
+  }
+  return str;
+}
+
+function extractTitleFromMagnet(uri) {
+  if (!uri) return '';
+  try {
+    const decoded = decodeURIComponent(uri);
+    const m = decoded.match(/[?&]dn=([^&]+)/i);
+    if (m) return decodeURIComponent(m[1].replace(/\+/g, ' '));
+  } catch (e) {}
+  return '';
+}
+
 export function CinemaPlayer() {
   const [params, setParams] = useState(() => {
     const p = new URLSearchParams(window.location.search);
+    const rawMagnet = p.get('magnet') || p.get('streamMagnet') || '';
+    const cleanedMag = cleanMagnet(rawMagnet);
+    const titleFromMag = extractTitleFromMagnet(cleanedMag) || extractTitleFromMagnet(rawMagnet);
+    const initialTitle = p.get('title') || titleFromMag || 'Streaming Remux';
     return {
-      magnet: p.get('magnet') || p.get('streamMagnet') || '',
-      title: p.get('title') || 'Streaming Remux',
+      magnet: cleanedMag,
+      title: initialTitle,
       provider: p.get('provider') || '',
       desc: p.get('desc') || '',
       link: p.get('link') || '',
@@ -38,7 +68,12 @@ export function CinemaPlayer() {
 
   // Quality / Stream Mode: 'auto' | 'direct' | 'remux' | '1080p' | '720p' | '480p'
   const [streamMode, setStreamMode] = useState('auto');
-  const [effectiveAutoProfile, setEffectiveAutoProfile] = useState('remux');
+  const [effectiveAutoProfile, setEffectiveAutoProfile] = useState(() => {
+    const p = new URLSearchParams(window.location.search);
+    const rawMagnet = p.get('magnet') || p.get('streamMagnet') || '';
+    const title = p.get('title') || extractTitleFromMagnet(rawMagnet) || '';
+    return /(?:hevc|h\.?265|x265|2160p|4k)/i.test(title) ? '1080p' : 'remux';
+  });
   const [bufferHealthSec, setBufferHealthSec] = useState(0);
   const [isRebuffering, setIsRebuffering] = useState(false);
   const [status, setStatus] = useState(null);
@@ -158,9 +193,11 @@ export function CinemaPlayer() {
         if (data.magnet && !params.magnet) {
           setParams((prev) => ({ ...prev, magnet: data.magnet }));
         }
+        if (data.fileName && (!params.title || params.title === 'Streaming Remux')) {
+          setParams((prev) => ({ ...prev, title: data.fileName }));
+        }
         if (data.fileName && !hasAutoSelectedModeRef.current) {
           hasAutoSelectedModeRef.current = true;
-          // Auto remains active by default
         }
       } catch (err) {
         setError(err.message);
@@ -188,11 +225,21 @@ export function CinemaPlayer() {
     const effSpeed = smoothedSpeedRef.current;
     const now = Date.now();
 
-    // 1. Initial resolution on load: Native direct for MP4, Remux (lossless copy) for MKV/other
-    if (!autoProfileInitializedRef.current) {
+    // 1. Initial resolution on load:
+    // - MP4/WebM -> Native direct
+    // - HEVC / 4K MKV -> 1080p transcode (Chrome on Mac cannot render 10-bit HEVC in fMP4; avoids solid black screen)
+    // - AVC / H.264 MKV -> Remux (lossless -c:v copy, instant, 0 CPU)
+    const isHevcOr4K = status.isHevcOr4K ?? /(?:hevc|h\.?265|x265|2160p|4k)/i.test(status.fileName || params.title || '');
+    let targetProfile = status.recommendedMode;
+    if (!targetProfile) {
+      targetProfile = status.isNativeCompatible ? 'direct' : (isHevcOr4K ? '1080p' : 'remux');
+    }
+
+    if (!autoProfileInitializedRef.current || (isHevcOr4K && effectiveAutoProfile === 'remux')) {
       autoProfileInitializedRef.current = true;
-      const initialTarget = status.isNativeCompatible ? 'direct' : 'remux';
-      setEffectiveAutoProfile(initialTarget);
+      if (effectiveAutoProfile !== targetProfile) {
+        setEffectiveAutoProfile(targetProfile);
+      }
       lastAutoSwitchRef.current = now;
       return;
     }
@@ -226,9 +273,9 @@ export function CinemaPlayer() {
       setBufferHealthSec(aheadSec);
 
       // Rebuffering cushion controller:
-      // When rebuffering, accumulate at least 6.0s (bandwidth constrained) or 4.0s before resuming!
+      // When rebuffering, accumulate at least 2.5s cushion before resuming playback
       if (isRebuffering) {
-        const minCushion = status?.isBandwidthConstrained ? 6.0 : 4.0;
+        const minCushion = 2.5;
         const hasEnoughRunway = aheadSec >= minCushion;
         if (hasEnoughRunway) {
           setIsRebuffering(false);
@@ -255,9 +302,8 @@ export function CinemaPlayer() {
   const getStreamUrl = () => {
     const effectiveMagnet = status?.magnet || params.magnet;
     const infoHash = status?.infoHash;
-    // Remux/transcode needs more than the first torrent piece because FFmpeg
-    // must inspect MKV headers before it can emit the first MP4 fragment.
-    const hasRemuxBuffer = (status?.downloaded || 0) >= 8 * 1024 * 1024;
+    // Remux/transcode needs the first piece/initial headers so FFmpeg can parse container and emit fMP4
+    const hasRemuxBuffer = (status?.downloaded || 0) >= Math.min(status?.pieceLength || 2097152, 4 * 1024 * 1024);
 
     // Don't expose src until we have piece 0 + infoHash.
     // If we set src too early, the video element fires onerror immediately which

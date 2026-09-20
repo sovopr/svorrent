@@ -79,7 +79,8 @@ export function DownloadsManager() {
   };
 
   // DownloadsManager displays real user downloads exclusively
-  const filteredTorrents = torrents.filter((t) => {
+  const permanentDownloads = torrents.filter((t) => t.isPermanentDownload || !t.isStreamOnly);
+  const filteredTorrents = permanentDownloads.filter((t) => {
     if (filter === 'downloading') return !t.done && !t.paused;
     if (filter === 'completed') return t.done;
     if (filter === 'paused') return t.paused;

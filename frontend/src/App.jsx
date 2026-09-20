@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { CinemaPlayer } from './CinemaPlayer';
 import { DownloadsManager } from './DownloadsManager';
 import './index.css';
@@ -33,8 +33,12 @@ function App() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
   const [error, setError] = useState('');
   const [actionState, setActionState] = useState({});
+
+  const activeQueryRef = useRef('');
+  const debounceTimerRef = useRef(null);
 
   // Downloads telemetry for top-nav indicator
   const [downloads, setDownloads] = useState([]);
@@ -56,26 +60,75 @@ function App() {
     return () => clearInterval(interval);
   }, []);
 
+  const executeSearch = async (searchTerm) => {
+    const term = (searchTerm ?? query).trim();
+    if (!term) {
+      setResults([]);
+      setHasSearched(false);
+      setLoading(false);
+      return;
+    }
 
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
 
-  const handleSearch = async (e) => {
-    e.preventDefault();
-    if (!query.trim()) return;
-
+    activeQueryRef.current = term;
     setLoading(true);
     setError('');
-    setResults([]);
+    setHasSearched(true);
 
     try {
-      const response = await fetch(`http://localhost:3001/api/search?q=${encodeURIComponent(query)}`);
+      const response = await fetch(`http://localhost:3001/api/search?q=${encodeURIComponent(term)}`);
       if (!response.ok) throw new Error('Failed to fetch results');
       const data = await response.json();
-      setResults(data);
+      if (activeQueryRef.current === term) {
+        setResults(data);
+      }
     } catch (err) {
-      setError('An error occurred while querying trackers. Please ensure backend is running.');
+      if (activeQueryRef.current === term) {
+        setError('An error occurred while querying trackers. Please ensure backend is running.');
+      }
     } finally {
-      setLoading(false);
+      if (activeQueryRef.current === term) {
+        setLoading(false);
+      }
     }
+  };
+
+  // Debounced auto-search as you type (triggers after 450ms pause if query >= 2 characters)
+  useEffect(() => {
+    const trimmed = query.trim();
+    if (!trimmed) {
+      setResults([]);
+      setHasSearched(false);
+      setLoading(false);
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      return;
+    }
+
+    if (trimmed.length < 2) {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+      return;
+    }
+
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    debounceTimerRef.current = setTimeout(() => {
+      executeSearch(trimmed);
+    }, 450);
+
+    return () => {
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    };
+  }, [query]);
+
+  const handleSearch = (e) => {
+    if (e) e.preventDefault();
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+    executeSearch(query);
   };
 
   const getMagnetLink = async (torrent) => {
@@ -193,15 +246,30 @@ function App() {
 
       {/* Search Input */}
       <form className="search-box" onSubmit={handleSearch}>
-        <input
-          type="text"
-          className="search-input"
-          placeholder="Search movies, TV shows, software, Linux distros..."
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          disabled={loading}
-          autoFocus
-        />
+        <div className="search-input-wrapper">
+          <input
+            type="text"
+            className="search-input"
+            placeholder="Search movies, TV shows, software, Linux distros..."
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            autoFocus
+          />
+          {query && (
+            <button
+              type="button"
+              className="search-clear-btn"
+              onClick={() => {
+                setQuery('');
+                setResults([]);
+                setHasSearched(false);
+              }}
+              title="Clear search"
+            >
+              ✕
+            </button>
+          )}
+        </div>
         <button type="submit" className="search-btn" disabled={loading || !query.trim()}>
           {loading ? 'Searching...' : 'Search'}
         </button>
@@ -308,9 +376,9 @@ function App() {
           );
         })}
 
-        {!loading && query && results.length === 0 && !error && (
+        {!loading && hasSearched && results.length === 0 && !error && query.trim() && (
           <div className="empty-state">
-            <h3>No results found</h3>
+            <h3>No results found for "{query.trim()}"</h3>
             <p>Try searching for a broader term or different keywords.</p>
           </div>
         )}

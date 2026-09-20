@@ -1257,17 +1257,39 @@ app.get('/api/stream/remux', async (req, res) => {
     // response whose first bytes arrive later as an invalid media resource.
     // Hold only FFmpeg's initialization fragment in RAM, then stream the rest.
     let responseStarted = false;
+    let initBuffer = Buffer.alloc(0);
+
+    const writeResponseHeaders = () => {
+      res.writeHead(200, {
+        'Content-Type': 'video/mp4',
+        'Accept-Ranges': 'none',
+        'Cache-Control': 'no-cache, no-store',
+        'Connection': 'keep-alive',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Range, Content-Type, Accept',
+      });
+    };
+
+    // Safari is strict about fragmented MP4 initialization. Do not send a
+    // partial ftyp/moov box as the first HTTP chunk; hold only the small init
+    // segment until the complete moov box is present.
+    const hasCompleteInit = (buffer) => {
+      const moovMarker = Buffer.from('moov');
+      const markerAt = buffer.indexOf(moovMarker);
+      if (markerAt < 4) return false;
+      const boxStart = markerAt - 4;
+      const boxSize = buffer.readUInt32BE(boxStart);
+      return boxSize >= 8 && buffer.length >= boxStart + boxSize;
+    };
+
     ff.stdout.on('data', (chunk) => {
       if (!responseStarted) {
+        initBuffer = Buffer.concat([initBuffer, chunk]);
+        if (!hasCompleteInit(initBuffer) && initBuffer.length < 2 * 1024 * 1024) return;
         responseStarted = true;
-        res.writeHead(200, {
-          'Content-Type': 'video/mp4',
-          'Accept-Ranges': 'none',
-          'Cache-Control': 'no-cache, no-store',
-          'Connection': 'keep-alive',
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Headers': 'Range, Content-Type, Accept',
-        });
+        writeResponseHeaders();
+        res.write(initBuffer);
+        return;
       }
       res.write(chunk);
     });

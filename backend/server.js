@@ -976,6 +976,17 @@ app.get('/api/torrent/status', async (req, res) => {
   const isRunwaySafe = runwayPiecesReady >= targetRunwayPieces || (hasFirstPiece && isFastSwarm);
   const runwayProgress = Math.min(100, Math.round((runwayPiecesReady / targetRunwayPieces) * 100));
 
+  const estimatedDurationSec = 7200;
+  const requiredBitrateBytesPerSec = largestFile && largestFile.length > 0
+    ? Math.round(largestFile.length / estimatedDurationSec)
+    : 0;
+  const isBandwidthConstrained = (torrent.downloadSpeed || 0) > 0 &&
+    requiredBitrateBytesPerSec > 0 &&
+    (torrent.downloadSpeed || 0) < requiredBitrateBytesPerSec * 0.9;
+  const speedDeficitRatio = isBandwidthConstrained && torrent.downloadSpeed > 0
+    ? Number((requiredBitrateBytesPerSec / torrent.downloadSpeed).toFixed(1))
+    : 1.0;
+
   return res.json({
     infoHash: torrent.infoHash,
     magnet: magnetURI,
@@ -999,6 +1010,9 @@ app.get('/api/torrent/status', async (req, res) => {
     runwayBytesReady,
     isRunwaySafe,
     runwayProgress,
+    requiredBitrateBytesPerSec,
+    isBandwidthConstrained,
+    speedDeficitRatio,
     etaSeconds,
     isNativeCompatible,
     recommendedMode: isNativeCompatible ? 'direct' : 'remux',

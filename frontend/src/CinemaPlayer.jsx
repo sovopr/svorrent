@@ -848,6 +848,42 @@ export function CinemaPlayer() {
               </div>
             </div>
 
+            {/* Bandwidth Bottleneck Warning Banner */}
+            {status?.isBandwidthConstrained && streamMode === 'remux' && (
+              <div style={{
+                margin: '8px 16px 12px 16px',
+                padding: '10px 16px',
+                borderRadius: '10px',
+                background: 'rgba(234, 179, 8, 0.12)',
+                border: '1px solid rgba(234, 179, 8, 0.35)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                fontSize: '0.82rem',
+                color: '#fef08a'
+              }}>
+                <div>
+                  <strong>⚡ Swarm Bottleneck:</strong> Swarm speed ({formatBytes(status.downloadSpeed)}/s) is lower than this {formatBytes(status.length)} BluRay's bitrate (~{formatBytes(status.requiredBitrateBytesPerSec)}/s).
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <button
+                    className="control-pill-btn"
+                    style={{ background: '#eab308', color: '#000', fontWeight: 'bold', padding: '5px 12px', fontSize: '0.75rem' }}
+                    onClick={() => handleQualityChange('1080p')}
+                  >
+                    Switch to 1080p Smooth
+                  </button>
+                  <button
+                    className="control-pill-btn"
+                    style={{ padding: '5px 12px', fontSize: '0.75rem' }}
+                    onClick={() => handleQualityChange('720p')}
+                  >
+                    Switch to 720p Fast
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Video Player Box */}
             <div className="cinema-player-frame">
               {status?.ready ? (
@@ -941,6 +977,42 @@ export function CinemaPlayer() {
                                   background: 'linear-gradient(90deg, #3b82f6, #10b981)',
                                 }}
                               ></div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* High Bitrate Advice in Overlay */}
+                        {status?.isBandwidthConstrained && streamMode === 'remux' && (
+                          <div style={{
+                            margin: '8px 0',
+                            padding: '10px 14px',
+                            background: 'rgba(234, 179, 8, 0.12)',
+                            borderRadius: '8px',
+                            border: '1px solid rgba(234, 179, 8, 0.35)',
+                            fontSize: '0.78rem',
+                            color: '#fde047',
+                            textAlign: 'left'
+                          }}>
+                            <div style={{ fontWeight: 'bold', marginBottom: '3px' }}>⚡ Why is it stopping?</div>
+                            <div style={{ marginBottom: '8px', color: 'rgba(255,255,255,0.85)', lineHeight: '1.3' }}>
+                              This 35GB BluRay requires <strong>~{formatBytes(status.requiredBitrateBytesPerSec)}/s</strong>, but the swarm is currently delivering <strong>{formatBytes(status.downloadSpeed)}/s</strong>.
+                              Switch to <strong>1080p</strong> or <strong>720p</strong> below to stream smoothly without pausing.
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px' }}>
+                              <button
+                                className="control-pill-btn"
+                                style={{ background: '#eab308', color: '#000', fontWeight: 'bold', padding: '4px 10px', fontSize: '0.74rem' }}
+                                onClick={() => handleQualityChange('1080p')}
+                              >
+                                ⚡ Switch to 1080p Smooth
+                              </button>
+                              <button
+                                className="control-pill-btn"
+                                style={{ padding: '4px 10px', fontSize: '0.74rem' }}
+                                onClick={() => handleQualityChange('720p')}
+                              >
+                                ⚡ Switch to 720p Fast
+                              </button>
                             </div>
                           </div>
                         )}

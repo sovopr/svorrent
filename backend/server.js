@@ -134,21 +134,23 @@ app.get('/api/torrents', (req, res) => {
       ? t.files.reduce((a, b) => (a.length > b.length ? a : b))
       : null;
 
+    const isPaused = !!(t.paused || t._pausedManually);
+
     return {
       infoHash: t.infoHash,
       magnet: t.magnetURI,
       name: t.name || 'Loading metadata...',
       ready: !!t.ready,
-      paused: !!t.paused,
+      paused: isPaused,
       done: !!t.done,
       progress: t.progress || 0,
-      downloadSpeed: t.downloadSpeed || 0,
-      uploadSpeed: t.uploadSpeed || 0,
-      numPeers: t.numPeers || 0,
+      downloadSpeed: isPaused ? 0 : (t.downloadSpeed || 0),
+      uploadSpeed: isPaused ? 0 : (t.uploadSpeed || 0),
+      numPeers: isPaused ? 0 : (t.numPeers || 0),
       downloaded: t.downloaded || 0,
       length: t.length || (largestFile ? largestFile.length : 0),
       path: t.path || DOWNLOAD_DIR,
-      timeRemaining: t.timeRemaining || 0,
+      timeRemaining: isPaused ? Infinity : (t.timeRemaining || 0),
       fileName: largestFile ? largestFile.name : null,
       filesCount: t.files ? t.files.length : 0,
     };
@@ -169,7 +171,18 @@ app.get('/api/torrent/:id/nerd-stats', async (req, res) => {
   const peers = (torrent.wires || []).map((wire) => {
     let clientName = 'Unknown Client';
     if (wire.peerExtendedHandshake && wire.peerExtendedHandshake.v) {
-      clientName = wire.peerExtendedHandshake.v;
+      const v = wire.peerExtendedHandshake.v;
+      if (typeof v === 'string') {
+        clientName = v;
+      } else if (Buffer.isBuffer(v)) {
+        clientName = v.toString('utf8');
+      } else if (typeof v === 'object') {
+        try {
+          clientName = Buffer.from(Object.values(v)).toString('utf8');
+        } catch (e) {
+          clientName = 'Unknown Client';
+        }
+      }
     } else if (wire.peerId) {
       try {
         const parsed = peerid(wire.peerId);
@@ -177,6 +190,9 @@ app.get('/api/torrent/:id/nerd-stats', async (req, res) => {
           clientName = `${parsed.client} ${parsed.version || ''}`.trim();
         }
       } catch (e) {}
+    }
+    if (typeof clientName !== 'string') {
+      clientName = String(clientName);
     }
 
     let peerProgress = 0;
@@ -261,20 +277,21 @@ app.get('/api/torrent/:id/nerd-stats', async (req, res) => {
     progress: f.progress || 0,
   }));
 
+  const isPaused = !!(torrent.paused || torrent._pausedManually);
   res.json({
     infoHash: torrent.infoHash,
-    name: torrent.name,
+    name: torrent.name || 'Resolving metadata from swarm...',
     ready: !!torrent.ready,
     done: !!torrent.done,
-    paused: !!torrent.paused,
+    paused: isPaused,
     progress: torrent.progress || 0,
-    downloadSpeed: torrent.downloadSpeed || 0,
-    uploadSpeed: torrent.uploadSpeed || 0,
-    numPeers: torrent.numPeers || 0,
+    downloadSpeed: isPaused ? 0 : (torrent.downloadSpeed || 0),
+    uploadSpeed: isPaused ? 0 : (torrent.uploadSpeed || 0),
+    numPeers: isPaused ? 0 : (torrent.numPeers || 0),
     downloaded: torrent.downloaded || 0,
     length: torrent.length || 0,
     downloadDir: torrent.path || DOWNLOAD_DIR,
-    timeRemaining: torrent.timeRemaining || 0,
+    timeRemaining: isPaused ? Infinity : (torrent.timeRemaining || 0),
     peers,
     pieces: pieceStats,
     trackers: trackerList,
@@ -287,7 +304,28 @@ app.get('/api/torrent/:id/nerd-stats', async (req, res) => {
 app.post('/api/torrent/:id/pause', async (req, res) => {
   const torrent = await client.get(req.params.id);
   if (!torrent) return res.status(404).json({ error: 'Torrent not found' });
-  torrent.pause();
+  
+  torrent.paused = true;
+  torrent._pausedManually = true;
+
+  try {
+    if (torrent.pieces && torrent.pieces.length > 0) {
+      torrent.deselect(0, torrent.pieces.length - 1, false);
+    }
+    if (torrent.files) {
+      torrent.files.forEach((f) => {
+        try { f.deselect(); } catch (e) {}
+      });
+    }
+  } catch (e) {}
+
+  if (torrent.wires) {
+    torrent.wires.forEach((wire) => {
+      try { wire.choke(); } catch (e) {}
+      try { wire.uninterested(); } catch (e) {}
+    });
+  }
+
   res.json({ success: true, paused: true });
 });
 
@@ -295,7 +333,29 @@ app.post('/api/torrent/:id/pause', async (req, res) => {
 app.post('/api/torrent/:id/resume', async (req, res) => {
   const torrent = await client.get(req.params.id);
   if (!torrent) return res.status(404).json({ error: 'Torrent not found' });
-  torrent.resume();
+
+  torrent.paused = false;
+  torrent._pausedManually = false;
+
+  try {
+    if (torrent.files) {
+      torrent.files.forEach((f) => {
+        try { f.select(); } catch (e) {}
+      });
+    }
+    if (torrent.pieces && torrent.pieces.length > 0) {
+      torrent.select(0, torrent.pieces.length - 1, false);
+    }
+  } catch (e) {}
+
+  if (torrent.wires) {
+    torrent.wires.forEach((wire) => {
+      try { wire.unchoke(); } catch (e) {}
+      try { wire.interested(); } catch (e) {}
+    });
+  }
+  try { torrent._drain(); } catch (e) {}
+
   res.json({ success: true, paused: false });
 });
 

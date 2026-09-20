@@ -8,7 +8,48 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
-export function NerdModal({ torrentId, onClose }) {
+function formatClientName(client) {
+  if (!client) return 'Unknown Client';
+  if (typeof client === 'string') return client;
+  if (typeof client === 'object') {
+    try {
+      const chars = Object.values(client).map((c) => (typeof c === 'number' ? String.fromCharCode(c) : String(c))).join('');
+      return chars.trim() || 'Unknown Client';
+    } catch (e) {
+      return 'Unknown Client';
+    }
+  }
+  return String(client);
+}
+
+class ErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error, errorInfo) {
+    console.error('NerdModal Error:', error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="stream-overlay" onClick={this.props.onClose}>
+          <div className="nerd-modal" style={{ padding: '2.5rem', textAlign: 'center' }}>
+            <h3 style={{ color: '#f87171', marginBottom: '0.75rem' }}>Inspector Data Recovered</h3>
+            <p style={{ color: '#94a3b8', marginBottom: '1.5rem' }}>{this.state.error?.message || 'Recovered from unexpected wire payload'}</p>
+            <button className="btn btn-secondary" onClick={this.props.onClose}>Close Inspector</button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+function NerdModalInner({ torrentId, onClose }) {
   const [nerdStats, setNerdStats] = useState(null);
   const [activeNerdTab, setActiveNerdTab] = useState('peers');
   const pollRef = useRef(null);
@@ -141,9 +182,9 @@ export function NerdModal({ torrentId, onClose }) {
                     <tbody>
                       {nerdStats.peers.map((p, pIdx) => (
                         <tr key={pIdx}>
-                          <td className="mono">{p.ip}:{p.port}</td>
-                          <td className="client-name">{p.client}</td>
-                          <td><span className="badge-type">{p.type}</span></td>
+                          <td className="mono">{String(p.ip)}:{String(p.port)}</td>
+                          <td className="client-name">{formatClientName(p.client)}</td>
+                          <td><span className="badge-type">{String(p.type)}</span></td>
                           <td className="speed-val">{formatBytes(p.downloadSpeed)}/s</td>
                           <td>{formatBytes(p.uploadSpeed)}/s</td>
                           <td>{formatBytes(p.downloaded)}</td>
@@ -298,5 +339,13 @@ export function NerdModal({ torrentId, onClose }) {
         </div>
       </div>
     </div>
+  );
+}
+
+export function NerdModal(props) {
+  return (
+    <ErrorBoundary onClose={props.onClose}>
+      <NerdModalInner {...props} />
+    </ErrorBoundary>
   );
 }

@@ -231,7 +231,13 @@ function App() {
 
   const handlePauseResume = async (infoHash, isPaused) => {
     const endpoint = isPaused ? 'resume' : 'pause';
-    await fetch(`http://localhost:3001/api/torrent/${infoHash}/${endpoint}`, { method: 'POST' });
+    // Optimistic UI update so the pause/resume button responds instantly
+    setDownloads((prev) =>
+      prev.map((t) => (t.infoHash === infoHash ? { ...t, paused: !isPaused } : t))
+    );
+    try {
+      await fetch(`http://localhost:3001/api/torrent/${infoHash}/${endpoint}`, { method: 'POST' });
+    } catch (e) {}
   };
 
   const handleDeleteTorrent = async (infoHash) => {

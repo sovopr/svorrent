@@ -176,9 +176,19 @@ export function CinemaPlayer() {
     if (savedPositionRef.current > 0) {
       video.currentTime = savedPositionRef.current;
       savedPositionRef.current = 0;
-      video.play().catch(() => {});
     }
     video.playbackRate = playbackSpeed;
+    video.play().catch(() => {});
+  };
+
+  const handleVideoError = (e) => {
+    console.warn('Video element playback error:', e);
+    if (streamMode === 'copy') {
+      setActionFeedback('Safari requires hardware transcode for 4K Remux HEVC: Auto-switching to 1080p...');
+      setTimeout(() => {
+        handleQualityChange('1080p');
+      }, 1200);
+    }
   };
 
   // Speed Control
@@ -752,7 +762,6 @@ export function CinemaPlayer() {
                 <div className={`video-element-wrapper subtitle-style-${subtitleSize}`}>
                   <video
                     ref={videoRef}
-                    key={`${streamUrl}-${activeSubtitle?.id || 'nosub'}`}
                     controls
                     autoPlay
                     playsInline
@@ -761,7 +770,10 @@ export function CinemaPlayer() {
                     src={streamUrl}
                     onWaiting={() => setIsVideoLoading(true)}
                     onPlaying={() => setIsVideoLoading(false)}
+                    onPlay={() => setIsVideoLoading(false)}
+                    onLoadedData={() => setIsVideoLoading(false)}
                     onCanPlay={handleVideoCanPlay}
+                    onError={handleVideoError}
                   >
                     {activeSubtitle && (
                       <track

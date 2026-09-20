@@ -816,8 +816,9 @@ app.get('/api/stream', async (req, res) => {
 
       res.writeHead(206, head);
       const stream = file.createReadStream({ start, end });
+      stream.on('error', () => {});
       stream.pipe(res);
-      req.on('close', () => stream.destroy());
+      req.on('close', () => { try { stream.destroy(); } catch (e) {} });
     } else {
       const head = {
         'Content-Length': file.length,
@@ -826,8 +827,9 @@ app.get('/api/stream', async (req, res) => {
       };
       res.writeHead(200, head);
       const stream = file.createReadStream();
+      stream.on('error', () => {});
       stream.pipe(res);
-      req.on('close', () => stream.destroy());
+      req.on('close', () => { try { stream.destroy(); } catch (e) {} });
     }
   }
 });
@@ -894,12 +896,12 @@ app.get('/api/stream/remux', async (req, res) => {
     // '1080p' / 'transcode' = Hardware-accelerated 1080p transcode (Apple Silicon VideoToolbox / Windows NVENC / QuickSync)
     // '720p' = Fast 720p transcode (5 Mbps)
     // '480p' = Efficient 480p transcode (2 Mbps)
-    let vCodecArgs = ['-c:v', 'copy'];
+    let vCodecArgs = ['-c:v', 'copy', '-tag:v', 'hvc1'];
     const isDarwin = process.platform === 'darwin';
 
     if (mode === 'transcode' || mode === '1080p') {
       vCodecArgs = isDarwin
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '12M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p']
+        ? ['-c:v', 'h264_videotoolbox', '-b:v', '10M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p']
         : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '10M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p'];
     } else if (mode === '720p') {
       vCodecArgs = isDarwin
@@ -940,6 +942,10 @@ app.get('/api/stream/remux', async (req, res) => {
     const ff = spawn(FFMPEG_BIN, ffmpegArgs);
     const readStream = file.createReadStream();
 
+    readStream.on('error', () => {});
+    ff.stdin.on('error', () => {});
+    ff.stdout.on('error', () => {});
+
     readStream.pipe(ff.stdin);
     ff.stdout.pipe(res);
 
@@ -947,31 +953,14 @@ app.get('/api/stream/remux', async (req, res) => {
       console.error('FFmpeg stderr:', data.toString());
     });
 
-    torrent._activeStreamListeners = (torrent._activeStreamListeners || 0) + 1;
-
     const cleanup = () => {
       try { readStream.destroy(); } catch (e) {}
       try { ff.kill('SIGKILL'); } catch (e) {}
-
-      // If stream-only, decrement active listeners and purge temp cache from disk when idle
-      if (torrent._isStreamOnly && !torrent._isPermanentDownload) {
-        torrent._activeStreamListeners = Math.max(0, (torrent._activeStreamListeners || 1) - 1);
-        if (torrent._activeStreamListeners === 0) {
-          setTimeout(() => {
-            if (torrent._isStreamOnly && !torrent._isPermanentDownload && (!torrent._activeStreamListeners || torrent._activeStreamListeners === 0)) {
-              torrent.destroy({ destroyStore: true }, () => {
-                console.log(`Auto-purged temporary stream cache for: ${torrent.infoHash}`);
-              });
-            }
-          }, 15000);
-        }
-      }
     };
 
     req.on('close', cleanup);
     res.on('finish', cleanup);
     ff.on('error', (err) => {
-      console.error('FFmpeg process error:', err.message);
       cleanup();
     });
   }

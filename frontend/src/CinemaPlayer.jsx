@@ -74,7 +74,6 @@ export function CinemaPlayer() {
   const playbackOffsetRef = useRef(0); // Stream start offset for seamless seek & quality transitions
   const seekTimeRef = useRef(0); // Stable requested start timestamp (only changes on seek / quality change, never on ongoing playback ticks)
   const lastStallTimeRef = useRef(0);
-  const forcePlayTimerRef = useRef(null); // Auto-dismiss overlay if video stalls
   const firstPieceReadyAtRef = useRef(null); // Timestamp when piece 0 was first seen
   const userPausedRef = useRef(false);
   const lastAutoSwitchRef = useRef(0);
@@ -163,25 +162,6 @@ export function CinemaPlayer() {
           hasAutoSelectedModeRef.current = true;
           // Auto remains active by default
         }
-
-        // Adaptive Buffer Safety Runway:
-        // Wait until an uninterrupted safety runway is accumulated to prevent stuttering.
-        if (!isRebuffering && (data.isRunwaySafe || (data.hasFirstPiece && (data.downloadSpeed || 0) > 2500000))) {
-          if (!firstPieceReadyAtRef.current) {
-            firstPieceReadyAtRef.current = Date.now();
-          }
-          const waitedMs = Date.now() - firstPieceReadyAtRef.current;
-          if (waitedMs > 1200 && !forcePlayTimerRef.current) {
-            forcePlayTimerRef.current = setTimeout(() => {
-              setIsVideoLoading(false);
-              const video = videoRef.current;
-              if (video && !userPausedRef.current && !isRebuffering) {
-                video.playbackRate = playbackSpeed;
-                video.play().catch(() => {});
-              }
-            }, 300);
-          }
-        }
       } catch (err) {
         setError(err.message);
       }
@@ -246,9 +226,10 @@ export function CinemaPlayer() {
       setBufferHealthSec(aheadSec);
 
       // Rebuffering cushion controller:
-      // When rebuffering, accumulate at least 3.5s cushion (or 2.0s if runway safe) before resuming
+      // When rebuffering, accumulate at least 6.0s (bandwidth constrained) or 4.0s before resuming!
       if (isRebuffering) {
-        const hasEnoughRunway = aheadSec >= 3.5 || (status?.isRunwaySafe && aheadSec >= 2.0);
+        const minCushion = status?.isBandwidthConstrained ? 6.0 : 4.0;
+        const hasEnoughRunway = aheadSec >= minCushion;
         if (hasEnoughRunway) {
           setIsRebuffering(false);
           setIsVideoLoading(false);
@@ -480,10 +461,6 @@ export function CinemaPlayer() {
 
   const handleVideoError = (e) => {
     console.warn('Video element playback error:', e.nativeEvent?.message || e);
-    if (forcePlayTimerRef.current) {
-      clearTimeout(forcePlayTimerRef.current);
-      forcePlayTimerRef.current = null;
-    }
     const cur = (playbackOffsetRef.current || 0) + (videoRef.current?.currentTime || 0);
     if (cur > 0) {
       savedPositionRef.current = cur;

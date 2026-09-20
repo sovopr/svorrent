@@ -367,6 +367,19 @@ async function getOrAddTorrent(magnetURI, opts = {}) {
   magnetURI = withFallbackTrackers(magnetURI);
   let torrent = await client.get(magnetURI);
 
+  // If starting/streaming a movie, purge previous in-memory stream torrents
+  // so 100% of bandwidth and RAM is dedicated to the active movie
+  if (opts.isStreamOnly) {
+    client.torrents.forEach((t) => {
+      if (t._isStreamOnly && t.magnetURI !== magnetURI && (!torrent || t.infoHash !== torrent.infoHash)) {
+        try {
+          console.log(`[Stream Purge] Removing previous stream torrent ${t.name || t.infoHash} to reclaim bandwidth & RAM`);
+          client.remove(t.infoHash, { destroyStore: true });
+        } catch (e) {}
+      }
+    });
+  }
+
   // A stream torrent uses MemoryChunkStore and cannot be converted into a
   // disk download by changing flags later. Recreate it with WebTorrent's
   // filesystem store when the user explicitly asks to download the file.

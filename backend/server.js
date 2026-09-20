@@ -1169,7 +1169,14 @@ app.get('/api/stream/remux', async (req, res) => {
     let vCodecArgs = ['-c:v', 'copy'];
     const isDarwin = process.platform === 'darwin';
 
-    if (mode === 'transcode' || mode === '1080p') {
+    if (mode === 'browser4k') {
+      // Safari can reject otherwise-valid 4K HDR HEVC fMP4 streams. Keep the
+      // original 4K dimensions, but hardware-transcode to universally playable
+      // H.264 instead of dropping all the way down to 1080p.
+      vCodecArgs = isDarwin
+        ? ['-c:v', 'h264_videotoolbox', '-b:v', '16M', '-vf', 'scale=-2:2160', '-pix_fmt', 'yuv420p']
+        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '16M', '-vf', 'scale=-2:2160', '-pix_fmt', 'yuv420p'];
+    } else if (mode === 'transcode' || mode === '1080p') {
       vCodecArgs = isDarwin
         ? ['-c:v', 'h264_videotoolbox', '-b:v', '8M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p']
         : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '8M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p'];

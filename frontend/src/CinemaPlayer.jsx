@@ -204,6 +204,8 @@ export function CinemaPlayer() {
       return `http://localhost:3001/api/stream/remux?mode=720p&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else if (streamMode === '480p') {
       return `http://localhost:3001/api/stream/remux?mode=480p&magnet=${encodeURIComponent(effectiveMagnet)}`;
+    } else if (streamMode === 'browser4k') {
+      return `http://localhost:3001/api/stream/remux?mode=browser4k&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else {
       // 'copy' legacy fallback
       return `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(effectiveMagnet)}`;
@@ -252,7 +254,8 @@ export function CinemaPlayer() {
         setActionFeedback(`Remux is still buffering — retrying (${remuxFailureCountRef.current}/3)...`);
         setRemuxAttempt((attempt) => attempt + 1);
       } else {
-        setActionFeedback('Remux could not start yet. Keep buffering or choose a quality profile manually.');
+        setActionFeedback('Safari cannot decode this 4K HEVC stream — switching to hardware 4K compatibility mode...');
+        setTimeout(() => handleQualityChange('browser4k'), 500);
       }
     }
   };

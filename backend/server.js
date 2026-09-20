@@ -1199,16 +1199,16 @@ app.get('/api/stream/remux', async (req, res) => {
       // original 4K dimensions, but hardware-transcode to universally playable
       // H.264 instead of dropping all the way down to 1080p.
       vCodecArgs = ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
-        '-profile:v', 'main', '-level', '5.1', '-b:v', '16M', '-vf', 'scale=-2:2160', '-pix_fmt', 'yuv420p'];
+        '-profile:v', 'main', '-level', '5.1', '-b:v', '16M', '-vf', 'scale=-2:2160', '-pix_fmt', 'yuv420p', '-bf', '0'];
     } else if (mode === 'transcode' || mode === '1080p') {
       vCodecArgs = ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
-        '-profile:v', 'main', '-level', '4.2', '-b:v', '8M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p'];
+        '-profile:v', 'main', '-level', '4.2', '-b:v', '8M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p', '-bf', '0'];
     } else if (mode === '720p') {
       vCodecArgs = ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
-        '-profile:v', 'main', '-level', '3.1', '-b:v', '4M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p'];
+        '-profile:v', 'baseline', '-level', '3.1', '-b:v', '4M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p', '-bf', '0'];
     } else if (mode === '480p') {
       vCodecArgs = ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
-        '-profile:v', 'main', '-level', '3.0', '-b:v', '1.5M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p'];
+        '-profile:v', 'baseline', '-level', '3.0', '-b:v', '1.5M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p', '-bf', '0'];
     }
 
     // Safari identifies copied HEVC in MP4 by the hvc1 sample entry. Many
@@ -1248,6 +1248,8 @@ app.get('/api/stream/remux', async (req, res) => {
       // per keyframe. separate_moof can leave audio/video tracks looking like
       // an invalid media resource when the response is still arriving.
       '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+      '-brand', 'mp42',
+      '-max_interleave_delta', '0',
       '-flush_packets', '1',
       '-f', 'mp4',
       'pipe:1',

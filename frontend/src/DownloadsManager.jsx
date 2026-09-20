@@ -78,27 +78,19 @@ export function DownloadsManager() {
     setTimeout(() => setActionFeedback(''), 2500);
   };
 
-  // Permanent downloads vs live stream buffers
-  const permanentDownloads = torrents.filter((t) => t.isPermanentDownload || !t.isStreamOnly);
-  const streamOnlyTorrents = torrents.filter((t) => t.isStreamOnly && !t.isPermanentDownload);
-
-  // Filter logic
+  // DownloadsManager displays real user downloads exclusively
   const filteredTorrents = torrents.filter((t) => {
-    if (filter === 'streams') return t.isStreamOnly;
-    // Default tabs show permanent downloads
-    if (t.isStreamOnly && filter !== 'all_including_streams') return false;
-
     if (filter === 'downloading') return !t.done && !t.paused;
     if (filter === 'completed') return t.done;
     if (filter === 'paused') return t.paused;
     return true;
   });
 
-  const totalDownSpeed = permanentDownloads.reduce((acc, t) => acc + (t.downloadSpeed || 0), 0);
-  const totalUpSpeed = permanentDownloads.reduce((acc, t) => acc + (t.uploadSpeed || 0), 0);
-  const activeCount = permanentDownloads.filter((t) => !t.done && !t.paused).length;
-  const completedCount = permanentDownloads.filter((t) => t.done).length;
-  const pausedCount = permanentDownloads.filter((t) => t.paused).length;
+  const totalDownSpeed = torrents.reduce((acc, t) => acc + (t.downloadSpeed || 0), 0);
+  const totalUpSpeed = torrents.reduce((acc, t) => acc + (t.uploadSpeed || 0), 0);
+  const activeCount = torrents.filter((t) => !t.done && !t.paused).length;
+  const completedCount = torrents.filter((t) => t.done).length;
+  const pausedCount = torrents.filter((t) => t.paused).length;
 
   return (
     <div className="downloads-page-container">
@@ -173,16 +165,6 @@ export function DownloadsManager() {
           >
             Paused ({pausedCount})
           </button>
-
-          {streamOnlyTorrents.length > 0 && (
-            <button
-              className={`filter-btn streams-tab ${filter === 'streams' ? 'active' : ''}`}
-              onClick={() => setFilter('streams')}
-              title="Live streams buffered in temporary cache"
-            >
-              Live Streams Cache ({streamOnlyTorrents.length})
-            </button>
-          )}
         </div>
       </nav>
 
@@ -218,7 +200,6 @@ export function DownloadsManager() {
                         <span className={`status-tag ${isDone ? 'tag-done' : isPaused ? 'tag-paused' : 'tag-active'}`}>
                           {isDone ? '✓ Completed' : isPaused ? '⏸ Paused' : '⚡ Downloading'}
                         </span>
-                        {t.isStreamOnly && <span className="status-tag tag-stream">Live Stream Cache</span>}
                         <span className="size-tag">{formatBytes(t.length)}</span>
                       </div>
                       <h3 className="download-name" title={t.name}>

@@ -22,9 +22,12 @@ if (!fs.existsSync(DOWNLOAD_DIR)) {
 
 // Temporary streaming buffer cache (does NOT clutter ~/Downloads/Svorrent)
 const STREAM_CACHE_DIR = path.join(os.tmpdir(), 'svorrent-cache');
-if (!fs.existsSync(STREAM_CACHE_DIR)) {
-  fs.mkdirSync(STREAM_CACHE_DIR, { recursive: true });
+if (fs.existsSync(STREAM_CACHE_DIR)) {
+  try {
+    fs.rmSync(STREAM_CACHE_DIR, { recursive: true, force: true });
+  } catch (e) {}
 }
+fs.mkdirSync(STREAM_CACHE_DIR, { recursive: true });
 
 // Initialize WebTorrent with secure: 0 for Node 24 OpenSSL compatibility
 const client = new WebTorrent({
@@ -140,9 +143,14 @@ app.post('/api/torrent/download', async (req, res) => {
   }
 });
 
-// List all active torrents
+// List all active user downloads (strictly excludes temporary stream cache buffers)
 app.get('/api/torrents', (req, res) => {
-  const list = client.torrents.map((t) => {
+  const includeStreams = req.query.includeStreams === 'true';
+  const targetTorrents = includeStreams
+    ? client.torrents
+    : client.torrents.filter((t) => !!t._isPermanentDownload);
+
+  const list = targetTorrents.map((t) => {
     const largestFile = t.files && t.files.length > 0
       ? t.files.reduce((a, b) => (a.length > b.length ? a : b))
       : null;
@@ -707,9 +715,25 @@ app.get('/api/stream/remux', async (req, res) => {
       console.error('FFmpeg stderr:', data.toString());
     });
 
+    torrent._activeStreamListeners = (torrent._activeStreamListeners || 0) + 1;
+
     const cleanup = () => {
       try { readStream.destroy(); } catch (e) {}
       try { ff.kill('SIGKILL'); } catch (e) {}
+
+      // If stream-only, decrement active listeners and purge temp cache from disk when idle
+      if (torrent._isStreamOnly && !torrent._isPermanentDownload) {
+        torrent._activeStreamListeners = Math.max(0, (torrent._activeStreamListeners || 1) - 1);
+        if (torrent._activeStreamListeners === 0) {
+          setTimeout(() => {
+            if (torrent._isStreamOnly && !torrent._isPermanentDownload && (!torrent._activeStreamListeners || torrent._activeStreamListeners === 0)) {
+              torrent.destroy({ destroyStore: true }, () => {
+                console.log(`Auto-purged temporary stream cache for: ${torrent.infoHash}`);
+              });
+            }
+          }, 15000);
+        }
+      }
     };
 
     req.on('close', cleanup);

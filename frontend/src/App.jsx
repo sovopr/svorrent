@@ -1,7 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { CinemaPlayer } from './CinemaPlayer';
 import { DownloadsManager } from './DownloadsManager';
-import { NerdModal } from './NerdModal';
 import './index.css';
 
 function formatBytes(bytes) {
@@ -12,23 +11,11 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
-function formatTime(ms) {
-  if (!ms || ms === Infinity || isNaN(ms)) return '∞';
-  const totalSeconds = Math.floor(ms / 1000);
-  const hours = Math.floor(totalSeconds / 3600);
-  const minutes = Math.floor((totalSeconds % 3600) / 60);
-  const seconds = totalSeconds % 60;
-  if (hours > 0) return `${hours}h ${minutes}m`;
-  if (minutes > 0) return `${minutes}m ${seconds}s`;
-  return `${seconds}s`;
-}
-
 function App() {
   const isPlayerRoute =
     window.location.pathname === '/player' ||
     window.location.pathname.endsWith('/player') ||
-    new URLSearchParams(window.location.search).has('player') ||
-    new URLSearchParams(window.location.search).has('streamMagnet');
+    new URLSearchParams(window.location.search).has('player');
 
   if (isPlayerRoute) {
     return <CinemaPlayer />;
@@ -49,31 +36,10 @@ function App() {
   const [error, setError] = useState('');
   const [actionState, setActionState] = useState({});
 
-  // Downloads Manager State
+  // Downloads telemetry for top-nav indicator
   const [downloads, setDownloads] = useState([]);
 
-  // Streaming Preview Modal State
-  const [activeStream, setActiveStream] = useState(null);
-  const [streamStatus, setStreamStatus] = useState(null);
-  const [streamError, setStreamError] = useState('');
-  const streamPollRef = useRef(null);
-
-  // Nerd Info Modal State
-  const [nerdModalTorrentId, setNerdModalTorrentId] = useState(null);
-
-  // Check URL on mount
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const streamMagnet = params.get('streamMagnet');
-    if (streamMagnet) {
-      setActiveStream({
-        magnet: streamMagnet,
-        title: 'Streaming Torrent',
-      });
-    }
-  }, []);
-
-  // Poll all downloads every 1.5s
+  // Poll all downloads every 1.5s to keep top navbar badge and speed updated
   useEffect(() => {
     const fetchDownloads = async () => {
       try {
@@ -89,45 +55,6 @@ function App() {
     const interval = setInterval(fetchDownloads, 1500);
     return () => clearInterval(interval);
   }, []);
-
-  // Poll streaming status
-  useEffect(() => {
-    if (!activeStream) {
-      setStreamStatus(null);
-      setStreamError('');
-      if (streamPollRef.current) clearInterval(streamPollRef.current);
-      return;
-    }
-
-    const fetchStatus = async () => {
-      try {
-        const params = new URLSearchParams();
-        if (activeStream.magnet) params.set('magnet', activeStream.magnet);
-        if (activeStream.provider) params.set('provider', activeStream.provider);
-        if (activeStream.desc) params.set('desc', activeStream.desc);
-        if (activeStream.link) params.set('link', activeStream.link);
-
-        const res = await fetch(`http://localhost:3001/api/torrent/status?${params.toString()}`);
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.error || 'Failed to fetch stream status');
-        }
-        const data = await res.json();
-        setStreamStatus(data);
-        if (data.magnet && !activeStream.magnet) {
-          setActiveStream((prev) => (prev ? { ...prev, magnet: data.magnet } : null));
-        }
-      } catch (err) {
-        setStreamError(err.message);
-      }
-    };
-
-    fetchStatus();
-    streamPollRef.current = setInterval(fetchStatus, 1200);
-    return () => {
-      if (streamPollRef.current) clearInterval(streamPollRef.current);
-    };
-  }, [activeStream]);
 
 
 
@@ -235,37 +162,6 @@ function App() {
     } catch (err) {
       setActionState((prev) => ({ ...prev, [idx]: { loading: false, status: 'Failed' } }));
     }
-  };
-
-  const handlePauseResume = async (infoHash, isPaused) => {
-    const endpoint = isPaused ? 'resume' : 'pause';
-    // Optimistic UI update so the pause/resume button responds instantly
-    setDownloads((prev) =>
-      prev.map((t) => (t.infoHash === infoHash ? { ...t, paused: !isPaused } : t))
-    );
-    try {
-      await fetch(`http://localhost:3001/api/torrent/${infoHash}/${endpoint}`, { method: 'POST' });
-    } catch (e) {}
-  };
-
-  const handleDeleteTorrent = async (infoHash) => {
-    if (confirm('Stop and remove this torrent from Svorrent?')) {
-      await fetch(`http://localhost:3001/api/torrent/${infoHash}/delete`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ deleteFiles: false }),
-      });
-      setDownloads((prev) => prev.filter((t) => t.infoHash !== infoHash));
-      if (nerdModalTorrentId === infoHash) setNerdModalTorrentId(null);
-    }
-  };
-
-  const handleOpenFinder = async (infoHash) => {
-    await fetch(`http://localhost:3001/api/torrent/${infoHash}/open-finder`, { method: 'POST' });
-  };
-
-  const handlePlayNative = async (infoHash) => {
-    await fetch(`http://localhost:3001/api/torrent/${infoHash}/play-native`, { method: 'POST' });
   };
 
   const permanentDownloads = downloads.filter((t) => t.isPermanentDownload || !t.isStreamOnly);
@@ -419,111 +315,6 @@ function App() {
           </div>
         )}
       </div>
-
-      {/* =========================================================================
-         DEEP NERD INFO INSPECTOR MODAL
-         ========================================================================= */}
-      {nerdModalTorrentId && (
-        <NerdModal
-          torrentId={nerdModalTorrentId}
-          onClose={() => setNerdModalTorrentId(null)}
-        />
-      )}
-
-      {/* =========================================================================
-         STREAMING PREVIEW MODAL
-         ========================================================================= */}
-      {activeStream && (
-        <div className="stream-overlay" onClick={(e) => e.target.classList.contains('stream-overlay') && setActiveStream(null)}>
-          <div className="stream-modal">
-            <div className="stream-modal-header">
-              <div className="stream-modal-title-box">
-                <span className={`status-pill ${streamStatus?.ready ? 'status-ready' : streamStatus?.numPeers > 0 ? 'status-connected' : 'status-searching'}`}>
-                  {streamStatus?.ready ? 'Streaming Active' : streamStatus?.numPeers > 0 ? `Connecting (${streamStatus.numPeers} peers)` : 'Searching Swarm...'}
-                </span>
-                <h3 className="stream-modal-title">{streamStatus?.fileName || activeStream.title}</h3>
-              </div>
-              <button className="stream-modal-close" onClick={() => setActiveStream(null)}>✕</button>
-            </div>
-
-            {streamError ? (
-              <div className="stream-error-box">
-                <p>{streamError}</p>
-              </div>
-            ) : (
-              <div className="stream-modal-body">
-                <div className="progress-section">
-                  <div className="progress-header">
-                    <span>Buffering Swarm Pieces</span>
-                    <span className="progress-value">{Math.round((streamStatus?.progress || 0) * 100)}%</span>
-                  </div>
-                  <div className="progress-bar-bg">
-                    <div className="progress-bar-fill" style={{ width: `${Math.max(Math.round((streamStatus?.progress || 0) * 100), 5)}%` }}></div>
-                  </div>
-                </div>
-
-                <div className="stats-grid">
-                  <div className="stat-card">
-                    <span className="stat-label">Peers</span>
-                    <span className="stat-value peers-val">● {streamStatus?.numPeers ?? 0}</span>
-                  </div>
-                  <div className="stat-card">
-                    <span className="stat-label">Speed</span>
-                    <span className="stat-value speed-val">⚡ {formatBytes(streamStatus?.downloadSpeed || 0)}/s</span>
-                  </div>
-                  <div className="stat-card">
-                    <span className="stat-label">Downloaded</span>
-                    <span className="stat-value">{formatBytes(streamStatus?.downloaded || 0)} / {formatBytes(streamStatus?.length || 0)}</span>
-                  </div>
-                  <div className="stat-card">
-                    <span className="stat-label">Status</span>
-                    <span className="stat-value status-val">{streamStatus?.ready ? 'Ready to play' : 'Connecting...'}</span>
-                  </div>
-                </div>
-
-                <div className="player-viewport">
-                  {streamStatus?.ready ? (
-                    <video key={streamStatus.streamUrl} controls autoPlay playsInline className="stream-video" src={streamStatus.streamUrl}>
-                      Your browser does not support HTML5 video streaming.
-                    </video>
-                  ) : (
-                    <div className="buffering-placeholder">
-                      <div className="radar-pulse"></div>
-                      <h4>Connecting to BitTorrent Swarm</h4>
-                      <p>Found {streamStatus?.numPeers || 0} peers. Buffering initial sequential pieces...</p>
-                    </div>
-                  )}
-                </div>
-
-                <div className="stream-modal-footer">
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => {
-                      if (activeStream.magnet) {
-                        handleDownloadToDisk({ magnet: activeStream.magnet }, 0);
-                        setActiveStream(null);
-                      }
-                    }}
-                  >
-                    ⬇ Download Full File to Disk
-                  </button>
-                  {streamStatus?.infoHash && (
-                    <button
-                      className="btn btn-nerd"
-                      onClick={() => {
-                        setNerdModalTorrentId(streamStatus.infoHash);
-                        setActiveStream(null);
-                      }}
-                    >
-                      🔍 Inspect Nerd Stats
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </div>
   );
 }

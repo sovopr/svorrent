@@ -3,7 +3,7 @@ import cors from 'cors';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { exec, spawn } from 'node:child_process';
+import { exec, spawn, execSync } from 'node:child_process';
 import zlib from 'node:zlib';
 import TorrentSearchApi from 'torrent-search-api';
 import WebTorrent from 'webtorrent';
@@ -16,6 +16,59 @@ const port = process.env.PORT || 3001;
 // Path to FFmpeg & FFprobe binary
 const FFMPEG_BIN = process.env.FFMPEG_PATH || (fs.existsSync('/Users/soveet/miniforge3/bin/ffmpeg') ? '/Users/soveet/miniforge3/bin/ffmpeg' : 'ffmpeg');
 const FFPROBE_BIN = process.env.FFPROBE_PATH || (fs.existsSync('/Users/soveet/miniforge3/bin/ffprobe') ? '/Users/soveet/miniforge3/bin/ffprobe' : 'ffprobe');
+
+// Universal Cross-Platform Video Transcoding Engine (Linux, Windows, macOS, Docker)
+let detectedH264Encoder = 'libx264';
+let encoderIsHardwareAccelerated = false;
+
+function detectBestEncoder() {
+  try {
+    const output = execSync(`${FFMPEG_BIN} -encoders 2>/dev/null`, { encoding: 'utf8' });
+    if (output.includes('h264_nvenc')) {
+      detectedH264Encoder = 'h264_nvenc';
+      encoderIsHardwareAccelerated = true;
+    } else if (output.includes('h264_qsv')) {
+      detectedH264Encoder = 'h264_qsv';
+      encoderIsHardwareAccelerated = true;
+    } else if (output.includes('h264_videotoolbox') && process.platform === 'darwin') {
+      detectedH264Encoder = 'h264_videotoolbox';
+      encoderIsHardwareAccelerated = true;
+    } else if (output.includes('h264_vaapi')) {
+      detectedH264Encoder = 'h264_vaapi';
+      encoderIsHardwareAccelerated = true;
+    } else if (output.includes('h264_amf')) {
+      detectedH264Encoder = 'h264_amf';
+      encoderIsHardwareAccelerated = true;
+    } else {
+      detectedH264Encoder = 'libx264';
+      encoderIsHardwareAccelerated = false;
+    }
+  } catch (e) {
+    detectedH264Encoder = 'libx264';
+    encoderIsHardwareAccelerated = false;
+  }
+  console.log(`[Transcoder Engine] Active video encoder: ${detectedH264Encoder} (Hardware accelerated: ${encoderIsHardwareAccelerated})`);
+}
+detectBestEncoder();
+
+function getUniversalEncoderArgs(targetHeight, targetBitrate, maxRate, bufSize) {
+  const scaleFilter = `scale=-2:${targetHeight}`;
+  switch (detectedH264Encoder) {
+    case 'h264_nvenc':
+      return ['-c:v', 'h264_nvenc', '-preset', 'p1', '-tune', 'ull', '-b:v', targetBitrate, '-maxrate', maxRate, '-bufsize', bufSize, '-vf', scaleFilter, '-pix_fmt', 'yuv420p'];
+    case 'h264_qsv':
+      return ['-c:v', 'h264_qsv', '-preset', 'veryfast', '-b:v', targetBitrate, '-maxrate', maxRate, '-bufsize', bufSize, '-vf', scaleFilter, '-pix_fmt', 'yuv420p'];
+    case 'h264_videotoolbox':
+      return ['-c:v', 'h264_videotoolbox', '-b:v', targetBitrate, '-maxrate', maxRate, '-bufsize', bufSize, '-vf', scaleFilter, '-pix_fmt', 'yuv420p', '-prio_speed', '1'];
+    case 'h264_vaapi':
+      return ['-c:v', 'h264_vaapi', '-b:v', targetBitrate, '-maxrate', maxRate, '-bufsize', bufSize, '-vf', `format=nv12,hwupload,scale_vaapi=w=-2:h=${targetHeight}`];
+    case 'h264_amf':
+      return ['-c:v', 'h264_amf', '-usage', 'ultralowlatency', '-b:v', targetBitrate, '-maxrate', maxRate, '-bufsize', bufSize, '-vf', scaleFilter, '-pix_fmt', 'yuv420p'];
+    case 'libx264':
+    default:
+      return ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-threads', '0', '-b:v', targetBitrate, '-maxrate', maxRate, '-bufsize', bufSize, '-vf', scaleFilter, '-pix_fmt', 'yuv420p', '-bf', '0'];
+  }
+}
 
 // Default download folder on user's Mac: ~/Downloads/Svorrent
 const DOWNLOAD_DIR = path.join(os.homedir(), 'Downloads', 'Svorrent');
@@ -209,31 +262,36 @@ function updatePrefetchWindow(torrent, file, byteOffset = 0) {
   const currentPiece = Math.floor(absoluteByte / pieceLength);
 
   const p0 = Math.max(startPiece, currentPiece);
-  // Maximize the pause buffering opportunity: buffer 80 pieces ahead (~160MB in RAM) when paused!
+  // Maximize the pause buffering opportunity: buffer 50-80 pieces ahead in RAM when paused!
   const isPaused = !!torrent._isPlayerPaused;
-  const pCriticalEnd = Math.min(endPiece, p0 + (isPaused ? 10 : 5));
-  const pRunwayEnd = Math.min(endPiece, p0 + (isPaused ? 40 : 25));
-  const pHorizonEnd = Math.min(endPiece, p0 + (isPaused ? 80 : 50));
+  const pCriticalEnd = Math.min(endPiece, p0 + (isPaused ? 12 : 8));
+  const pRunwayEnd = Math.min(endPiece, p0 + (isPaused ? 45 : 25));
+  const pHorizonEnd = Math.min(endPiece, p0 + (isPaused ? 90 : 50));
 
   try {
+    torrent.strategy = 'sequential';
+
     // Deselect old pieces already consumed behind playback cursor (leave first 2 pieces for container headers)
     if (currentPiece > startPiece + 12 && typeof torrent.deselect === 'function') {
       const deselectStart = startPiece + 2;
-      const deselectEnd = currentPiece - 8;
+      const deselectEnd = currentPiece - 6;
       if (deselectEnd > deselectStart) {
         torrent.deselect(deselectStart, deselectEnd);
       }
     }
 
-    // Tier 1: Urgent immediate playback buffer
+    // Zone 1: Urgent immediate playback buffer - mark critical for multi-peer hotswap
+    if (typeof torrent.critical === 'function') {
+      torrent.critical(p0, pCriticalEnd);
+    }
     torrent.select(p0, pCriticalEnd, 7);
 
-    // Tier 2: Safety buffer runway
+    // Zone 2: Safety buffer runway
     if (pRunwayEnd > pCriticalEnd) {
       torrent.select(pCriticalEnd, pRunwayEnd, 6);
     }
 
-    // Tier 3: Background swarm saturation
+    // Zone 3: Background swarm saturation
     if (pHorizonEnd > pRunwayEnd) {
       torrent.select(pRunwayEnd, pHorizonEnd, 5);
     }
@@ -391,18 +449,18 @@ async function getOrAddTorrent(magnetURI, opts = {}) {
   magnetURI = withFallbackTrackers(magnetURI);
   let torrent = targetInfoHash ? await client.get(targetInfoHash) : await client.get(magnetURI);
 
-  // If starting/streaming a movie, purge previous in-memory stream torrents
-  // so 100% of bandwidth and RAM is dedicated to the active movie
-  if (opts.isStreamOnly && targetInfoHash) {
-    client.torrents.forEach((t) => {
-      if (t._isStreamOnly && t.infoHash && t.infoHash.toLowerCase() !== targetInfoHash) {
-        try {
-          console.log(`[Stream Purge] Removing previous stream torrent ${t.name || t.infoHash} to reclaim bandwidth & RAM`);
-          client.remove(t.infoHash, { destroyStore: true });
-        } catch (e) {}
-      }
-    });
-  }
+  // Clean truly idle stream torrents (idle > 30 mins with zero active streams)
+  // Active streams are always protected via torrent._activeStreams
+  const now = Date.now();
+  client.torrents.forEach((t) => {
+    const hasStreams = (t._activeStreams || 0) > 0;
+    if (!hasStreams && t._isStreamOnly && t._addedAt && (now - t._addedAt) > 30 * 60 * 1000) {
+      try {
+        console.log(`[Stream Purge] Cleaning idle stream torrent ${t.name || t.infoHash}`);
+        client.remove(t.infoHash, { destroyStore: true });
+      } catch (e) {}
+    }
+  });
 
   // A stream torrent uses MemoryChunkStore and cannot be converted into a
   // disk download by changing flags later. Recreate it with WebTorrent's
@@ -1608,24 +1666,15 @@ app.get('/api/stream/remux', async (req, res) => {
     }
 
     let vCodecArgs = ['-c:v', 'copy'];
-    const isDarwin = process.platform === 'darwin';
 
     if (effectiveMode === 'browser4k') {
-      vCodecArgs = isDarwin
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '14M', '-maxrate', '18M', '-bufsize', '24M', '-vf', 'scale=-2:2160', '-pix_fmt', 'yuv420p']
-        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'main', '-level', '5.1', '-b:v', '14M', '-vf', 'scale=-2:2160', '-pix_fmt', 'yuv420p', '-bf', '0'];
+      vCodecArgs = getUniversalEncoderArgs(2160, '12M', '15M', '20M');
     } else if (effectiveMode === 'transcode' || effectiveMode === '1080p') {
-      vCodecArgs = isDarwin
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '4.5M', '-maxrate', '6M', '-bufsize', '8M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p']
-        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'main', '-level', '4.2', '-b:v', '4.5M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p', '-bf', '0'];
+      vCodecArgs = getUniversalEncoderArgs(1080, '3.2M', '4.2M', '5M');
     } else if (effectiveMode === '720p') {
-      vCodecArgs = isDarwin
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '2.5M', '-maxrate', '3.5M', '-bufsize', '5M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p']
-        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'baseline', '-level', '3.1', '-b:v', '2.5M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p', '-bf', '0'];
+      vCodecArgs = getUniversalEncoderArgs(720, '1.8M', '2.4M', '3.5M');
     } else if (effectiveMode === '480p') {
-      vCodecArgs = isDarwin
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '1.2M', '-maxrate', '1.8M', '-bufsize', '2.5M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p']
-        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'baseline', '-level', '3.0', '-b:v', '1.2M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p', '-bf', '0'];
+      vCodecArgs = getUniversalEncoderArgs(480, '800k', '1.2M', '1.8M');
     }
 
     // Safari identifies copied HEVC in MP4 by the hvc1 sample entry. Many
@@ -1734,7 +1783,10 @@ app.get('/api/stream/remux', async (req, res) => {
       console.error('FFmpeg stderr:', data.toString());
     });
 
+    torrent._activeStreams = (torrent._activeStreams || 0) + 1;
+
     const cleanup = () => {
+      torrent._activeStreams = Math.max(0, (torrent._activeStreams || 1) - 1);
       try { readStream.destroy(); } catch (e) {}
       try { ff.kill('SIGKILL'); } catch (e) {}
     };
@@ -1744,6 +1796,36 @@ app.get('/api/stream/remux', async (req, res) => {
     ff.on('error', (err) => {
       cleanup();
     });
+  }
+});
+
+// Smart Alternative Torrent Finder (Provides fast 1080p/720p alternatives for bandwidth-constrained 4K streams)
+app.get('/api/torrent/alternatives', async (req, res) => {
+  const query = req.query.query;
+  if (!query) return res.status(400).json({ error: 'Query is required' });
+  try {
+    const cleanTitle = query
+      .replace(/\.(2160p|1080p|720p|480p|remux|bluray|hevc|web-dl|x264|x265|dts|truehd|atmos).*$/i, '')
+      .replace(/[._]/g, ' ')
+      .trim();
+
+    const results = await TorrentSearchApi.search(cleanTitle, 'Movies', 20);
+    const valid = (results || [])
+      .filter((r) => r.seeds > 5 && !/(?:2160p|4k|remux)/i.test(r.title))
+      .sort((a, b) => (b.seeds || 0) - (a.seeds || 0))
+      .slice(0, 5)
+      .map((r) => ({
+        title: r.title,
+        size: r.size,
+        seeds: r.seeds,
+        peers: r.peers,
+        provider: r.provider,
+        desc: r.desc,
+        link: r.link,
+      }));
+    return res.json({ alternatives: valid });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
   }
 });
 

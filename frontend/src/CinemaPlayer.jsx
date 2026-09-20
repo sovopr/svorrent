@@ -109,10 +109,13 @@ export function CinemaPlayer() {
   const playbackOffsetRef = useRef(0); // Stream start offset for seamless seek & quality transitions
   const seekTimeRef = useRef(0); // Stable requested start timestamp (only changes on seek / quality change, never on ongoing playback ticks)
   const lastStallTimeRef = useRef(0);
-  const firstPieceReadyAtRef = useRef(null); // Timestamp when piece 0 was first seen
   const userPausedRef = useRef(false);
   const lastAutoSwitchRef = useRef(0);
   const smoothedSpeedRef = useRef(0);
+  const stallSinceRef = useRef(null);
+  const lastBufferedEndRef = useRef(0);
+  const [fastAlternative, setFastAlternative] = useState(null);
+  const hasCheckedAlternativesRef = useRef(false);
   const autoProfileInitializedRef = useRef(false);
   const scrubberRef = useRef(null);
   const idleTimerRef = useRef(null);
@@ -253,7 +256,7 @@ export function CinemaPlayer() {
     effectiveAutoProfile,
   ]);
 
-  // YouTube-Style Buffer Health Monitor & Rebuffering Cushion Controller
+  // YouTube-Style Buffer Health Monitor, Rebuffering Cushion Controller & Stall Watchdog
   useEffect(() => {
     const interval = setInterval(() => {
       const video = videoRef.current;
@@ -261,6 +264,7 @@ export function CinemaPlayer() {
         setBufferHealthSec(0);
         return;
       }
+      // Compute buffer ahead of playhead
       const ct = video.currentTime || 0;
       let ahead = 0;
       for (let i = 0; i < video.buffered.length; i++) {
@@ -272,28 +276,68 @@ export function CinemaPlayer() {
       const aheadSec = Number(ahead.toFixed(1));
       setBufferHealthSec(aheadSec);
 
-      // Rebuffering cushion controller:
-      // When rebuffering, accumulate at least 2.5s cushion before resuming playback
-      if (isRebuffering) {
-        const minCushion = 2.5;
-        const hasEnoughRunway = aheadSec >= minCushion;
-        if (hasEnoughRunway) {
-          setIsRebuffering(false);
-          setIsVideoLoading(false);
-          if (video.paused && !userPausedRef.current) {
-            video.play().catch(() => {});
-          }
-        } else {
-          // Keep paused while buffer accumulates in RAM
-          if (!video.paused && !userPausedRef.current) {
-            video.pause();
-          }
+      // Auto-nudge: if buffer is healthy and video is paused without user consent, resume
+      if (aheadSec >= 0.8 && video.paused && !userPausedRef.current && !isVideoLoading) {
+        video.play().catch(() => {});
+      }
+
+      // Stall Watchdog: Only reconnect if network has been completely dead for > 12s
+      if (isVideoLoading && !userPausedRef.current) {
+        if (!stallSinceRef.current) {
+          stallSinceRef.current = Date.now();
+          lastBufferedEndRef.current = aheadSec;
+        } else if (aheadSec <= lastBufferedEndRef.current && (Date.now() - stallSinceRef.current) > 12000) {
+          const currentAbsolute = (playbackOffsetRef.current || 0) + (video.currentTime || 0);
+          console.log(`[Watchdog] Buffer stalled at ${aheadSec}s for >12s. Re-synchronizing stream from ${currentAbsolute.toFixed(1)}s...`);
+          stallSinceRef.current = Date.now();
+          savedPositionRef.current = currentAbsolute;
+          seekTimeRef.current = Math.floor(currentAbsolute);
+          playbackOffsetRef.current = Math.floor(currentAbsolute);
+          setRemuxAttempt((attempt) => attempt + 1);
+          setActionFeedback('⚡ Re-synchronizing stream runway...');
+          setTimeout(() => setActionFeedback(''), 2500);
+        } else if (aheadSec > lastBufferedEndRef.current) {
+          lastBufferedEndRef.current = aheadSec;
+          stallSinceRef.current = Date.now();
         }
+      } else {
+        stallSinceRef.current = null;
       }
     }, 250);
 
     return () => clearInterval(interval);
-  }, [isRebuffering, status?.isRunwaySafe, status?.downloadSpeed]);
+  }, [isVideoLoading, isRebuffering, status?.isRunwaySafe, status?.runwayPiecesReady, status?.downloadSpeed]);
+
+  // Smart Swarm Health: Discover fast 1080p alternatives if 4K file is bandwidth-constrained
+  useEffect(() => {
+    if (!status || hasCheckedAlternativesRef.current) return;
+    const isConstrained = status.isBandwidthConstrained || (status.downloadSpeed > 0 && status.downloadSpeed < 800000 && /(?:hevc|2160p|4k)/i.test(status.fileName || params.title || ''));
+    if (isConstrained && params.title) {
+      hasCheckedAlternativesRef.current = true;
+      fetch(`http://localhost:3001/api/torrent/alternatives?query=${encodeURIComponent(params.title)}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.alternatives && data.alternatives.length > 0) {
+            setFastAlternative(data.alternatives[0]);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [status?.isBandwidthConstrained, status?.downloadSpeed, params.title]);
+
+  const handleSwitchAlternative = async (alt) => {
+    try {
+      setActionFeedback(`Switching to fast torrent: ${alt.title.slice(0, 35)}...`);
+      const res = await fetch(`http://localhost:3001/api/magnet?provider=${encodeURIComponent(alt.provider)}&desc=${encodeURIComponent(alt.desc || '')}&link=${encodeURIComponent(alt.link || '')}`);
+      const data = await res.json();
+      if (data.magnet) {
+        window.location.href = `/player?magnet=${encodeURIComponent(data.magnet)}&title=${encodeURIComponent(alt.title)}`;
+      }
+    } catch (e) {
+      setActionFeedback('Failed to load alternative torrent');
+      setTimeout(() => setActionFeedback(''), 3000);
+    }
+  };
 
   // Compute live stream URL based on mode
   // 'direct' = native HTTP 206 byte-range stream (MP4/WebM, no FFmpeg, instant)
@@ -491,15 +535,8 @@ export function CinemaPlayer() {
     }
     video.playbackRate = playbackSpeed;
 
-    // If actively rebuffering, wait for the cushion controller to release
-    if (isRebuffering) {
-      if (!video.paused && !userPausedRef.current) {
-        video.pause();
-      }
-      return;
-    }
-
     setIsVideoLoading(false);
+    setIsRebuffering(false);
     if (video.paused && !userPausedRef.current) {
       video.play().catch(() => {});
     }
@@ -544,22 +581,9 @@ export function CinemaPlayer() {
     setIsVideoLoading(true);
     setIsRebuffering(true);
     lastStallTimeRef.current = Date.now();
-    // Rebuffering: cleanly pause decoding so data accumulates a healthy cushion instead of rapid 1-frame jitter
-    const video = videoRef.current;
-    if (video && !video.paused && !userPausedRef.current) {
-      video.pause();
-    }
   };
 
   const handlePlaying = () => {
-    if (isRebuffering && bufferHealthSec < 2.0) {
-      // Don't let a stray single frame un-pause before cushion is reached
-      const video = videoRef.current;
-      if (video && !video.paused && !userPausedRef.current) {
-        video.pause();
-        return;
-      }
-    }
     setIsVideoLoading(false);
     setIsRebuffering(false);
     setIsPaused(false);
@@ -1169,7 +1193,7 @@ export function CinemaPlayer() {
             </div>
 
             {/* Bandwidth Bottleneck Warning Banner */}
-            {status?.isBandwidthConstrained && streamMode === 'remux' && (
+            {(status?.isBandwidthConstrained || fastAlternative) && (
               <div style={{
                 margin: '8px 16px 12px 16px',
                 padding: '10px 16px',
@@ -1183,23 +1207,37 @@ export function CinemaPlayer() {
                 color: '#fef08a'
               }}>
                 <div>
-                  <strong>⚡ Swarm Bottleneck:</strong> Swarm speed ({formatBytes(status.downloadSpeed)}/s) is lower than this {formatBytes(status.length)} BluRay's bitrate (~{formatBytes(status.requiredBitrateBytesPerSec)}/s).
+                  <strong>⚡ Swarm Bottleneck:</strong> Swarm speed ({formatBytes(status?.downloadSpeed || 0)}/s) is lower than this {formatBytes(status?.length || 0)} BluRay's bitrate (~{formatBytes(status?.requiredBitrateBytesPerSec || 0)}/s).
                 </div>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  <button
-                    className="control-pill-btn"
-                    style={{ background: '#eab308', color: '#000', fontWeight: 'bold', padding: '5px 12px', fontSize: '0.75rem' }}
-                    onClick={() => handleQualityChange('1080p')}
-                  >
-                    Switch to 1080p Smooth
-                  </button>
-                  <button
-                    className="control-pill-btn"
-                    style={{ padding: '5px 12px', fontSize: '0.75rem' }}
-                    onClick={() => handleQualityChange('720p')}
-                  >
-                    Switch to 720p Fast
-                  </button>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  {fastAlternative && (
+                    <button
+                      className="control-pill-btn"
+                      style={{ background: '#38bdf8', color: '#000', fontWeight: 'bold', padding: '5px 12px', fontSize: '0.75rem' }}
+                      onClick={() => handleSwitchAlternative(fastAlternative)}
+                      title={`Switch to fast swarm with ${fastAlternative.seeds} seeders`}
+                    >
+                      🚀 Instant Play ({fastAlternative.size}, {fastAlternative.seeds} seeds)
+                    </button>
+                  )}
+                  {streamMode !== '1080p' && (
+                    <button
+                      className="control-pill-btn"
+                      style={{ background: '#eab308', color: '#000', fontWeight: 'bold', padding: '5px 12px', fontSize: '0.75rem' }}
+                      onClick={() => handleQualityChange('1080p')}
+                    >
+                      Switch to 1080p Smooth
+                    </button>
+                  )}
+                  {streamMode !== '720p' && (
+                    <button
+                      className="control-pill-btn"
+                      style={{ padding: '5px 12px', fontSize: '0.75rem' }}
+                      onClick={() => handleQualityChange('720p')}
+                    >
+                      Switch to 720p Fast
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -1340,6 +1378,9 @@ export function CinemaPlayer() {
                           <span>Buffer: {bufferHealthSec}s</span>
                           {userPausedRef.current && (
                             <span style={{ color: '#38bdf8', marginLeft: '6px' }}>⚡ Buffering in RAM...</span>
+                          )}
+                          {isRebuffering && !userPausedRef.current && (
+                            <span style={{ color: '#fbbf24', marginLeft: '6px' }}>⚡ Runway: {bufferHealthSec}s / 2.0s ({formatBytes(status?.downloadSpeed || 0)}/s)</span>
                           )}
                         </div>
                       </div>

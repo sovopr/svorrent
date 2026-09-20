@@ -13,8 +13,9 @@ import MemoryChunkStore from 'memory-chunk-store';
 const app = express();
 const port = process.env.PORT || 3001;
 
-// Path to FFmpeg binary
+// Path to FFmpeg & FFprobe binary
 const FFMPEG_BIN = process.env.FFMPEG_PATH || (fs.existsSync('/Users/soveet/miniforge3/bin/ffmpeg') ? '/Users/soveet/miniforge3/bin/ffmpeg' : 'ffmpeg');
+const FFPROBE_BIN = process.env.FFPROBE_PATH || (fs.existsSync('/Users/soveet/miniforge3/bin/ffprobe') ? '/Users/soveet/miniforge3/bin/ffprobe' : 'ffprobe');
 
 // Default download folder on user's Mac: ~/Downloads/Svorrent
 const DOWNLOAD_DIR = path.join(os.homedir(), 'Downloads', 'Svorrent');
@@ -111,6 +112,85 @@ function extractMediaDuration(buffer) {
   }
 
   return null;
+}
+
+// Universal media duration probe for ANY video format (MKV, MP4, WebM, AVI, MOV, TS, etc.)
+// Probes piece 0 in RAM using in-memory container header parsing and fallback ffprobe pipe.
+function probeMediaDuration(torrent, file) {
+  if (!torrent || !file || torrent._detectedDuration || torrent._isProbingDuration) return;
+  torrent._isProbingDuration = true;
+
+  try {
+    const probeStream = file.createReadStream({
+      start: 0,
+      end: Math.min(file.length - 1, 8 * 1024 * 1024),
+    });
+
+    const chunks = [];
+    let finished = false;
+
+    probeStream.on('data', (chunk) => {
+      if (finished) return;
+      chunks.push(chunk);
+      // Fast check: immediate in-memory container header parse on early chunks
+      if (chunks.length <= 6) {
+        const quickBuf = Buffer.concat(chunks);
+        const quickDur = extractMediaDuration(quickBuf);
+        if (quickDur && quickDur > 10) {
+          torrent._detectedDuration = quickDur;
+          finished = true;
+          try { probeStream.destroy(); } catch (e) {}
+        }
+      }
+    });
+
+    const ffprobe = spawn(FFPROBE_BIN, [
+      '-v', 'error',
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      '-i', 'pipe:0',
+    ]);
+
+    let output = '';
+    ffprobe.stdout.on('data', (d) => { output += d.toString(); });
+
+    const timeout = setTimeout(() => {
+      try { ffprobe.kill(); } catch (e) {}
+      if (!torrent._detectedDuration && chunks.length > 0) {
+        const fullBuf = Buffer.concat(chunks);
+        const dur = extractMediaDuration(fullBuf);
+        if (dur) torrent._detectedDuration = dur;
+      }
+    }, 4000);
+
+    ffprobe.on('close', () => {
+      clearTimeout(timeout);
+      const parsed = parseFloat(output.trim());
+      if (!isNaN(parsed) && parsed > 10 && parsed < 86400) {
+        torrent._detectedDuration = Math.round(parsed);
+      } else if (!torrent._detectedDuration && chunks.length > 0) {
+        const fullBuf = Buffer.concat(chunks);
+        const dur = extractMediaDuration(fullBuf);
+        if (dur) torrent._detectedDuration = dur;
+      }
+    });
+
+    ffprobe.on('error', () => {
+      clearTimeout(timeout);
+      if (!torrent._detectedDuration && chunks.length > 0) {
+        const fullBuf = Buffer.concat(chunks);
+        const dur = extractMediaDuration(fullBuf);
+        if (dur) torrent._detectedDuration = dur;
+      }
+    });
+
+    probeStream.pipe(ffprobe.stdin);
+    probeStream.on('error', () => {
+      try { ffprobe.kill(); } catch (e) {}
+    });
+  } catch (err) {
+    torrent._isProbingDuration = false;
+  }
 }
 
 // Dynamic Sliding Window Prefetch Engine
@@ -963,6 +1043,10 @@ app.get('/api/torrent/status', async (req, res) => {
 
   let torrent = await getOrAddTorrent(magnetURI, { isStreamOnly: true });
 
+  const clientCurrentTime = Math.max(0, parseFloat(req.query.currentTime) || 0);
+  const isPaused = req.query.paused === 'true';
+  torrent._isPlayerPaused = isPaused;
+
   const files = torrent.files ? torrent.files.map((f) => ({ name: f.name, length: f.length })) : [];
   const mediaFiles = torrent.files
     ? torrent.files.filter((f) => /\.(mp4|m4v|webm|mkv|avi|mov|ts|m2ts)$/i.test(f.name))
@@ -994,25 +1078,34 @@ app.get('/api/torrent/status', async (req, res) => {
     hasFirstPiece = true; // downloaded >= 1 piece → piece 0 must be in memory
   }
 
-  let firstPieceDownloaded = 0;
-  if (hasFirstPiece) {
-    firstPieceDownloaded = pieceLength;
-  } else if (pieceLength > 0) {
-    firstPieceDownloaded = Math.min(pieceLength, torrent.downloaded || 0);
+  // Trigger universal media duration probe for ANY video format once piece 0 is in memory
+  if (hasFirstPiece && largestFile) {
+    probeMediaDuration(torrent, largestFile);
   }
 
-  const firstPieceProgress = pieceLength > 0 ? Math.min(100, Math.round((firstPieceDownloaded / pieceLength) * 100)) : 0;
-  const etaSeconds = firstPieceProgress < 100 && (torrent.downloadSpeed || 0) > 0
-    ? Math.ceil((pieceLength - firstPieceDownloaded) / torrent.downloadSpeed)
-    : null;
-  const isNativeCompatible = largestFile ? /\.(mp4|m4v|webm)$/i.test(largestFile.name) : false;
+  const durationSec = torrent._detectedDuration || null;
 
-  // Calculate contiguous buffer runway from startPiece forward
+  // Calculate current playback byte offset and playhead piece
+  let byteOffset = 0;
+  if (durationSec > 0 && clientCurrentTime > 0 && largestFile && largestFile.length > 0) {
+    byteOffset = Math.min(largestFile.length - 1, (clientCurrentTime / durationSec) * largestFile.length);
+  }
+
+  // Dynamic sliding window prefetch: focuses swarm bandwidth ahead of the current playhead
+  if (largestFile && typeof torrent.select === 'function') {
+    updatePrefetchWindow(torrent, largestFile, byteOffset);
+  }
+
+  const playheadPiece = (largestFile && pieceLength > 0)
+    ? Math.max(startPiece, Math.floor(((largestFile.offset || 0) + byteOffset) / pieceLength))
+    : startPiece;
+
+  // Calculate contiguous buffer runway from current playhead forward
   let runwayPiecesReady = 0;
   if (largestFile && pieceLength > 0) {
     const endP = largestFile._endPiece || startPiece;
-    const maxCheck = Math.min(endP, startPiece + 35);
-    for (let p = startPiece; p <= maxCheck; p++) {
+    const maxCheck = Math.min(endP, playheadPiece + 80);
+    for (let p = playheadPiece; p <= maxCheck; p++) {
       let pieceDone = false;
       if (torrent.bitfield && typeof torrent.bitfield.get === 'function') {
         pieceDone = !!torrent.bitfield.get(p);
@@ -1028,13 +1121,27 @@ app.get('/api/torrent/status', async (req, res) => {
     }
   }
 
+  let firstPieceDownloaded = 0;
+  if (hasFirstPiece) {
+    firstPieceDownloaded = pieceLength;
+  } else if (pieceLength > 0) {
+    firstPieceDownloaded = Math.min(pieceLength, torrent.downloaded || 0);
+  }
+
+  const firstPieceProgress = pieceLength > 0 ? Math.min(100, Math.round((firstPieceDownloaded / pieceLength) * 100)) : 0;
+  const etaSeconds = firstPieceProgress < 100 && (torrent.downloadSpeed || 0) > 0
+    ? Math.ceil((pieceLength - firstPieceDownloaded) / torrent.downloadSpeed)
+    : null;
+  const isNativeCompatible = largestFile ? /\.(mp4|m4v|webm)$/i.test(largestFile.name) : false;
+
   const isFastSwarm = (torrent.downloadSpeed || 0) > 1800000;
   const targetRunwayPieces = isFastSwarm ? 3 : 6;
   const runwayBytesReady = runwayPiecesReady * pieceLength;
   const isRunwaySafe = runwayPiecesReady >= targetRunwayPieces || (hasFirstPiece && isFastSwarm);
   const runwayProgress = Math.min(100, Math.round((runwayPiecesReady / targetRunwayPieces) * 100));
 
-  const requiredBitrateBytesPerSec = largestFile && largestFile.length > 0
+  const estimatedDurationSec = durationSec || 7200;
+  const requiredBitrateBytesPerSec = largestFile && largestFile.length > 0 && estimatedDurationSec > 0
     ? Math.round(largestFile.length / estimatedDurationSec)
     : 0;
   const isBandwidthConstrained = (torrent.downloadSpeed || 0) > 0 &&
@@ -1049,7 +1156,8 @@ app.get('/api/torrent/status', async (req, res) => {
     magnet: magnetURI,
     name: torrent.name || 'Resolving metadata from swarm...',
     ready: !!torrent.ready,
-    duration: estimatedDurationSec,
+    duration: durationSec,
+    playheadPiece,
     progress: torrent.progress || 0,
     downloadSpeed: torrent.downloadSpeed || 0,
     uploadSpeed: torrent.uploadSpeed || 0,

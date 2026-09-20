@@ -326,21 +326,24 @@ export function CinemaPlayer() {
   const streamUrl = getStreamUrl();
   const streamReady = Boolean(streamUrl);
 
-  // Exact Movie Duration (from metadata/container or fallback)
-  const movieDuration = (status?.duration && status.duration > 60)
+  // Universal Media Duration (probed dynamically for ANY video from container or HTML5 element)
+  const movieDuration = (status?.duration && status.duration > 10)
     ? status.duration
-    : (videoRef.current?.duration && isFinite(videoRef.current.duration) && videoRef.current.duration > 0)
+    : (videoRef.current?.duration && isFinite(videoRef.current.duration) && videoRef.current.duration > 10)
     ? videoRef.current.duration
-    : 7200;
+    : 0;
 
-  // Format Time Helper (HH:MM:SS or MM:SS)
-  const formatTime = (seconds) => {
-    if (!seconds || isNaN(seconds) || seconds < 0) return '0:00';
+  // Format Time Helper (HH:MM:SS or MM:SS) like YouTube
+  const formatTime = (seconds, isTotal = false) => {
+    if (seconds === undefined || seconds === null || isNaN(seconds) || seconds < 0) {
+      return isTotal ? '--:--' : '0:00';
+    }
+    if (isTotal && seconds <= 0) return '--:--';
     const totalSec = Math.floor(seconds);
     const h = Math.floor(totalSec / 3600);
     const m = Math.floor((totalSec % 3600) / 60);
     const s = totalSec % 60;
-    if (h > 0) {
+    if (h > 0 || (movieDuration >= 3600)) {
       return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     }
     return `${m}:${s.toString().padStart(2, '0')}`;
@@ -348,9 +351,32 @@ export function CinemaPlayer() {
 
   // Scrubber progress percentages
   const playPct = movieDuration > 0 ? (currentTime / movieDuration) * 100 : 0;
-  // The YouTube Grey Buffer Bar percentage:
+
+  // Browser HTML5 video buffer
+  let browserBufferedSec = 0;
+  const vEl = videoRef.current;
+  if (vEl && vEl.buffered && vEl.buffered.length > 0) {
+    for (let i = 0; i < vEl.buffered.length; i++) {
+      const s = vEl.buffered.start(i);
+      const e = vEl.buffered.end(i);
+      if (s <= currentTime + 2 && currentTime <= e + 2) {
+        browserBufferedSec = Math.max(browserBufferedSec, e);
+      }
+    }
+    if (browserBufferedSec === 0) {
+      browserBufferedSec = vEl.buffered.end(vEl.buffered.length - 1);
+    }
+  }
+
+  // P2P Swarm RAM Runway buffer (pieces downloaded into memory directly ahead of playhead)
+  const ramRunwayBytes = (status?.runwayPiecesReady || 0) * (status?.pieceLength || 0);
+  const bytesPerSec = (movieDuration > 0 && status?.length > 0) ? status.length / movieDuration : 0;
+  const ramRunwaySec = bytesPerSec > 0 ? ramRunwayBytes / bytesPerSec : 0;
+  const totalBufferedAheadSec = Math.max(browserBufferedSec, currentTime + ramRunwaySec);
+
+  // The YouTube Grey Buffer Bar percentage (universal across any video):
   const bufferPct = movieDuration > 0
-    ? Math.min(100, Math.max(playPct, ((currentTime + bufferHealthSec) / movieDuration) * 100, (((status?.downloaded || 0) / (status?.length || 1)) * 100)))
+    ? Math.min(100, Math.max(playPct, (totalBufferedAheadSec / movieDuration) * 100))
     : 0;
 
   // Toggle Play / Pause like YouTube
@@ -1248,7 +1274,7 @@ export function CinemaPlayer() {
                         <div className="yt-time-display">
                           <span>{formatTime(currentTime)}</span>
                           <span style={{ margin: '0 4px', opacity: 0.6 }}>/</span>
-                          <span>{formatTime(movieDuration)}</span>
+                          <span>{formatTime(movieDuration, true)}</span>
                         </div>
 
                         {/* Real-time Buffer Runway Pill */}

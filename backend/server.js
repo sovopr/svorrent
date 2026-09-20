@@ -649,7 +649,6 @@ app.post('/api/torrent/:id/play-native', async (req, res) => {
     : torrent.files && torrent.files.length > 0
       ? torrent.files.reduce((a, b) => (a.length > b.length ? a : b))
       : null;
-    : null;
 
   // Stream-only torrents live in RAM. Never derive a native-player path from
   // torrent.path: stale cache paths make VLC try to open deleted files.
@@ -775,9 +774,14 @@ app.get('/api/torrent/status', async (req, res) => {
   let torrent = await getOrAddTorrent(magnetURI, { isStreamOnly: true });
 
   const files = torrent.files ? torrent.files.map((f) => ({ name: f.name, length: f.length })) : [];
-  const largestFile = torrent.files && torrent.files.length > 0
-    ? torrent.files.reduce((a, b) => (a.length > b.length ? a : b))
-    : null;
+  const mediaFiles = torrent.files
+    ? torrent.files.filter((f) => /\.(mp4|m4v|webm|mkv|avi|mov|ts|m2ts)$/i.test(f.name))
+    : [];
+  const largestFile = mediaFiles.length > 0
+    ? mediaFiles.reduce((a, b) => (a.length > b.length ? a : b))
+    : torrent.files && torrent.files.length > 0
+      ? torrent.files.reduce((a, b) => (a.length > b.length ? a : b))
+      : null;
 
   const subtitleFiles = torrent.files
     ? torrent.files

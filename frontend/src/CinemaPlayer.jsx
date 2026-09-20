@@ -186,15 +186,14 @@ export function CinemaPlayer() {
   const getStreamUrl = () => {
     const effectiveMagnet = status?.magnet || params.magnet;
     const infoHash = status?.infoHash;
-    if (!effectiveMagnet && !infoHash) return '';
+
+    // Don't expose src until we have piece 0 + infoHash.
+    // If we set src too early, the video element fires onerror immediately which
+    // cascades: direct → remux → 1080p even for native MP4 files.
+    if (!status?.hasFirstPiece || !infoHash) return '';
 
     if (streamMode === 'direct') {
-      // Best path: native seekable MP4/WebM — goes through /api/torrent/:id/stream
-      // Falls back to /api/stream if infoHash not yet resolved
-      if (infoHash) {
-        return `http://localhost:3001/api/torrent/${infoHash}/stream`;
-      }
-      return `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(effectiveMagnet)}`;
+      return `http://localhost:3001/api/torrent/${infoHash}/stream`;
     } else if (streamMode === 'remux') {
       return `http://localhost:3001/api/stream/remux?mode=copy&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else if (streamMode === '1080p') {
@@ -820,33 +819,35 @@ export function CinemaPlayer() {
             <div className="cinema-player-frame">
               {status?.ready ? (
                 <div className={`video-element-wrapper subtitle-style-${subtitleSize}`}>
-                  <video
-                    ref={videoRef}
-                    controls
-                    autoPlay
-                    playsInline
-                    crossOrigin="anonymous"
-                    className="cinema-video"
-                    src={streamUrl}
-                    onWaiting={() => setIsVideoLoading(true)}
-                    onPlaying={() => setIsVideoLoading(false)}
-                    onPlay={() => setIsVideoLoading(false)}
-                    onLoadedData={() => setIsVideoLoading(false)}
-                    onCanPlay={handleVideoCanPlay}
-                    onError={handleVideoError}
-                  >
-                    {activeSubtitle && (
-                      <track
-                        key={activeSubtitle.url}
-                        kind="subtitles"
-                        src={activeSubtitle.url}
-                        srcLang="en"
-                        label={activeSubtitle.label}
-                        default
-                      />
-                    )}
-                    Your browser does not support HTML5 video playback.
-                  </video>
+                  {streamUrl && (
+                    <video
+                      ref={videoRef}
+                      controls
+                      autoPlay
+                      playsInline
+                      crossOrigin="anonymous"
+                      className="cinema-video"
+                      src={streamUrl}
+                      onWaiting={() => setIsVideoLoading(true)}
+                      onPlaying={() => setIsVideoLoading(false)}
+                      onPlay={() => setIsVideoLoading(false)}
+                      onLoadedData={() => setIsVideoLoading(false)}
+                      onCanPlay={handleVideoCanPlay}
+                      onError={handleVideoError}
+                    >
+                      {activeSubtitle && (
+                        <track
+                          key={activeSubtitle.url}
+                          kind="subtitles"
+                          src={activeSubtitle.url}
+                          srcLang="en"
+                          label={activeSubtitle.label}
+                          default
+                        />
+                      )}
+                      Your browser does not support HTML5 video playback.
+                    </video>
+                  )}
 
                   {isVideoLoading && (
                     <div className="video-loading-overlay">

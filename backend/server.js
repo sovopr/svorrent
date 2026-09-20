@@ -18,12 +18,45 @@ const FFMPEG_BIN = process.env.FFMPEG_PATH || (fs.existsSync('/Users/soveet/mini
 
 // Default download folder on user's Mac: ~/Downloads/Svorrent
 const DOWNLOAD_DIR = path.join(os.homedir(), 'Downloads', 'Svorrent');
-if (!fs.existsSync(DOWNLOAD_DIR)) {
-  fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+function ensureDownloadDir() {
+  if (!fs.existsSync(DOWNLOAD_DIR)) {
+    fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
+  }
 }
 
 // Temporary streaming buffer cache — lives in macOS /tmp, auto-wiped on boot
 const STREAM_CACHE_DIR = path.join(os.tmpdir(), 'svorrent-cache');
+
+// Some search providers still return magnets containing only retired trackers.
+// Keep the original trackers, but add a small fallback set so metadata and
+// peers can still be discovered when one provider's tracker list is stale.
+const FALLBACK_TRACKERS = [
+  'udp://tracker.opentrackr.org:1337/announce',
+  'udp://open.stealth.si:80/announce',
+  'udp://tracker.torrent.eu.org:451/announce',
+  'udp://exodus.desync.com:6969/announce',
+  'udp://explodie.org:6969/announce',
+  'wss://tracker.openwebtorrent.com',
+];
+
+function withFallbackTrackers(magnetURI) {
+  if (!magnetURI || !magnetURI.startsWith('magnet:?')) return magnetURI;
+
+  const existing = new Set();
+  for (const match of magnetURI.matchAll(/(?:^|&)tr=([^&]*)/g)) {
+    try {
+      existing.add(decodeURIComponent(match[1]));
+    } catch (e) {
+      existing.add(match[1]);
+    }
+  }
+
+  const additions = FALLBACK_TRACKERS
+    .filter((tracker) => !existing.has(tracker))
+    .map((tracker) => `tr=${encodeURIComponent(tracker)}`);
+
+  return additions.length > 0 ? `${magnetURI}&${additions.join('&')}` : magnetURI;
+}
 
 // Clean old cache on startup (best-effort — locked files are skipped)
 function cleanStreamCache() {
@@ -130,12 +163,14 @@ app.get('/api/magnet', async (req, res) => {
 
 // Helper to get or add torrent
 async function getOrAddTorrent(magnetURI, opts = {}) {
+  magnetURI = withFallbackTrackers(magnetURI);
   let torrent = await client.get(magnetURI);
   if (!torrent) {
     const isPermanent = opts.isPermanentDownload === true || (!opts.isStreamOnly && opts.path === DOWNLOAD_DIR);
 
     // Stream-only torrents use in-memory storage (zero disk footprint, like Netflix).
     // Permanent downloads use ~/Downloads/Svorrent on disk as expected.
+    if (isPermanent) ensureDownloadDir();
     const addOpts = isPermanent
       ? { path: opts.path || DOWNLOAD_DIR }
       : { store: MemoryChunkStore };
@@ -731,7 +766,18 @@ app.get('/api/torrent/status', async (req, res) => {
 
   const pieceLength = torrent.pieceLength || 0;
   const startPiece = largestFile ? largestFile._startPiece : 0;
-  const hasFirstPiece = torrent.bitfield && typeof torrent.bitfield.get === 'function' ? !!torrent.bitfield.get(startPiece) : false;
+
+  // hasFirstPiece means that the bytes needed to start the selected media file
+  // are actually available. `torrent.ready` only means that metadata arrived;
+  // treating it as playable makes the browser request an empty stream when the
+  // swarm has not supplied any data yet.
+  let hasFirstPiece = false;
+  if (torrent.bitfield && typeof torrent.bitfield.get === 'function') {
+    hasFirstPiece = !!torrent.bitfield.get(startPiece);
+  }
+  if (!hasFirstPiece && pieceLength > 0 && (torrent.downloaded || 0) >= pieceLength) {
+    hasFirstPiece = true; // downloaded >= 1 piece → piece 0 must be in memory
+  }
 
   let firstPieceDownloaded = 0;
   if (hasFirstPiece) {

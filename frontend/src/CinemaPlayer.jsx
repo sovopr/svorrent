@@ -77,6 +77,15 @@ export function CinemaPlayer() {
   const lastAutoSwitchRef = useRef(0);
   const smoothedSpeedRef = useRef(0);
   const autoProfileInitializedRef = useRef(false);
+  const scrubberRef = useRef(null);
+  const idleTimerRef = useRef(null);
+
+  // YouTube Timeline Scrubber State
+  const [currentTime, setCurrentTime] = useState(0);
+  const [isPaused, setIsPaused] = useState(true);
+  const [hoverTime, setHoverTime] = useState(null);
+  const [hoverPos, setHoverPos] = useState(0);
+  const [isUserIdle, setIsUserIdle] = useState(false);
 
   // Online Subtitles Search Method
   const searchOnlineSubtitles = async (searchTarget, langCode = subtitleLang) => {
@@ -133,6 +142,9 @@ export function CinemaPlayer() {
         if (params.provider) q.set('provider', params.provider);
         if (params.desc) q.set('desc', params.desc);
         if (params.link) q.set('link', params.link);
+        const ct = videoRef.current ? (videoRef.current.currentTime || 0) : 0;
+        q.set('currentTime', String(ct));
+        q.set('paused', String(!!userPausedRef.current));
 
         const res = await fetch(`http://localhost:3001/api/torrent/status?${q.toString()}`);
         if (!res.ok) {
@@ -151,7 +163,6 @@ export function CinemaPlayer() {
 
         // Adaptive Buffer Safety Runway:
         // Wait until an uninterrupted safety runway is accumulated to prevent stuttering.
-        // User can always click "Play Now" to bypass immediately.
         if (data.isRunwaySafe || (data.hasFirstPiece && (data.downloadSpeed || 0) > 2500000)) {
           if (!firstPieceReadyAtRef.current) {
             firstPieceReadyAtRef.current = Date.now();
@@ -161,7 +172,7 @@ export function CinemaPlayer() {
             forcePlayTimerRef.current = setTimeout(() => {
               setIsVideoLoading(false);
               const video = videoRef.current;
-              if (video) {
+              if (video && !userPausedRef.current) {
                 video.playbackRate = playbackSpeed;
                 video.play().catch(() => {});
               }
@@ -315,6 +326,101 @@ export function CinemaPlayer() {
   const streamUrl = getStreamUrl();
   const streamReady = Boolean(streamUrl);
 
+  // Exact Movie Duration (from metadata/container or fallback)
+  const movieDuration = (status?.duration && status.duration > 60)
+    ? status.duration
+    : (videoRef.current?.duration && isFinite(videoRef.current.duration) && videoRef.current.duration > 0)
+    ? videoRef.current.duration
+    : 7200;
+
+  // Format Time Helper (HH:MM:SS or MM:SS)
+  const formatTime = (seconds) => {
+    if (!seconds || isNaN(seconds) || seconds < 0) return '0:00';
+    const totalSec = Math.floor(seconds);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    if (h > 0) {
+      return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    }
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
+
+  // Scrubber progress percentages
+  const playPct = movieDuration > 0 ? (currentTime / movieDuration) * 100 : 0;
+  // The YouTube Grey Buffer Bar percentage:
+  const bufferPct = movieDuration > 0
+    ? Math.min(100, Math.max(playPct, ((currentTime + bufferHealthSec) / movieDuration) * 100, (((status?.downloaded || 0) / (status?.length || 1)) * 100)))
+    : 0;
+
+  // Toggle Play / Pause like YouTube
+  const togglePlayPause = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    if (video.paused) {
+      userPausedRef.current = false;
+      setIsPaused(false);
+      video.play().catch(() => {});
+    } else {
+      userPausedRef.current = true;
+      setIsPaused(true);
+      video.pause();
+    }
+  };
+
+  // Fullscreen on Double Click
+  const handleVideoDoubleClick = () => {
+    const frame = document.querySelector('.cinema-player-frame');
+    if (document.fullscreenElement) {
+      document.exitFullscreen().catch(() => {});
+    } else if (frame) {
+      frame.requestFullscreen().catch(() => {});
+    }
+  };
+
+  // YouTube Scrubber Click & Seek
+  const handleScrubberClick = (e) => {
+    if (!scrubberRef.current || !movieDuration) return;
+    const rect = scrubberRef.current.getBoundingClientRect();
+    const clickX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+    const targetPct = clickX / rect.width;
+    const targetTime = targetPct * movieDuration;
+
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (streamMode === 'direct') {
+      video.currentTime = targetTime;
+      setCurrentTime(targetTime);
+    } else {
+      savedPositionRef.current = targetTime;
+      setCurrentTime(targetTime);
+      video.currentTime = targetTime;
+    }
+  };
+
+  // Scrubber Hover Tooltip
+  const handleScrubberHover = (e) => {
+    if (!scrubberRef.current || !movieDuration) return;
+    const rect = scrubberRef.current.getBoundingClientRect();
+    const hoverX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+    const pct = (hoverX / rect.width) * 100;
+    const time = (hoverX / rect.width) * movieDuration;
+    setHoverPos(pct);
+    setHoverTime(time);
+  };
+
+  // Auto-hide controls when user is idle
+  const handleMouseMovePlayer = () => {
+    setIsUserIdle(false);
+    if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
+    if (!userPausedRef.current) {
+      idleTimerRef.current = setTimeout(() => {
+        setIsUserIdle(true);
+      }, 3000);
+    }
+  };
+
   // Seamless Quality Switching (preserves playback position)
   const handleQualityChange = (newMode) => {
     if (newMode === streamMode) return;
@@ -432,10 +538,9 @@ export function CinemaPlayer() {
       const video = videoRef.current;
       if (!video) return;
 
-      if (e.code === 'Space') {
+      if (e.code === 'Space' || e.key === 'k' || e.key === 'K') {
         e.preventDefault();
-        if (video.paused) video.play();
-        else video.pause();
+        togglePlayPause();
       } else if (e.code === 'ArrowLeft') {
         e.preventDefault();
         video.currentTime = Math.max(0, video.currentTime - 10);
@@ -523,7 +628,7 @@ export function CinemaPlayer() {
     }
   };
 
-  const bufferPct = Math.round((status?.progress || 0) * 100);
+  const overallProgressPct = Math.round((status?.progress || 0) * 100);
 
   // Subtitles from swarm
   const swarmSubtitles = (status?.subtitleFiles || []).map((sub) => ({
@@ -592,7 +697,7 @@ export function CinemaPlayer() {
               <span className="hud-val speed-val">{formatBytes(status?.downloadSpeed || 0)}/s</span>
             </div>
             <div className="hud-pill" title="Buffer Percentage">
-              <span className="hud-val">{bufferPct}%</span>
+              <span className="hud-val">{overallProgressPct}%</span>
               <span className="hud-label">buffered</span>
             </div>
           </div>
@@ -1015,45 +1120,45 @@ export function CinemaPlayer() {
             {/* Video Player Box */}
             <div className="cinema-player-frame">
               {status?.ready ? (
-                <div className={`video-element-wrapper subtitle-style-${subtitleSize}`}>
+                <div
+                  className={`video-element-wrapper subtitle-style-${subtitleSize} ${isUserIdle ? 'user-idle' : ''}`}
+                  onMouseMove={handleMouseMovePlayer}
+                  onMouseLeave={() => !userPausedRef.current && setIsUserIdle(true)}
+                >
                   {streamUrl && (
                     <video
                       ref={videoRef}
-                      controls
+                      controls={false}
                       playsInline
                       crossOrigin="anonymous"
                       preload="auto"
                       className="cinema-video"
                       src={streamUrl}
+                      onClick={togglePlayPause}
+                      onDoubleClick={handleVideoDoubleClick}
+                      onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
                       onWaiting={() => {
                         setIsVideoLoading(true);
-                        setIsRebuffering(true);
-                        const video = videoRef.current;
-                        if (video && !video.paused) {
-                          video.pause();
-                        }
                       }}
                       onPlaying={() => {
                         setIsVideoLoading(false);
-                        setIsRebuffering(false);
+                        setIsPaused(false);
                       }}
                       onPlay={() => {
                         userPausedRef.current = false;
+                        setIsPaused(false);
                         setIsVideoLoading(false);
                       }}
                       onPause={() => {
-                        if (!isVideoLoading && !isRebuffering) {
-                          userPausedRef.current = true;
-                        }
+                        setIsPaused(true);
                       }}
                       onLoadedData={() => {
-                        if (!isRebuffering) setIsVideoLoading(false);
+                        setIsVideoLoading(false);
                       }}
                       onCanPlay={() => {
                         handleVideoCanPlay();
                         const video = videoRef.current;
-                        // CRITICAL ANTI-STALL: If we are rebuffering a cushion, do NOT resume prematurely on a 50ms packet!
-                        if (!isRebuffering && video && video.paused && !userPausedRef.current) {
+                        if (video && video.paused && !userPausedRef.current) {
                           video.play().catch(() => {});
                         }
                       }}
@@ -1073,191 +1178,140 @@ export function CinemaPlayer() {
                     </video>
                   )}
 
-                  {isVideoLoading && (
-                    <div className="video-loading-overlay">
-                      <div className="buffer-telemetry-card">
-                        <div className="buffer-telemetry-top">
-                          <div className="buffer-spinner-glow"></div>
-                          <div>
-                            <h3 className="buffer-title">
-                              {isRebuffering
-                                ? 'Buffering Safety Cushion...'
-                                : !streamReady
-                                ? 'Buffering BitTorrent Stream'
-                                : status?.isRunwaySafe
-                                ? 'Ready to Stream!'
-                                : 'Building Safety Buffer...'}
-                            </h3>
-                            <p className="buffer-desc">
-                              {isRebuffering
-                                ? `Holding playback briefly in memory to accumulate a ${bufferHealthSec}s / 5.5s buffer runway. Prevents choppy start-stop stuttering.`
-                                : !streamReady
-                                ? 'Connecting to swarm and downloading initial piece into memory...'
-                                : status?.isRunwaySafe
-                                ? 'Buffer runway secured — smooth playback ready.'
-                                : `Buffering pieces in memory to prevent mid-movie stalling (${status?.runwayPiecesReady || 0}/${status?.targetRunwayPieces || 6} pieces). Click Play Now to start immediately.`}
-                            </p>
-                          </div>
-                        </div>
-
-                        {/* Runway Buffer Meter — shown while accumulating safety runway or rebuffering cushion */}
-                        {(isRebuffering || (streamReady && !status?.isRunwaySafe)) && (
-                          <div className="buffer-piece-meter" style={{ marginTop: '0.65rem', marginBottom: '0.65rem' }}>
-                            <div className="meter-label-row">
-                              <span className="meter-main-text">
-                                {isRebuffering
-                                  ? `🛡️ Buffer Cushion: ${bufferHealthSec}s / 5.5s`
-                                  : `Buffer Runway: ${status?.runwayPiecesReady || 0} / ${status?.targetRunwayPieces || 6} pieces (${formatBytes(status?.runwayBytesReady || 0)})`}
-                              </span>
-                              <span className="meter-speed-text">
-                                ⚡ {formatBytes(status?.downloadSpeed || 0)}/s • {status?.numPeers || 0} peers
-                              </span>
-                            </div>
-                            <div className="meter-bar-track">
-                              <div
-                                className="meter-bar-fill"
-                                style={{
-                                  width: `${isRebuffering ? Math.min(100, Math.max(8, Math.round((bufferHealthSec / 5.5) * 100))) : Math.max(status?.runwayProgress || 0, 12)}%`,
-                                  background: isRebuffering ? 'linear-gradient(90deg, #3b82f6, #06b6d4, #10b981)' : 'linear-gradient(90deg, #3b82f6, #10b981)',
-                                  transition: 'width 0.25s ease',
-                                }}
-                              ></div>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* High Bitrate Advice in Overlay */}
-                        {status?.isBandwidthConstrained && streamMode === 'remux' && (
-                          <div style={{
-                            margin: '8px 0',
-                            padding: '10px 14px',
-                            background: 'rgba(234, 179, 8, 0.12)',
-                            borderRadius: '8px',
-                            border: '1px solid rgba(234, 179, 8, 0.35)',
-                            fontSize: '0.78rem',
-                            color: '#fde047',
-                            textAlign: 'left'
-                          }}>
-                            <div style={{ fontWeight: 'bold', marginBottom: '3px' }}>⚡ Why is it stopping?</div>
-                            <div style={{ marginBottom: '8px', color: 'rgba(255,255,255,0.85)', lineHeight: '1.3' }}>
-                              This 35GB BluRay requires <strong>~{formatBytes(status.requiredBitrateBytesPerSec)}/s</strong>, but the swarm is currently delivering <strong>{formatBytes(status.downloadSpeed)}/s</strong>.
-                              Switch to <strong>Auto</strong> or <strong>1080p Smooth</strong> below to stream smoothly without pausing.
-                            </div>
-                            <div style={{ display: 'flex', gap: '8px' }}>
-                              <button
-                                className="control-pill-btn"
-                                style={{ background: '#3b82f6', color: '#fff', fontWeight: 'bold', padding: '4px 10px', fontSize: '0.74rem' }}
-                                onClick={() => handleQualityChange('auto')}
-                              >
-                                ⚡ Switch to Auto Mode
-                              </button>
-                              <button
-                                className="control-pill-btn"
-                                style={{ background: '#eab308', color: '#000', fontWeight: 'bold', padding: '4px 10px', fontSize: '0.74rem' }}
-                                onClick={() => handleQualityChange('1080p')}
-                              >
-                                ⚡ 1080p Smooth
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Play Now CTA — always clickable once stream is ready */}
-                        {streamReady && (
-                          <button
-                            className="buffer-play-now-btn"
-                            onClick={() => {
-                              userPausedRef.current = false;
-                              setIsRebuffering(false);
-                              setIsVideoLoading(false);
-                              const video = videoRef.current;
-                              if (video) {
-                                video.playbackRate = playbackSpeed;
-                                video.play().catch(() => {});
-                              }
-                            }}
-                          >
-                            {isRebuffering
-                              ? '▶ Play Now (Bypass Cushion)'
-                              : status?.isRunwaySafe
-                              ? '▶ Start Streaming'
-                              : '▶ Play Now (Bypass Buffer)'}
-                          </button>
-                        )}
-
-                        {/* Piece Progress Bar — shown while waiting for piece 0 */}
-                        {!streamReady && (
-                        <div className="buffer-piece-meter">
-                          <div className="meter-label-row">
-                            <span className="meter-main-text">
-                              {`Piece #0: ${formatBytes(status?.firstPieceDownloaded || 0)} / ${formatBytes(status?.pieceLength || 16777216)} (${status?.firstPieceProgress || 0}%)`}
-                            </span>
-                            <span className="meter-speed-text">
-                              ⚡ {formatBytes(status?.downloadSpeed || 0)}/s • {status?.numPeers || 0} peers
-                              {status?.etaSeconds && status.etaSeconds > 0 ? ` • ~${status.etaSeconds}s ETA` : ''}
-                            </span>
-                          </div>
-                          <div className="meter-bar-track">
-                            <div
-                              className="meter-bar-fill"
-                              style={{
-                                width: `${Math.max(status?.firstPieceProgress || 0, 8)}%`,
-                              }}
-                            ></div>
-                          </div>
-                        </div>
-                        )}
-
-                        {/* Speed + peers mini-stats when runway is safe */}
-                        {streamReady && status?.isRunwaySafe && (
-                          <div style={{ textAlign: 'center', fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', marginTop: '4px' }}>
-                            ⚡ {formatBytes(status?.downloadSpeed || 0)}/s • {status?.numPeers || 0} peers • 100% In-Memory Stream
-                          </div>
-                        )}
-
-                        {/* Fast Action: Native Desktop Player */}
-                        <div className="buffer-native-shortcut">
-                          <div className="shortcut-info">
-                            <span className="shortcut-title">⚡ Want instant zero-wait playback?</span>
-                            <span className="shortcut-sub">
-                              Launch directly in IINA / VLC for immediate hardware acceleration with Dolby Vision & TrueHD Atmos.
-                            </span>
-                          </div>
-                          <button
-                            className="btn btn-primary btn-sm buffer-open-btn"
-                            onClick={handlePlayNative}
-                          >
-                            ▶ Open in IINA / VLC
-                          </button>
-                        </div>
-
-                        {/* Stream quality switcher if network speed is slow */}
-                        <div className="buffer-quick-profiles">
-                          <span className="profiles-label">Slow swarm? Switch stream profile:</span>
-                          <div className="profiles-btns">
-                            <button
-                              className={`profile-chip ${streamMode === '1080p' ? 'active' : ''}`}
-                              onClick={() => handleQualityChange('1080p')}
-                            >
-                              1080p Transcode
-                            </button>
-                            <button
-                              className={`profile-chip ${streamMode === '720p' ? 'active' : ''}`}
-                              onClick={() => handleQualityChange('720p')}
-                            >
-                              720p Fast
-                            </button>
-                            <button
-                              className={`profile-chip ${streamMode === 'copy' ? 'active' : ''}`}
-                              onClick={() => handleQualityChange('copy')}
-                            >
-                              💎 4K Remux
-                            </button>
-                          </div>
-                        </div>
-                      </div>
+                  {/* YouTube Center Buffering Spinner (NO DIALOG BOX) */}
+                  {isVideoLoading && !userPausedRef.current && (
+                    <div className="yt-center-spinner">
+                      <div className="yt-spinner-ring"></div>
                     </div>
                   )}
+
+                  {/* YouTube Player Control Bar & Scrubber */}
+                  <div className="yt-scrubber-wrapper">
+                    {/* YouTube Scrubber Timeline Bar */}
+                    <div
+                      className="yt-progress-container"
+                      ref={scrubberRef}
+                      onClick={handleScrubberClick}
+                      onMouseMove={handleScrubberHover}
+                      onMouseLeave={() => setHoverTime(null)}
+                    >
+                      <div className="yt-progress-bg">
+                        {/* THE YOUTUBE GREY BUFFER BAR */}
+                        <div
+                          className="yt-progress-buffer"
+                          style={{ width: `${Math.min(100, Math.max(0, bufferPct))}%` }}
+                        />
+                        {/* THE YOUTUBE RED PLAYED BAR */}
+                        <div
+                          className="yt-progress-played"
+                          style={{ width: `${Math.min(100, Math.max(0, playPct))}%` }}
+                        >
+                          <div className="yt-scrubber-thumb" />
+                        </div>
+                      </div>
+
+                      {/* Hover Timestamp Tooltip */}
+                      {hoverTime !== null && (
+                        <div
+                          className="yt-time-tooltip"
+                          style={{ left: `${hoverPos}%` }}
+                        >
+                          {formatTime(hoverTime)}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* YouTube Controls Row */}
+                    <div className="yt-controls-row">
+                      <div className="yt-controls-left">
+                        <button
+                          className="yt-btn"
+                          onClick={togglePlayPause}
+                          title={isPaused ? 'Play (Space / k)' : 'Pause (Space / k)'}
+                        >
+                          {isPaused ? '▶' : '❚❚'}
+                        </button>
+
+                        <button
+                          className="yt-btn"
+                          onClick={() => {
+                            if (videoRef.current) {
+                              videoRef.current.muted = !videoRef.current.muted;
+                            }
+                          }}
+                          title="Mute / Unmute (m)"
+                        >
+                          {videoRef.current?.muted ? '🔇' : '🔊'}
+                        </button>
+
+                        {/* Exact Movie Duration Timecode */}
+                        <div className="yt-time-display">
+                          <span>{formatTime(currentTime)}</span>
+                          <span style={{ margin: '0 4px', opacity: 0.6 }}>/</span>
+                          <span>{formatTime(movieDuration)}</span>
+                        </div>
+
+                        {/* Real-time Buffer Runway Pill */}
+                        <div className="yt-buffer-badge" title="Active forward buffer runway in RAM">
+                          <span style={{
+                            display: 'inline-block',
+                            width: '6px',
+                            height: '6px',
+                            borderRadius: '50%',
+                            background: bufferHealthSec > 10 ? '#34d399' : bufferHealthSec > 4 ? '#60a5fa' : '#fbbf24',
+                            marginRight: '6px'
+                          }}></span>
+                          <span>Buffer: {bufferHealthSec}s</span>
+                          {userPausedRef.current && (
+                            <span style={{ color: '#38bdf8', marginLeft: '6px' }}>⚡ Buffering in RAM...</span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="yt-controls-right">
+                        {/* Quality Selector Badge */}
+                        <div
+                          className="yt-quality-badge"
+                          onClick={() => handleQualityChange(streamMode === 'auto' ? '1080p' : streamMode === '1080p' ? '720p' : 'auto')}
+                          title="Click to cycle video quality"
+                        >
+                          ⚡ {streamMode === 'auto' ? `Auto (${effectiveAutoProfile.toUpperCase()})` : streamMode.toUpperCase()}
+                        </div>
+
+                        {/* Subtitles CC Button */}
+                        <button
+                          className={`yt-btn ${activeSubtitle ? 'yt-active' : ''}`}
+                          onClick={() => setShowSubtitleMenu((prev) => !prev)}
+                          title="Subtitles / Captions (c)"
+                        >
+                          💬 CC
+                        </button>
+
+                        {/* Speed Button */}
+                        <button
+                          className="yt-btn yt-speed-btn"
+                          onClick={() => {
+                            const speeds = [0.75, 1.0, 1.25, 1.5, 2.0];
+                            const currIdx = speeds.indexOf(playbackSpeed);
+                            const next = speeds[(currIdx + 1) % speeds.length];
+                            handleSpeedChange(next);
+                          }}
+                          title="Playback Speed ([ / ])"
+                        >
+                          {playbackSpeed}x
+                        </button>
+
+                        {/* Fullscreen Button */}
+                        <button
+                          className="yt-btn"
+                          onClick={handleVideoDoubleClick}
+                          title="Fullscreen (f)"
+                        >
+                          ⛶
+                        </button>
+                      </div>
+                    </div>
+                  </div>
                 </div>
               ) : (
                 <div className="cinema-buffering-state">
@@ -1268,7 +1322,7 @@ export function CinemaPlayer() {
                   <h3>Connecting to BitTorrent Swarm...</h3>
                   <p className="buffering-detail">
                     {status?.numPeers > 0
-                      ? `Found ${status.numPeers} swarm peers. Buffering initial sequential pieces (${bufferPct}% complete)...`
+                      ? `Found ${status.numPeers} swarm peers. Buffering initial sequential pieces (${overallProgressPct}% complete)...`
                       : 'Searching swarm DHT and announcing to trackers for high-speed seeders...'}
                   </p>
 
@@ -1276,12 +1330,12 @@ export function CinemaPlayer() {
                     <div className="progress-bar-bg">
                       <div
                         className="progress-bar-fill"
-                        style={{ width: `${Math.max(bufferPct, 6)}%` }}
+                        style={{ width: `${Math.max(overallProgressPct, 6)}%` }}
                       ></div>
                     </div>
                     <div className="progress-labels">
                       <span>Sequential Swarm Buffer</span>
-                      <span>{bufferPct}% ({formatBytes(status?.downloaded || 0)})</span>
+                      <span>{overallProgressPct}% ({formatBytes(status?.downloaded || 0)})</span>
                     </div>
                   </div>
 

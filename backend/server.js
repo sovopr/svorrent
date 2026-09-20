@@ -62,14 +62,60 @@ function withFallbackTrackers(magnetURI) {
   return additions.length > 0 ? `${magnetURI}&${additions.join('&')}` : magnetURI;
 }
 
+// Pure in-memory container parser to detect exact movie duration from piece 0
+function extractMediaDuration(buffer) {
+  if (!buffer || buffer.length < 32) return null;
+
+  // 1. Matroska MKV/WebM parser (TimecodeScale 0x2A 0xD7 0xB1 and Duration 0x44 0x89)
+  let timecodeScale = 1000000;
+  for (let i = 0; i < Math.min(buffer.length - 8, 131072); i++) {
+    if (buffer[i] === 0x2A && buffer[i+1] === 0xD7 && buffer[i+2] === 0xB1) {
+      const len = buffer[i+3] & 0x7F;
+      if (len === 1) timecodeScale = buffer.readUInt8(i+4);
+      else if (len === 2) timecodeScale = buffer.readUInt16BE(i+4);
+      else if (len === 3) timecodeScale = (buffer.readUInt8(i+4) << 16) | buffer.readUInt16BE(i+5);
+      else if (len === 4) timecodeScale = buffer.readUInt32BE(i+4);
+    }
+    if (buffer[i] === 0x44 && buffer[i+1] === 0x89) {
+      const len = buffer[i+2] & 0x7F;
+      let rawDur = 0;
+      if (len === 4) rawDur = buffer.readFloatBE(i+3);
+      else if (len === 8) rawDur = buffer.readDoubleBE(i+3);
+      if (rawDur > 0) {
+        const durSec = rawDur * (timecodeScale / 1000000000);
+        if (durSec > 60 && durSec < 86400) return Math.round(durSec);
+      }
+    }
+  }
+
+  // 2. MP4 mvhd parser
+  const mvhdMarker = Buffer.from('mvhd');
+  const markerIdx = buffer.indexOf(mvhdMarker);
+  if (markerIdx >= 0 && markerIdx + 24 < buffer.length) {
+    const version = buffer.readUInt8(markerIdx + 4);
+    if (version === 0) {
+      const timescale = buffer.readUInt32BE(markerIdx + 16);
+      const duration = buffer.readUInt32BE(markerIdx + 20);
+      if (timescale > 0 && duration > 0) {
+        const sec = Math.round(duration / timescale);
+        if (sec > 60 && sec < 86400) return sec;
+      }
+    } else if (version === 1 && markerIdx + 32 < buffer.length) {
+      const timescale = buffer.readUInt32BE(markerIdx + 24);
+      const duration = Number(buffer.readBigUInt64BE(markerIdx + 28));
+      if (timescale > 0 && duration > 0) {
+        const sec = Math.round(duration / timescale);
+        if (sec > 60 && sec < 86400) return sec;
+      }
+    }
+  }
+
+  return null;
+}
+
 // Dynamic Sliding Window Prefetch Engine
 // Focuses swarm bandwidth immediately ahead of the current playback position.
-// Prioritizes a 50-piece forward runway:
-//  - Pieces 0..5 ahead: Critical priority (7)
-//  - Pieces 6..25 ahead: High buffer priority (6)
-//  - Pieces 26..50 ahead: Medium queue priority (5)
-//  - Older pieces (< currentPiece - 10): Deselected to avoid bandwidth waste
-//  - End pieces: Retained for container index / moov / cues
+// When player is paused, aggressively buffers 80 pieces ahead in RAM so pause becomes a buffering runway!
 function updatePrefetchWindow(torrent, file, byteOffset = 0) {
   if (!torrent || !file || typeof torrent.select !== 'function') return;
   const pieceLength = torrent.pieceLength;
@@ -83,9 +129,11 @@ function updatePrefetchWindow(torrent, file, byteOffset = 0) {
   const currentPiece = Math.floor(absoluteByte / pieceLength);
 
   const p0 = Math.max(startPiece, currentPiece);
-  const pCriticalEnd = Math.min(endPiece, p0 + 5);
-  const pRunwayEnd = Math.min(endPiece, p0 + 25);
-  const pHorizonEnd = Math.min(endPiece, p0 + 50);
+  // Maximize the pause buffering opportunity: buffer 80 pieces ahead (~160MB in RAM) when paused!
+  const isPaused = !!torrent._isPlayerPaused;
+  const pCriticalEnd = Math.min(endPiece, p0 + (isPaused ? 10 : 5));
+  const pRunwayEnd = Math.min(endPiece, p0 + (isPaused ? 40 : 25));
+  const pHorizonEnd = Math.min(endPiece, p0 + (isPaused ? 80 : 50));
 
   try {
     // Deselect old pieces already consumed behind playback cursor (leave first 2 pieces for container headers)
@@ -97,15 +145,15 @@ function updatePrefetchWindow(torrent, file, byteOffset = 0) {
       }
     }
 
-    // Tier 1: Urgent immediate playback buffer (pieces 0..5 ahead)
+    // Tier 1: Urgent immediate playback buffer
     torrent.select(p0, pCriticalEnd, 7);
 
-    // Tier 2: Safety buffer runway (pieces 6..25 ahead)
+    // Tier 2: Safety buffer runway
     if (pRunwayEnd > pCriticalEnd) {
       torrent.select(pCriticalEnd, pRunwayEnd, 6);
     }
 
-    // Tier 3: Background swarm saturation (pieces 26..50 ahead)
+    // Tier 3: Background swarm saturation
     if (pHorizonEnd > pRunwayEnd) {
       torrent.select(pRunwayEnd, pHorizonEnd, 5);
     }
@@ -114,6 +162,16 @@ function updatePrefetchWindow(torrent, file, byteOffset = 0) {
     if (endPiece > startPiece + 2) {
       torrent.select(Math.max(startPiece, endPiece - 2), endPiece, 7);
     }
+
+    // Ensure all peers are unchoked and downloading into RAM
+    if (torrent.wires) {
+      torrent.wires.forEach((wire) => {
+        try {
+          if (!wire.amInterested) wire.interested();
+        } catch (e) {}
+      });
+    }
+    try { torrent._drain(); } catch (e) {}
   } catch (err) {
     // Non-fatal if piece selection fails
   }
@@ -976,7 +1034,6 @@ app.get('/api/torrent/status', async (req, res) => {
   const isRunwaySafe = runwayPiecesReady >= targetRunwayPieces || (hasFirstPiece && isFastSwarm);
   const runwayProgress = Math.min(100, Math.round((runwayPiecesReady / targetRunwayPieces) * 100));
 
-  const estimatedDurationSec = 7200;
   const requiredBitrateBytesPerSec = largestFile && largestFile.length > 0
     ? Math.round(largestFile.length / estimatedDurationSec)
     : 0;
@@ -992,6 +1049,7 @@ app.get('/api/torrent/status', async (req, res) => {
     magnet: magnetURI,
     name: torrent.name || 'Resolving metadata from swarm...',
     ready: !!torrent.ready,
+    duration: estimatedDurationSec,
     progress: torrent.progress || 0,
     downloadSpeed: torrent.downloadSpeed || 0,
     uploadSpeed: torrent.uploadSpeed || 0,
@@ -1263,6 +1321,7 @@ app.get('/api/stream', async (req, res) => {
 app.get('/api/stream/remux', async (req, res) => {
   let magnetURI = req.query.magnet;
   const { provider, desc, link, mode } = req.query;
+  const seekSec = parseFloat(req.query.startTime || req.query.ss) || 0;
 
   if (!magnetURI && provider && (desc || link)) {
     try {
@@ -1400,12 +1459,15 @@ app.get('/api/stream/remux', async (req, res) => {
       ? []  // copy mode: no transcoding, no forced GOP
       : ['-g', '48', '-keyint_min', '24'];  // ~2s keyframe interval at 24fps
 
+    const seekArgs = seekSec > 0 ? ['-ss', String(seekSec)] : [];
+
     const ffmpegArgs = [
       '-hide_banner',
       '-loglevel', 'warning',
       '-fflags', '+discardcorrupt+genpts+igndts',
       '-probesize', mode === 'browser4k' ? '2M' : '8M',
       '-analyzeduration', mode === 'browser4k' ? '500k' : '1500k',
+      ...seekArgs,
       '-i', 'pipe:0',
       '-avoid_negative_ts', 'make_zero',
       '-map', '0:v:0?',

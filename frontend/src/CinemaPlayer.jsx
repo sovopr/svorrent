@@ -42,16 +42,67 @@ export function CinemaPlayer() {
   const [showSpeedMenu, setShowSpeedMenu] = useState(false);
 
   // Subtitles State
-  const [activeSubtitle, setActiveSubtitle] = useState(null); // { id, label, url }
+  const [activeSubtitle, setActiveSubtitle] = useState(null); // { id, label, url, ... }
   const [customSubtitles, setCustomSubtitles] = useState([]);
+  const [onlineSubtitles, setOnlineSubtitles] = useState([]);
+  const [isSearchingSubtitles, setIsSearchingSubtitles] = useState(false);
+  const [subtitleSearchQuery, setSubtitleSearchQuery] = useState('');
+  const [subtitleLang, setSubtitleLang] = useState('eng');
   const [showSubtitleMenu, setShowSubtitleMenu] = useState(false);
   const [subtitleSize, setSubtitleSize] = useState('normal'); // 'normal' | 'large' | 'xlarge'
   const [subtitleDelay, setSubtitleDelay] = useState(0); // seconds offset
+  const hasAutoSearchedRef = useRef(false);
 
   const videoRef = useRef(null);
   const pollRef = useRef(null);
   const fileInputRef = useRef(null);
   const savedPositionRef = useRef(0);
+
+  // Online Subtitles Search Method
+  const searchOnlineSubtitles = async (searchTarget, langCode = subtitleLang) => {
+    const q = searchTarget || subtitleSearchQuery || status?.fileName || params.title;
+    if (!q) return;
+
+    setIsSearchingSubtitles(true);
+    try {
+      const res = await fetch(`http://localhost:3001/api/subtitles/search?query=${encodeURIComponent(q)}&lang=${encodeURIComponent(langCode)}`);
+      if (res.ok) {
+        const data = await res.json();
+        const results = (data.results || []).map((item) => ({
+          id: item.id,
+          label: `${item.language}${item.isHearingImpaired ? ' (SDH)' : ''}`,
+          fileName: item.fileName,
+          language: item.language,
+          downloads: item.downloads,
+          isHearingImpaired: item.isHearingImpaired,
+          url: `http://localhost:3001/api/subtitles/download?url=${encodeURIComponent(item.downloadUrl)}`,
+          isOnline: true,
+          rating: item.rating,
+        }));
+        setOnlineSubtitles(results);
+
+        // Auto-select the top result if no subtitle is selected yet
+        if (!activeSubtitle && results.length > 0) {
+          setActiveSubtitle(results[0]);
+          setActionFeedback(`✓ Auto-loaded: ${results[0].label}`);
+          setTimeout(() => setActionFeedback(''), 3500);
+        }
+      }
+    } catch (err) {
+      console.warn('Subtitle search failed:', err);
+    } finally {
+      setIsSearchingSubtitles(false);
+    }
+  };
+
+  // Auto-search subtitles as soon as movie filename or title is resolved
+  useEffect(() => {
+    const title = status?.fileName || params.title;
+    if (title && !hasAutoSearchedRef.current) {
+      hasAutoSearchedRef.current = true;
+      searchOnlineSubtitles(title, 'eng');
+    }
+  }, [status?.fileName, params.title]);
 
   // Poll status from backend
   useEffect(() => {
@@ -275,11 +326,12 @@ export function CinemaPlayer() {
   const swarmSubtitles = (status?.subtitleFiles || []).map((sub) => ({
     id: `swarm-${sub.index}`,
     label: sub.name.replace(/^.*[\\/]/, ''),
+    fileName: sub.name.replace(/^.*[\\/]/, ''),
     url: `http://localhost:3001/api/torrent/${status.infoHash}/subtitle/${sub.index}`,
     isSwarm: true,
   }));
 
-  const allSubtitles = [...swarmSubtitles, ...customSubtitles];
+  const allSubtitles = [...onlineSubtitles, ...swarmSubtitles, ...customSubtitles];
 
   return (
     <div className="cinema-wrapper">
@@ -469,11 +521,54 @@ export function CinemaPlayer() {
                   {showSubtitleMenu && (
                     <div className="subtitles-dropdown">
                       <div className="dropdown-header">
-                        <span>Select Subtitle Track</span>
+                        <span>Subtitles & Captions</span>
                         <button className="dropdown-close" onClick={() => setShowSubtitleMenu(false)}>✕</button>
                       </div>
 
+                      {/* Search & Language Bar */}
+                      <form
+                        className="sub-search-bar"
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          searchOnlineSubtitles(subtitleSearchQuery, subtitleLang);
+                        }}
+                      >
+                        <input
+                          type="text"
+                          className="sub-search-input"
+                          placeholder="Search movie / subtitles..."
+                          value={subtitleSearchQuery}
+                          onChange={(e) => setSubtitleSearchQuery(e.target.value)}
+                        />
+                        <select
+                          className="sub-lang-select"
+                          value={subtitleLang}
+                          onChange={(e) => {
+                            const newLang = e.target.value;
+                            setSubtitleLang(newLang);
+                            searchOnlineSubtitles(subtitleSearchQuery || status?.fileName || params.title, newLang);
+                          }}
+                          title="Filter subtitle language"
+                        >
+                          <option value="eng">EN (English)</option>
+                          <option value="spa">ES (Spanish)</option>
+                          <option value="fre">FR (French)</option>
+                          <option value="ger">DE (German)</option>
+                          <option value="ita">IT (Italian)</option>
+                          <option value="por">PT (Portuguese)</option>
+                          <option value="rus">RU (Russian)</option>
+                          <option value="hin">HI (Hindi)</option>
+                          <option value="chi">ZH (Chinese)</option>
+                          <option value="jpn">JA (Japanese)</option>
+                          <option value="all">All Languages</option>
+                        </select>
+                        <button type="submit" className="btn btn-secondary btn-sm" style={{ padding: '0.2rem 0.55rem', fontSize: '0.72rem' }}>
+                          🔍
+                        </button>
+                      </form>
+
                       <div className="dropdown-list">
+                        {/* Off option */}
                         <button
                           className={`dropdown-item ${!activeSubtitle ? 'selected' : ''}`}
                           onClick={() => {
@@ -481,31 +576,109 @@ export function CinemaPlayer() {
                             setShowSubtitleMenu(false);
                           }}
                         >
-                          <span className="track-name">None (Subtitles Off)</span>
+                          <div className="track-info-col">
+                            <span className="track-name">None (Subtitles Off)</span>
+                          </div>
                           {!activeSubtitle && <span className="check-mark">✓</span>}
                         </button>
 
-                        {allSubtitles.map((sub) => (
-                          <button
-                            key={sub.id}
-                            className={`dropdown-item ${activeSubtitle?.id === sub.id ? 'selected' : ''}`}
-                            onClick={() => {
-                              setActiveSubtitle(sub);
-                              setShowSubtitleMenu(false);
-                            }}
-                          >
-                            <span className="track-name">{sub.label}</span>
-                            <span className="track-badge">{sub.isCustom ? 'Custom' : 'Torrent'}</span>
-                            {activeSubtitle?.id === sub.id && <span className="check-mark">✓</span>}
-                          </button>
-                        ))}
-
-                        {allSubtitles.length === 0 && (
+                        {/* Online Subtitles Section */}
+                        {isSearchingSubtitles && (
                           <div className="dropdown-empty">
-                            <span>No embedded subtitle files found in torrent.</span>
+                            <div className="spinner" style={{ width: '20px', height: '20px', margin: '0 auto 0.5rem' }}></div>
+                            <span>Searching OpenSubtitles database...</span>
+                          </div>
+                        )}
+
+                        {!isSearchingSubtitles && onlineSubtitles.length > 0 && (
+                          <>
+                            <div className="dropdown-section-title">🌐 Online Subtitles ({onlineSubtitles.length})</div>
+                            {onlineSubtitles.map((sub) => (
+                              <button
+                                key={sub.id}
+                                className={`dropdown-item ${activeSubtitle?.id === sub.id ? 'selected' : ''}`}
+                                onClick={() => {
+                                  setActiveSubtitle(sub);
+                                  setShowSubtitleMenu(false);
+                                  setActionFeedback(`Loaded: ${sub.label}`);
+                                  setTimeout(() => setActionFeedback(''), 2500);
+                                }}
+                              >
+                                <div className="track-info-col">
+                                  <span className="track-name" title={sub.fileName}>
+                                    {sub.fileName || sub.label}
+                                  </span>
+                                  <div className="track-meta-row">
+                                    <span className="tag-badge tag-online">OpenSubtitles</span>
+                                    {sub.isHearingImpaired && <span className="tag-badge tag-sdh">SDH</span>}
+                                    {sub.downloads > 0 && (
+                                      <span title="Total downloads">📥 {sub.downloads.toLocaleString()}</span>
+                                    )}
+                                    {sub.rating && sub.rating !== '0.0' && <span>⭐ {sub.rating}</span>}
+                                  </div>
+                                </div>
+                                {activeSubtitle?.id === sub.id && <span className="check-mark">✓</span>}
+                              </button>
+                            ))}
+                          </>
+                        )}
+
+                        {/* Swarm embedded subtitles if any */}
+                        {swarmSubtitles.length > 0 && (
+                          <>
+                            <div className="dropdown-section-title">📁 Torrent Files ({swarmSubtitles.length})</div>
+                            {swarmSubtitles.map((sub) => (
+                              <button
+                                key={sub.id}
+                                className={`dropdown-item ${activeSubtitle?.id === sub.id ? 'selected' : ''}`}
+                                onClick={() => {
+                                  setActiveSubtitle(sub);
+                                  setShowSubtitleMenu(false);
+                                }}
+                              >
+                                <div className="track-info-col">
+                                  <span className="track-name">{sub.label}</span>
+                                  <div className="track-meta-row">
+                                    <span className="tag-badge tag-torrent">Torrent Stream</span>
+                                  </div>
+                                </div>
+                                {activeSubtitle?.id === sub.id && <span className="check-mark">✓</span>}
+                              </button>
+                            ))}
+                          </>
+                        )}
+
+                        {/* Custom uploads if any */}
+                        {customSubtitles.length > 0 && (
+                          <>
+                            <div className="dropdown-section-title">💾 Custom Files ({customSubtitles.length})</div>
+                            {customSubtitles.map((sub) => (
+                              <button
+                                key={sub.id}
+                                className={`dropdown-item ${activeSubtitle?.id === sub.id ? 'selected' : ''}`}
+                                onClick={() => {
+                                  setActiveSubtitle(sub);
+                                  setShowSubtitleMenu(false);
+                                }}
+                              >
+                                <div className="track-info-col">
+                                  <span className="track-name">{sub.label}</span>
+                                  <div className="track-meta-row">
+                                    <span className="tag-badge tag-custom">Uploaded</span>
+                                  </div>
+                                </div>
+                                {activeSubtitle?.id === sub.id && <span className="check-mark">✓</span>}
+                              </button>
+                            ))}
+                          </>
+                        )}
+
+                        {!isSearchingSubtitles && allSubtitles.length === 0 && (
+                          <div className="dropdown-empty">
+                            <span>No subtitles found for this title.</span>
                             <button
                               className="btn btn-secondary btn-sm"
-                              style={{ marginTop: '0.5rem' }}
+                              style={{ marginTop: '0.6rem' }}
                               onClick={() => {
                                 setShowSubtitleMenu(false);
                                 fileInputRef.current?.click();
@@ -517,16 +690,16 @@ export function CinemaPlayer() {
                         )}
                       </div>
 
-                      {/* Subtitle Size Adjuster */}
-                      {activeSubtitle && (
-                        <div className="dropdown-footer">
-                          <span className="footer-label">Font Size:</span>
+                      {/* Font Size & Upload Footer */}
+                      <div className="dropdown-footer">
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                          <span className="footer-label">Size:</span>
                           <div className="size-btns">
                             <button
                               className={`size-btn ${subtitleSize === 'normal' ? 'active' : ''}`}
                               onClick={() => setSubtitleSize('normal')}
                             >
-                              Standard
+                              Normal
                             </button>
                             <button
                               className={`size-btn ${subtitleSize === 'large' ? 'active' : ''}`}
@@ -538,11 +711,23 @@ export function CinemaPlayer() {
                               className={`size-btn ${subtitleSize === 'xlarge' ? 'active' : ''}`}
                               onClick={() => setSubtitleSize('xlarge')}
                             >
-                              Extra Large
+                              XL
                             </button>
                           </div>
                         </div>
-                      )}
+
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          style={{ fontSize: '0.72rem', padding: '0.2rem 0.55rem' }}
+                          onClick={() => {
+                            setShowSubtitleMenu(false);
+                            fileInputRef.current?.click();
+                          }}
+                          title="Upload your own subtitle file"
+                        >
+                          + Upload File
+                        </button>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -559,6 +744,7 @@ export function CinemaPlayer() {
                     controls
                     autoPlay
                     playsInline
+                    crossOrigin="anonymous"
                     className="cinema-video"
                     src={streamUrl}
                     onWaiting={() => setIsVideoLoading(true)}
@@ -580,8 +766,85 @@ export function CinemaPlayer() {
 
                   {isVideoLoading && (
                     <div className="video-loading-overlay">
-                      <div className="spinner"></div>
-                      <span>Buffering sequential stream fragments...</span>
+                      <div className="buffer-telemetry-card">
+                        <div className="buffer-telemetry-top">
+                          <div className="buffer-spinner-glow"></div>
+                          <div>
+                            <h3 className="buffer-title">Buffering BitTorrent Stream</h3>
+                            <p className="buffer-desc">
+                              {status?.hasFirstPiece
+                                ? 'Transcoding initial video keyframes into fragmented MP4 container...'
+                                : 'Downloading initial sequential stream piece from BitTorrent swarm...'}
+                            </p>
+                          </div>
+                        </div>
+
+                        {/* Piece Progress Bar */}
+                        <div className="buffer-piece-meter">
+                          <div className="meter-label-row">
+                            <span className="meter-main-text">
+                              {status?.hasFirstPiece ? (
+                                <span style={{ color: '#4ade80' }}>✓ Initial Piece Verified (Ready)</span>
+                              ) : (
+                                `Piece #0: ${formatBytes(status?.firstPieceDownloaded || 0)} / ${formatBytes(status?.pieceLength || 16777216)} (${status?.firstPieceProgress || 0}%)`
+                              )}
+                            </span>
+                            <span className="meter-speed-text">
+                              ⚡ {formatBytes(status?.downloadSpeed || 0)}/s • {status?.numPeers || 0} peers
+                              {status?.etaSeconds && status.etaSeconds > 0 ? ` • ~${status.etaSeconds}s ETA` : ''}
+                            </span>
+                          </div>
+                          <div className="meter-bar-track">
+                            <div
+                              className="meter-bar-fill"
+                              style={{
+                                width: status?.hasFirstPiece ? '100%' : `${Math.max(status?.firstPieceProgress || 0, 8)}%`,
+                              }}
+                            ></div>
+                          </div>
+                        </div>
+
+                        {/* Fast Action: Native Desktop Player */}
+                        <div className="buffer-native-shortcut">
+                          <div className="shortcut-info">
+                            <span className="shortcut-title">⚡ Want instant zero-wait playback?</span>
+                            <span className="shortcut-sub">
+                              Launch directly in IINA / VLC for immediate hardware acceleration with Dolby Vision & TrueHD Atmos.
+                            </span>
+                          </div>
+                          <button
+                            className="btn btn-primary btn-sm buffer-open-btn"
+                            onClick={handlePlayNative}
+                          >
+                            ▶ Open in IINA / VLC
+                          </button>
+                        </div>
+
+                        {/* Stream quality switcher if network speed is slow */}
+                        <div className="buffer-quick-profiles">
+                          <span className="profiles-label">Slow swarm? Switch stream profile:</span>
+                          <div className="profiles-btns">
+                            <button
+                              className={`profile-chip ${streamMode === '1080p' ? 'active' : ''}`}
+                              onClick={() => handleQualityChange('1080p')}
+                            >
+                              1080p Transcode
+                            </button>
+                            <button
+                              className={`profile-chip ${streamMode === '720p' ? 'active' : ''}`}
+                              onClick={() => handleQualityChange('720p')}
+                            >
+                              720p Fast
+                            </button>
+                            <button
+                              className={`profile-chip ${streamMode === 'copy' ? 'active' : ''}`}
+                              onClick={() => handleQualityChange('copy')}
+                            >
+                              💎 4K Remux
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>

@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
 import { exec, spawn } from 'node:child_process';
+import zlib from 'node:zlib';
 import TorrentSearchApi from 'torrent-search-api';
 import WebTorrent from 'webtorrent';
 import peerid from 'bittorrent-peerid';
@@ -429,7 +430,17 @@ app.post('/api/torrent/:id/play-native', async (req, res) => {
   });
 });
 
-// Real-time quick status endpoint for streaming drawer
+function cleanMovieTitle(raw) {
+  if (!raw) return '';
+  let name = raw.replace(/\.(mkv|mp4|avi|webm)$/i, '');
+  name = name.replace(/\[.*?\]/g, '').replace(/\(.*?\)/g, '');
+  const match = name.match(/^(.*?)(?:[.\s_-]+(?:(?:19|20)\d{2}|480p|720p|1080p|2160p|4k|uhd|remux|bluray|web-?dl|hdr|dts))/i);
+  let cleaned = match ? match[1] : name;
+  cleaned = cleaned.replace(/[._]/g, ' ').trim();
+  return cleaned || name;
+}
+
+// Quick status endpoint for cinema player with piece buffer telemetry
 app.get('/api/torrent/status', async (req, res) => {
   let magnetURI = req.query.magnet;
   const { provider, desc, link } = req.query;
@@ -459,6 +470,22 @@ app.get('/api/torrent/status', async (req, res) => {
         .filter((f) => /\.(srt|vtt|sub|ass)$/i.test(f.name))
     : [];
 
+  const pieceLength = torrent.pieceLength || 0;
+  const startPiece = largestFile ? largestFile._startPiece : 0;
+  const hasFirstPiece = torrent.bitfield && typeof torrent.bitfield.get === 'function' ? !!torrent.bitfield.get(startPiece) : false;
+
+  let firstPieceDownloaded = 0;
+  if (hasFirstPiece) {
+    firstPieceDownloaded = pieceLength;
+  } else if (pieceLength > 0) {
+    firstPieceDownloaded = Math.min(pieceLength, torrent.downloaded || 0);
+  }
+
+  const firstPieceProgress = pieceLength > 0 ? Math.min(100, Math.round((firstPieceDownloaded / pieceLength) * 100)) : 0;
+  const etaSeconds = firstPieceProgress < 100 && (torrent.downloadSpeed || 0) > 0
+    ? Math.ceil((pieceLength - firstPieceDownloaded) / torrent.downloadSpeed)
+    : null;
+
   return res.json({
     infoHash: torrent.infoHash,
     magnet: magnetURI,
@@ -473,10 +500,114 @@ app.get('/api/torrent/status', async (req, res) => {
     fileName: largestFile ? largestFile.name : null,
     files,
     subtitleFiles,
+    pieceLength,
+    hasFirstPiece,
+    firstPieceDownloaded,
+    firstPieceProgress,
+    etaSeconds,
     streamUrl: `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(magnetURI)}`,
     remuxStreamUrl: `http://localhost:3001/api/stream/remux?mode=copy&magnet=${encodeURIComponent(magnetURI)}`,
     transcodeStreamUrl: `http://localhost:3001/api/stream/remux?mode=transcode&magnet=${encodeURIComponent(magnetURI)}`,
   });
+});
+
+// Auto-Search Subtitles across online databases by movie title
+app.get('/api/subtitles/search', async (req, res) => {
+  const query = req.query.query;
+  const lang = (req.query.lang || 'eng').toLowerCase();
+
+  if (!query) {
+    return res.status(400).json({ error: 'Search query is required' });
+  }
+
+  const cleaned = cleanMovieTitle(query);
+  const searchSlug = encodeURIComponent(cleaned.toLowerCase().trim());
+
+  try {
+    const url = `https://rest.opensubtitles.org/search/query-${searchSlug}/sublanguageid-${encodeURIComponent(lang)}`;
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'TemporaryUserAgent',
+        'Host': 'rest.opensubtitles.org',
+      },
+    });
+
+    if (!response.ok) {
+      return res.json({ query: cleaned, results: [] });
+    }
+
+    const data = await response.json();
+    if (!Array.isArray(data)) {
+      return res.json({ query: cleaned, results: [] });
+    }
+
+    const results = data.slice(0, 16).map((item) => ({
+      id: `os-${item.IDSubtitleFile}`,
+      fileName: item.SubFileName,
+      language: item.LanguageName || 'English',
+      langCode: item.SubLanguageID || 'en',
+      downloadUrl: item.SubDownloadLink,
+      downloads: parseInt(item.SubDownloadsCnt, 10) || 0,
+      isHearingImpaired: item.SubHearingImpaired === '1',
+      format: item.SubFormat || 'srt',
+      rating: item.SubRating || '0.0',
+      source: 'OpenSubtitles',
+    }));
+
+    res.json({ query: cleaned, results });
+  } catch (err) {
+    console.error('Subtitle search error:', err.message);
+    res.json({ query: cleaned, results: [] });
+  }
+});
+
+// Download and convert online subtitle to WebVTT
+app.get('/api/subtitles/download', async (req, res) => {
+  const dlUrl = req.query.url;
+  if (!dlUrl) {
+    return res.status(400).send('Download URL is required');
+  }
+
+  try {
+    const response = await fetch(dlUrl, {
+      headers: {
+        'User-Agent': 'TemporaryUserAgent',
+      },
+    });
+
+    if (!response.ok) {
+      return res.status(500).send('Failed to fetch subtitle file');
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+
+    zlib.gunzip(buffer, (err, unzipped) => {
+      let content = '';
+      if (err) {
+        content = buffer.toString('utf8');
+      } else {
+        content = unzipped.toString('utf8');
+      }
+
+      let vtt = content;
+      if (!content.trim().startsWith('WEBVTT')) {
+        const normalized = content.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+        // Clean OpenSubtitles promotional text cues
+        const cleanedLines = normalized
+          .split('\n')
+          .filter((line) => !/(opensubtitles|advertise your product|vip member|osdb\.link)/i.test(line));
+        
+        vtt = 'WEBVTT\n\n' + cleanedLines.join('\n').replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+      }
+
+      res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.send(vtt);
+    });
+  } catch (err) {
+    res.status(500).send('Error downloading subtitle: ' + err.message);
+  }
 });
 
 // Serve torrent subtitle as WebVTT for HTML5 video
@@ -649,7 +780,7 @@ app.get('/api/stream/remux', async (req, res) => {
 
     const file = torrent.files.reduce((a, b) => (a.length > b.length ? a : b));
 
-    // Focus 100% bandwidth on the streaming file
+    // Focus 100% bandwidth on the streaming file and aggressively prioritize initial pieces
     try {
       torrent.files.forEach((f) => {
         if (f !== file && typeof f.deselect === 'function') {
@@ -658,6 +789,10 @@ app.get('/api/stream/remux', async (req, res) => {
       });
       if (typeof file.select === 'function') {
         file.select();
+      }
+      // Prioritize the first 3 pieces needed for immediate header & playback
+      if (typeof torrent.select === 'function' && typeof file._startPiece === 'number') {
+        torrent.select(file._startPiece, file._startPiece + 2, 7);
       }
     } catch (e) {}
 
@@ -686,6 +821,10 @@ app.get('/api/stream/remux', async (req, res) => {
     const ffmpegArgs = [
       '-hide_banner',
       '-loglevel', 'error',
+      '-probesize', '1048576',
+      '-analyzeduration', '1000000',
+      '-fflags', '+nobuffer+fastseek',
+      '-flush_packets', '1',
       '-i', 'pipe:0',
       '-map', '0:v:0',
       '-map', '0:a:0?',

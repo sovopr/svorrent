@@ -287,16 +287,28 @@ export function CinemaPlayer() {
   }, [playbackSpeed]);
 
   const handlePlayNative = async () => {
-    if (!status?.infoHash) return;
-    setActionFeedback('Launching in native player (IINA / VLC)...');
+    const effectiveMagnet = status?.magnet || params.magnet;
+    const targetId = status?.infoHash || 'stream';
+
+    setActionFeedback('Launching in native player (VLC / IINA)...');
     try {
-      const res = await fetch(`http://localhost:3001/api/torrent/${status.infoHash}/play-native`, { method: 'POST' });
-      if (!res.ok) throw new Error('Could not open file in native player');
-      setActionFeedback('✓ Opened in desktop player');
-      setTimeout(() => setActionFeedback(''), 3500);
+      const q = new URLSearchParams();
+      if (effectiveMagnet) q.set('magnet', effectiveMagnet);
+
+      const res = await fetch(`http://localhost:3001/api/torrent/${targetId}/play-native?${q.toString()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ magnet: effectiveMagnet }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || 'Could not launch native player');
+      }
+      setActionFeedback(`✓ Opened in ${data.player || 'VLC Media Player'}`);
+      setTimeout(() => setActionFeedback(''), 4000);
     } catch (err) {
       setActionFeedback('Failed to open: ' + err.message);
-      setTimeout(() => setActionFeedback(''), 3500);
+      setTimeout(() => setActionFeedback(''), 4000);
     }
   };
 

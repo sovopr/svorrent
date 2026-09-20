@@ -409,25 +409,118 @@ app.post('/api/torrent/:id/open-finder', async (req, res) => {
   });
 });
 
-// Open File in native player (IINA / VLC / Windows Media Player / MPC-HC)
+// Open File or Live Stream in native player (VLC / IINA / Windows Media Player / MPC-HC)
 app.post('/api/torrent/:id/play-native', async (req, res) => {
-  const torrent = await client.get(req.params.id);
-  if (!torrent || !torrent.files || torrent.files.length === 0) {
-    return res.status(404).json({ error: 'No files ready to open' });
+  let magnetURI = req.body?.magnet || req.query?.magnet;
+  let torrent = await client.get(req.params.id);
+
+  if (!torrent && magnetURI) {
+    torrent = await getOrAddTorrent(magnetURI, { isStreamOnly: true });
   }
 
-  const largestFile = torrent.files.reduce((a, b) => (a.length > b.length ? a : b));
-  const fullPath = path.join(torrent.path || DOWNLOAD_DIR, largestFile.path);
-  const cmd = process.platform === 'win32'
-    ? `start "" "${fullPath}"`
-    : process.platform === 'darwin'
-    ? `open "${fullPath}"`
-    : `xdg-open "${fullPath}"`;
+  if (!torrent) {
+    torrent = client.torrents.find(
+      (t) => t.infoHash === req.params.id || (magnetURI && t.magnetURI === magnetURI)
+    );
+  }
+
+  if (!torrent) {
+    return res.status(404).json({ error: 'Torrent not found in swarm' });
+  }
+
+  const effectiveMagnet = torrent.magnetURI || magnetURI;
+  const largestFile = torrent.files && torrent.files.length > 0
+    ? torrent.files.reduce((a, b) => (a.length > b.length ? a : b))
+    : null;
+
+  const fullPath = largestFile ? path.join(torrent.path || DOWNLOAD_DIR, largestFile.path) : null;
+  const fileExistsOnDisk = fullPath && fs.existsSync(fullPath) && fs.statSync(fullPath).size > 1048576;
+
+  let targetPath = '';
+  let streamModeUsed = false;
+
+  if (fileExistsOnDisk) {
+    targetPath = fullPath;
+  } else {
+    streamModeUsed = true;
+    // Generate streaming M3U playlist file with direct sequential stream URL for VLC/IINA
+    const cleanName = cleanMovieTitle(largestFile ? largestFile.name : torrent.name || 'stream');
+    const m3uDir = path.join(os.tmpdir(), 'svorrent-playlists');
+    if (!fs.existsSync(m3uDir)) fs.mkdirSync(m3uDir, { recursive: true });
+    const m3uPath = path.join(m3uDir, `${torrent.infoHash || 'stream'}.m3u`);
+    const streamUrl = `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(effectiveMagnet)}`;
+    const m3uContent = `#EXTM3U\n#EXTINF:-1,${cleanName} [Svorrent Stream]\n${streamUrl}\n`;
+    fs.writeFileSync(m3uPath, m3uContent, 'utf8');
+    targetPath = m3uPath;
+  }
+
+  // Build platform-specific launcher with VLC / IINA auto-detection
+  let cmd = '';
+  let playerName = 'Default Media Player';
+
+  if (process.platform === 'darwin') {
+    if (fs.existsSync('/Applications/IINA.app')) {
+      cmd = `open -a "/Applications/IINA.app" "${targetPath}"`;
+      playerName = 'IINA';
+    } else if (fs.existsSync('/Applications/VLC.app')) {
+      cmd = `open -a "/Applications/VLC.app" "${targetPath}"`;
+      playerName = 'VLC Media Player';
+    } else {
+      cmd = `open -a VLC "${targetPath}" 2>/dev/null || open "${targetPath}"`;
+      playerName = 'VLC / Default Player';
+    }
+  } else if (process.platform === 'win32') {
+    const vlc64 = 'C:\\Program Files\\VideoLAN\\VLC\\vlc.exe';
+    const vlc32 = 'C:\\Program Files (x86)\\VideoLAN\\VLC\\vlc.exe';
+    if (fs.existsSync(vlc64)) {
+      cmd = `"${vlc64}" "${targetPath}"`;
+      playerName = 'VLC Media Player';
+    } else if (fs.existsSync(vlc32)) {
+      cmd = `"${vlc32}" "${targetPath}"`;
+      playerName = 'VLC Media Player';
+    } else {
+      cmd = `start "" "${targetPath}"`;
+      playerName = 'Default Windows Player';
+    }
+  } else {
+    cmd = `vlc "${targetPath}" 2>/dev/null || xdg-open "${targetPath}"`;
+    playerName = 'VLC';
+  }
 
   exec(cmd, (err) => {
-    if (err) return res.status(500).json({ error: err.message });
-    res.json({ success: true, file: fullPath });
+    if (err) {
+      console.error('Play native error:', err);
+      const fallbackCmd = process.platform === 'darwin' ? `open "${targetPath}"` : `xdg-open "${targetPath}"`;
+      exec(fallbackCmd, (fbErr) => {
+        if (fbErr) {
+          return res.status(500).json({ error: `Could not launch player: ${err.message}` });
+        }
+        res.json({ success: true, target: targetPath, player: playerName, streamMode: streamModeUsed });
+      });
+      return;
+    }
+    res.json({ success: true, target: targetPath, player: playerName, streamMode: streamModeUsed });
   });
+});
+
+// Downloadable M3U stream playlist for any desktop player
+app.get('/api/torrent/:id/playlist.m3u', async (req, res) => {
+  let magnetURI = req.query.magnet;
+  let torrent = await client.get(req.params.id);
+  if (!torrent && magnetURI) {
+    torrent = await getOrAddTorrent(magnetURI, { isStreamOnly: true });
+  }
+
+  const effectiveMagnet = torrent?.magnetURI || magnetURI;
+  if (!effectiveMagnet) return res.status(400).send('Magnet required');
+
+  const title = cleanMovieTitle(torrent?.name || req.query.title || 'Svorrent Stream');
+  const streamUrl = `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(effectiveMagnet)}`;
+  const m3u = `#EXTM3U\n#EXTINF:-1,${title} [Svorrent Stream]\n${streamUrl}\n`;
+
+  res.setHeader('Content-Type', 'audio/x-mpegurl');
+  res.setHeader('Content-Disposition', `attachment; filename="${title.replace(/[^a-zA-Z0-9_-]/g, '_')}.m3u"`);
+  res.send(m3u);
 });
 
 function cleanMovieTitle(raw) {

@@ -46,7 +46,9 @@ export function CinemaPlayer() {
   const [actionFeedback, setActionFeedback] = useState('');
   const [showNerdModal, setShowNerdModal] = useState(false);
   const [isVideoLoading, setIsVideoLoading] = useState(true);
+  const [remuxAttempt, setRemuxAttempt] = useState(0);
   const hasAutoSelectedModeRef = useRef(false);
+  const remuxFailureCountRef = useRef(0);
 
   // Playback Speed State
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
@@ -195,7 +197,7 @@ export function CinemaPlayer() {
     if (streamMode === 'direct') {
       return `http://localhost:3001/api/torrent/${infoHash}/stream`;
     } else if (streamMode === 'remux') {
-      return `http://localhost:3001/api/stream/remux?mode=copy&magnet=${encodeURIComponent(effectiveMagnet)}`;
+      return `http://localhost:3001/api/stream/remux?mode=copy&attempt=${remuxAttempt}&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else if (streamMode === '1080p') {
       return `http://localhost:3001/api/stream/remux?mode=1080p&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else if (streamMode === '720p') {
@@ -216,6 +218,7 @@ export function CinemaPlayer() {
     if (videoRef.current) {
       savedPositionRef.current = videoRef.current.currentTime || 0;
     }
+    remuxFailureCountRef.current = 0;
     setStreamMode(newMode);
     setActionFeedback(`Switching quality to ${newMode.toUpperCase()}...`);
     setTimeout(() => setActionFeedback(''), 2500);
@@ -242,9 +245,15 @@ export function CinemaPlayer() {
       setActionFeedback('Direct stream unavailable — trying remux fallback...');
       setTimeout(() => handleQualityChange('remux'), 800);
     } else if (streamMode === 'remux') {
-      // Remux copy failed (e.g. HEVC tag issue) — try hardware 1080p transcode
-      setActionFeedback('Remux failed — switching to hardware 1080p transcode...');
-      setTimeout(() => handleQualityChange('1080p'), 800);
+      // Retry remux while more torrent data arrives. Do not silently switch to
+      // a lossy 1080p transcode; that is a manual user choice.
+      remuxFailureCountRef.current += 1;
+      if (remuxFailureCountRef.current <= 3) {
+        setActionFeedback(`Remux is still buffering — retrying (${remuxFailureCountRef.current}/3)...`);
+        setRemuxAttempt((attempt) => attempt + 1);
+      } else {
+        setActionFeedback('Remux could not start yet. Keep buffering or choose a quality profile manually.');
+      }
     }
   };
 

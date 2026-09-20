@@ -1183,6 +1183,12 @@ app.get('/api/stream/remux', async (req, res) => {
         : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '1.5M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p'];
     }
 
+    // Safari identifies copied HEVC in MP4 by the hvc1 sample entry. Many
+    // remuxes arrive tagged hev1, which can produce a silent black player.
+    const hevcTagArgs = mode === 'copy' && /(?:hevc|h\.265|x265)/i.test(file.name)
+      ? ['-tag:v', 'hvc1']
+      : [];
+
     // For transcode modes, force IDR keyframes every 2s so the browser can seek/start cleanly
     const gopArgs = (mode === 'copy' || mode === 'remux')
       ? []  // copy mode: no transcoding, no forced GOP
@@ -1192,13 +1198,19 @@ app.get('/api/stream/remux', async (req, res) => {
       '-hide_banner',
       '-loglevel', 'warning',
       '-fflags', '+discardcorrupt+genpts+igndts',
-      '-probesize', '32768',
-      '-analyzeduration', '50000',
+      // Large remuxes often contain many PGS subtitle tracks. Give FFmpeg
+      // enough header data to identify the selected video/audio streams, but
+      // never map or transcode the subtitle payloads into the browser stream.
+      '-probesize', '10M',
+      '-analyzeduration', '2M',
       '-i', 'pipe:0',
       '-avoid_negative_ts', 'make_zero',    // fix DTS/PTS so browser timeline starts at 0
-      '-map', '0:v:0',
+      '-map', '0:v:0?',
       '-map', '0:a:0?',
+      '-sn',
+      '-dn',
       ...vCodecArgs,
+      ...hevcTagArgs,
       ...gopArgs,
       '-c:a', 'aac',
       '-b:a', '192k',

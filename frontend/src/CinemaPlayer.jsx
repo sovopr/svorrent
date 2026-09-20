@@ -242,7 +242,6 @@ export function CinemaPlayer() {
       savedPositionRef.current = 0;
     }
     video.playbackRate = playbackSpeed;
-    video.play().catch(() => {});
   };
 
   const handleVideoError = (e) => {
@@ -840,7 +839,6 @@ export function CinemaPlayer() {
                     <video
                       ref={videoRef}
                       controls
-                      autoPlay
                       playsInline
                       crossOrigin="anonymous"
                       className="cinema-video"

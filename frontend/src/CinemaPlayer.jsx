@@ -29,13 +29,24 @@ export function CinemaPlayer() {
     };
   });
 
-  // Quality / Stream Mode: 'copy' | '1080p' | '720p' | '480p' | 'raw'
-  const [streamMode, setStreamMode] = useState('copy');
+  // Helper to check if file is natively playable in browser
+  const isNativeVideoFile = (filename) => {
+    if (!filename) return false;
+    return /\.(mp4|m4v|webm)$/i.test(filename);
+  };
+
+  // Quality / Stream Mode: 'direct' | 'remux' | '1080p' | '720p' | '480p'
+  const [streamMode, setStreamMode] = useState(() => {
+    const title = new URLSearchParams(window.location.search).get('title') || '';
+    if (isNativeVideoFile(title)) return 'direct';
+    return 'direct';
+  });
   const [status, setStatus] = useState(null);
   const [error, setError] = useState('');
   const [actionFeedback, setActionFeedback] = useState('');
   const [showNerdModal, setShowNerdModal] = useState(false);
   const [isVideoLoading, setIsVideoLoading] = useState(true);
+  const hasAutoSelectedModeRef = useRef(false);
 
   // Playback Speed State
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
@@ -124,6 +135,17 @@ export function CinemaPlayer() {
         if (data.magnet && !params.magnet) {
           setParams((prev) => ({ ...prev, magnet: data.magnet }));
         }
+        // Auto-select optimal stream mode once we know the file type
+        if (!hasAutoSelectedModeRef.current && data.fileName) {
+          hasAutoSelectedModeRef.current = true;
+          if (data.isNativeCompatible !== false) {
+            // MP4/WebM: use direct seekable byte-range stream (no FFmpeg)
+            setStreamMode('direct');
+          } else {
+            // MKV / other: use remux (FFmpeg fmp4 pipe)
+            setStreamMode('remux');
+          }
+        }
       } catch (err) {
         setError(err.message);
       }
@@ -137,11 +159,22 @@ export function CinemaPlayer() {
   }, [params.magnet, params.provider, params.desc, params.link]);
 
   // Compute live stream URL based on mode
+  // 'direct' = native HTTP 206 byte-range stream (MP4/WebM, no FFmpeg, instant)
+  // 'remux'  = FFmpeg fmp4 pipe (for MKV/TrueHD/DTS files)
+  // '1080p' / '720p' / '480p' = hardware transcode
   const getStreamUrl = () => {
     const effectiveMagnet = status?.magnet || params.magnet;
-    if (!effectiveMagnet) return '';
+    const infoHash = status?.infoHash;
+    if (!effectiveMagnet && !infoHash) return '';
 
-    if (streamMode === 'copy') {
+    if (streamMode === 'direct') {
+      // Best path: native seekable MP4/WebM — goes through /api/torrent/:id/stream
+      // Falls back to /api/stream if infoHash not yet resolved
+      if (infoHash) {
+        return `http://localhost:3001/api/torrent/${infoHash}/stream`;
+      }
+      return `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(effectiveMagnet)}`;
+    } else if (streamMode === 'remux') {
       return `http://localhost:3001/api/stream/remux?mode=copy&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else if (streamMode === '1080p') {
       return `http://localhost:3001/api/stream/remux?mode=1080p&magnet=${encodeURIComponent(effectiveMagnet)}`;
@@ -150,6 +183,7 @@ export function CinemaPlayer() {
     } else if (streamMode === '480p') {
       return `http://localhost:3001/api/stream/remux?mode=480p&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else {
+      // 'copy' legacy fallback
       return `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(effectiveMagnet)}`;
     }
   };
@@ -182,12 +216,15 @@ export function CinemaPlayer() {
   };
 
   const handleVideoError = (e) => {
-    console.warn('Video element playback error:', e);
-    if (streamMode === 'copy') {
-      setActionFeedback('Safari requires hardware transcode for 4K Remux HEVC: Auto-switching to 1080p...');
-      setTimeout(() => {
-        handleQualityChange('1080p');
-      }, 1200);
+    console.warn('Video element playback error:', e.nativeEvent?.message || e);
+    if (streamMode === 'direct') {
+      // Direct stream failed — try remux as fallback
+      setActionFeedback('Direct stream unavailable — trying remux fallback...');
+      setTimeout(() => handleQualityChange('remux'), 800);
+    } else if (streamMode === 'remux') {
+      // Remux copy failed (e.g. HEVC tag issue) — try hardware 1080p transcode
+      setActionFeedback('Remux failed — switching to hardware 1080p transcode...');
+      setTimeout(() => handleQualityChange('1080p'), 800);
     }
   };
 
@@ -380,15 +417,17 @@ export function CinemaPlayer() {
             <div className="cinema-sub-badges">
               {status?.length > 0 && <span className="cinema-badge size-badge">{formatBytes(status.length)}</span>}
               <span className="cinema-badge mode-badge">
-                {streamMode === 'copy'
-                  ? '💎 100% Lossless Remux'
+                {streamMode === 'direct'
+                  ? '⚡ Native Direct Stream'
+                  : streamMode === 'remux'
+                  ? '💎 Lossless Remux'
                   : streamMode === '1080p'
-                  ? '⚡ 1080p High Transcode'
+                  ? '🎬 1080p Transcode'
                   : streamMode === '720p'
                   ? '📺 720p Balanced'
                   : streamMode === '480p'
                   ? '📱 480p Low Bandwidth'
-                  : '📁 Raw Swarm Stream'}
+                  : '📁 Stream'}
               </span>
               {playbackSpeed !== 1.0 && <span className="cinema-badge speed-badge">⚡ {playbackSpeed}x Speed</span>}
               {activeSubtitle && <span className="cinema-badge sub-badge">💬 {activeSubtitle.label}</span>}
@@ -466,39 +505,39 @@ export function CinemaPlayer() {
                 <span className="control-label">QUALITY:</span>
                 <div className="control-pill-group">
                   <button
-                    className={`control-pill-btn ${streamMode === 'copy' ? 'active' : ''}`}
-                    onClick={() => handleQualityChange('copy')}
-                    title="100% Bit-for-bit Remux (Untouched Blu-ray Video)"
+                    className={`control-pill-btn ${streamMode === 'direct' ? 'active' : ''}`}
+                    onClick={() => handleQualityChange('direct')}
+                    title="Native direct stream — zero FFmpeg, instant playback, best for MP4/WebM"
                   >
-                    💎 100% Remux
+                    ⚡ Direct
+                  </button>
+                  <button
+                    className={`control-pill-btn ${streamMode === 'remux' ? 'active' : ''}`}
+                    onClick={() => handleQualityChange('remux')}
+                    title="Lossless FFmpeg remux to fMP4 — use for MKV/TrueHD/DTS files"
+                  >
+                    💎 Remux
                   </button>
                   <button
                     className={`control-pill-btn ${streamMode === '1080p' ? 'active' : ''}`}
                     onClick={() => handleQualityChange('1080p')}
-                    title="Hardware Transcoded 1080p High Quality (12 Mbps)"
+                    title="Hardware transcoded 1080p"
                   >
                     1080p
                   </button>
                   <button
                     className={`control-pill-btn ${streamMode === '720p' ? 'active' : ''}`}
                     onClick={() => handleQualityChange('720p')}
-                    title="Fast 720p Balanced (5 Mbps)"
+                    title="Fast 720p balanced"
                   >
                     720p
                   </button>
                   <button
                     className={`control-pill-btn ${streamMode === '480p' ? 'active' : ''}`}
                     onClick={() => handleQualityChange('480p')}
-                    title="Low Bandwidth Saver (2 Mbps)"
+                    title="Low bandwidth 480p"
                   >
                     480p
-                  </button>
-                  <button
-                    className={`control-pill-btn ${streamMode === 'raw' ? 'active' : ''}`}
-                    onClick={() => handleQualityChange('raw')}
-                    title="Raw Swarm Stream"
-                  >
-                    Raw
                   </button>
                 </div>
               </div>
@@ -793,12 +832,16 @@ export function CinemaPlayer() {
                       <div className="buffer-telemetry-card">
                         <div className="buffer-telemetry-top">
                           <div className="buffer-spinner-glow"></div>
-                          <div>
-                            <h3 className="buffer-title">Buffering BitTorrent Stream</h3>
+                        <div>
+                            <h3 className="buffer-title">
+                              {status?.hasFirstPiece ? 'Starting Playback...' : 'Buffering BitTorrent Stream'}
+                            </h3>
                             <p className="buffer-desc">
                               {status?.hasFirstPiece
-                                ? 'Transcoding initial video keyframes into fragmented MP4 container...'
-                                : 'Downloading initial sequential stream piece from BitTorrent swarm...'}
+                                ? streamMode === 'direct'
+                                  ? 'Piece 0 ready — browser connecting to native byte-range stream...'
+                                  : 'Piece 0 ready — FFmpeg remuxing to fragmented MP4...'
+                                : 'Downloading initial stream piece from BitTorrent swarm...'}
                             </p>
                           </div>
                         </div>

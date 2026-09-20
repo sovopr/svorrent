@@ -1715,6 +1715,30 @@ h1 {
   cursor: pointer;
 }
 
+.buffer-play-now-btn {
+  background: linear-gradient(135deg, #10b981, #059669);
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 0.92rem;
+  padding: 0.65rem 1.25rem;
+  border-radius: 10px;
+  border: 1px solid rgba(52, 211, 153, 0.5);
+  box-shadow: 0 4px 20px rgba(16, 185, 129, 0.35);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  transition: all 0.2s ease;
+  width: 100%;
+}
+
+.buffer-play-now-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 25px rgba(16, 185, 129, 0.5);
+  background: linear-gradient(135deg, #34d399, #059669);
+}
+
 .buffer-quick-profiles {
   display: flex;
   align-items: center;

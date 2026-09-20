@@ -21,14 +21,23 @@ if (!fs.existsSync(DOWNLOAD_DIR)) {
   fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
 }
 
-// Temporary streaming buffer cache (does NOT clutter ~/Downloads/Svorrent)
+// Temporary streaming buffer cache — lives in macOS /tmp, auto-wiped on boot
 const STREAM_CACHE_DIR = path.join(os.tmpdir(), 'svorrent-cache');
-if (fs.existsSync(STREAM_CACHE_DIR)) {
+
+// Clean old cache on startup (best-effort — locked files are skipped)
+function cleanStreamCache() {
   try {
-    fs.rmSync(STREAM_CACHE_DIR, { recursive: true, force: true });
+    if (fs.existsSync(STREAM_CACHE_DIR)) {
+      fs.rmSync(STREAM_CACHE_DIR, { recursive: true, force: true });
+    }
+  } catch (e) {
+    // Directory may be locked; will be cleaned on next server restart
+  }
+  try {
+    fs.mkdirSync(STREAM_CACHE_DIR, { recursive: true });
   } catch (e) {}
 }
-fs.mkdirSync(STREAM_CACHE_DIR, { recursive: true });
+cleanStreamCache();
 
 // Initialize WebTorrent with secure: 0 for Node 24 OpenSSL compatibility
 const client = new WebTorrent({
@@ -42,6 +51,30 @@ process.on('uncaughtException', (err) => {
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled Rejection:', reason);
 });
+
+// Graceful shutdown: destroy all torrents and wipe stream cache
+async function shutdownCleanup() {
+  console.log('\nSvorrent shutting down — wiping stream cache...');
+  try {
+    await new Promise((resolve) => client.destroy(resolve));
+  } catch (e) {}
+  cleanStreamCache();
+  process.exit(0);
+}
+process.on('SIGINT', shutdownCleanup);
+process.on('SIGTERM', shutdownCleanup);
+
+// Periodic cleanup: remove stream-only torrents that have been seeding > 2h
+// (Keeps memory + disk from accumulating during a long session)
+setInterval(() => {
+  const now = Date.now();
+  client.torrents.forEach((t) => {
+    if (t._isStreamOnly && t._addedAt && (now - t._addedAt) > 2 * 60 * 60 * 1000) {
+      console.log(`Auto-removing stale stream torrent: ${t.name}`);
+      t.destroy({ destroyStore: true }, () => {});
+    }
+  });
+}, 30 * 60 * 1000); // Check every 30 minutes
 
 app.use(cors());
 app.use(express.json());
@@ -105,8 +138,26 @@ async function getOrAddTorrent(magnetURI, opts = {}) {
     });
     torrent._isPermanentDownload = isPermanent;
     torrent._isStreamOnly = !isPermanent;
+    torrent._addedAt = Date.now();
     torrent.on('error', (err) => {
       console.error('Torrent runtime error:', err.message);
+    });
+    torrent.once('ready', () => {
+      if (torrent.files && torrent.files.length > 0) {
+        const largestFile = torrent.files.reduce((a, b) => (a.length > b.length ? a : b));
+        if (torrent._isStreamOnly) {
+          torrent.files.forEach((f) => {
+            if (f !== largestFile && typeof f.deselect === 'function') f.deselect();
+          });
+          if (typeof largestFile.select === 'function') largestFile.select();
+        }
+        if (typeof torrent.select === 'function' && typeof largestFile._startPiece === 'number') {
+          torrent.select(largestFile._startPiece, Math.min(largestFile._startPiece + 2, largestFile._endPiece || largestFile._startPiece), 7);
+          if (typeof largestFile._endPiece === 'number' && largestFile._endPiece > largestFile._startPiece + 2) {
+            torrent.select(largestFile._endPiece - 1, largestFile._endPiece, 7);
+          }
+        }
+      }
     });
   } else if (opts.isPermanentDownload) {
     torrent._isPermanentDownload = true;
@@ -467,16 +518,25 @@ app.get('/api/torrent/:id/stream', async (req, res) => {
     const file = torrent.files.reduce((a, b) => (a.length > b.length ? a : b));
     const mimeType = getMimeType(file.name);
 
-    // Focus bandwidth on this file & initial pieces
+    // Focus bandwidth on this file & initial pieces + container index (end pieces)
     try {
       torrent.files.forEach((f) => {
         if (f !== file && typeof f.deselect === 'function') f.deselect();
       });
       if (typeof file.select === 'function') file.select();
       if (typeof torrent.select === 'function' && typeof file._startPiece === 'number') {
-        torrent.select(file._startPiece, file._startPiece + 2, 7);
+        torrent.select(file._startPiece, Math.min(file._startPiece + 2, file._endPiece || file._startPiece), 7);
+        if (typeof file._endPiece === 'number' && file._endPiece > file._startPiece + 2) {
+          torrent.select(file._endPiece - 1, file._endPiece, 7);
+        }
       }
     } catch (e) {}
+
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Range, Content-Type, Accept',
+      'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
+    };
 
     const range = req.headers.range;
     if (range) {
@@ -490,10 +550,11 @@ app.get('/api/torrent/:id/stream', async (req, res) => {
         'Accept-Ranges': 'bytes',
         'Content-Length': chunksize,
         'Content-Type': mimeType,
-        'Access-Control-Allow-Origin': '*',
+        ...corsHeaders,
       };
 
       res.writeHead(206, head);
+      if (req.method === 'HEAD') return res.end();
       const stream = file.createReadStream({ start, end });
       stream.on('error', () => {});
       stream.pipe(res);
@@ -503,10 +564,11 @@ app.get('/api/torrent/:id/stream', async (req, res) => {
         'Content-Length': file.length,
         'Content-Type': mimeType,
         'Accept-Ranges': 'bytes',
-        'Access-Control-Allow-Origin': '*',
         'Content-Disposition': `inline; filename="${encodeURIComponent(file.name)}"`,
+        ...corsHeaders,
       };
       res.writeHead(200, head);
+      if (req.method === 'HEAD') return res.end();
       const stream = file.createReadStream();
       stream.on('error', () => {});
       stream.pipe(res);
@@ -676,6 +738,7 @@ app.get('/api/torrent/status', async (req, res) => {
   const etaSeconds = firstPieceProgress < 100 && (torrent.downloadSpeed || 0) > 0
     ? Math.ceil((pieceLength - firstPieceDownloaded) / torrent.downloadSpeed)
     : null;
+  const isNativeCompatible = largestFile ? /\.(mp4|m4v|webm)$/i.test(largestFile.name) : false;
 
   return res.json({
     infoHash: torrent.infoHash,
@@ -696,7 +759,10 @@ app.get('/api/torrent/status', async (req, res) => {
     firstPieceDownloaded,
     firstPieceProgress,
     etaSeconds,
+    isNativeCompatible,
+    recommendedMode: isNativeCompatible ? 'direct' : 'remux',
     streamUrl: `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(magnetURI)}`,
+    directStreamUrl: `http://localhost:3001/api/torrent/${torrent.infoHash}/stream`,
     remuxStreamUrl: `http://localhost:3001/api/stream/remux?mode=copy&magnet=${encodeURIComponent(magnetURI)}`,
     transcodeStreamUrl: `http://localhost:3001/api/stream/remux?mode=transcode&magnet=${encodeURIComponent(magnetURI)}`,
   });
@@ -879,6 +945,26 @@ app.get('/api/stream', async (req, res) => {
     const file = torrent.files.reduce((a, b) => (a.length > b.length ? a : b));
     const mimeType = getMimeType(file.name);
 
+    // Focus bandwidth on this file & initial pieces + container index (end pieces)
+    try {
+      torrent.files.forEach((f) => {
+        if (f !== file && typeof f.deselect === 'function') f.deselect();
+      });
+      if (typeof file.select === 'function') file.select();
+      if (typeof torrent.select === 'function' && typeof file._startPiece === 'number') {
+        torrent.select(file._startPiece, Math.min(file._startPiece + 2, file._endPiece || file._startPiece), 7);
+        if (typeof file._endPiece === 'number' && file._endPiece > file._startPiece + 2) {
+          torrent.select(file._endPiece - 1, file._endPiece, 7);
+        }
+      }
+    } catch (e) {}
+
+    const corsHeaders = {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Range, Content-Type, Accept',
+      'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
+    };
+
     const range = req.headers.range;
     if (range) {
       const parts = range.replace(/bytes=/, '').split('-');
@@ -891,9 +977,11 @@ app.get('/api/stream', async (req, res) => {
         'Accept-Ranges': 'bytes',
         'Content-Length': chunksize,
         'Content-Type': mimeType,
+        ...corsHeaders,
       };
 
       res.writeHead(206, head);
+      if (req.method === 'HEAD') return res.end();
       const stream = file.createReadStream({ start, end });
       stream.on('error', () => {});
       stream.pipe(res);
@@ -902,9 +990,12 @@ app.get('/api/stream', async (req, res) => {
       const head = {
         'Content-Length': file.length,
         'Content-Type': mimeType,
+        'Accept-Ranges': 'bytes',
         'Content-Disposition': `inline; filename="${encodeURIComponent(file.name)}"`,
+        ...corsHeaders,
       };
       res.writeHead(200, head);
+      if (req.method === 'HEAD') return res.end();
       const stream = file.createReadStream();
       stream.on('error', () => {});
       stream.pipe(res);
@@ -954,7 +1045,7 @@ app.get('/api/stream/remux', async (req, res) => {
 
     const file = torrent.files.reduce((a, b) => (a.length > b.length ? a : b));
 
-    // Focus 100% bandwidth on the streaming file and aggressively prioritize initial pieces
+    // Focus 100% bandwidth on the streaming file and aggressively prioritize initial pieces + end pieces
     try {
       torrent.files.forEach((f) => {
         if (f !== file && typeof f.deselect === 'function') {
@@ -964,32 +1055,80 @@ app.get('/api/stream/remux', async (req, res) => {
       if (typeof file.select === 'function') {
         file.select();
       }
-      // Prioritize the first 3 pieces needed for immediate header & playback
       if (typeof torrent.select === 'function' && typeof file._startPiece === 'number') {
-        torrent.select(file._startPiece, file._startPiece + 2, 7);
+        torrent.select(file._startPiece, Math.min(file._startPiece + 2, file._endPiece || file._startPiece), 7);
+        if (typeof file._endPiece === 'number' && file._endPiece > file._startPiece + 2) {
+          torrent.select(file._endPiece - 1, file._endPiece, 7);
+        }
       }
     } catch (e) {}
 
-    // Video codec handling:
-    // 'copy' = 100% untouched bit-for-bit native quality (preserves 4K UHD, HDR, HEVC/AVC without any re-encoding loss)
-    // '1080p' / 'transcode' = Hardware-accelerated 1080p transcode (Apple Silicon VideoToolbox / Windows NVENC / QuickSync)
-    // '720p' = Fast 720p transcode (5 Mbps)
-    // '480p' = Efficient 480p transcode (2 Mbps)
-    let vCodecArgs = ['-c:v', 'copy', '-tag:v', 'hvc1'];
+    const isNativeMp4 = /\.(mp4|m4v|webm)$/i.test(file.name);
+    // If the file is already native browser-compatible (MP4/WebM) and no transcoding is requested:
+    // Bypass FFmpeg entirely and serve native seekable HTTP 206 Partial Content Range stream.
+    if (isNativeMp4 && (mode === 'copy' || !mode || mode === 'direct')) {
+      const mimeType = getMimeType(file.name);
+      const corsHeaders = {
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Headers': 'Range, Content-Type, Accept',
+        'Access-Control-Expose-Headers': 'Content-Range, Content-Length, Accept-Ranges',
+      };
+
+      const range = req.headers.range;
+      if (range) {
+        const parts = range.replace(/bytes=/, '').split('-');
+        const start = parseInt(parts[0], 10);
+        const end = parts[1] ? parseInt(parts[1], 10) : file.length - 1;
+        const chunksize = end - start + 1;
+
+        res.writeHead(206, {
+          'Content-Range': `bytes ${start}-${end}/${file.length}`,
+          'Accept-Ranges': 'bytes',
+          'Content-Length': chunksize,
+          'Content-Type': mimeType,
+          ...corsHeaders,
+        });
+
+        if (req.method === 'HEAD') return res.end();
+        const stream = file.createReadStream({ start, end });
+        stream.on('error', () => {});
+        stream.pipe(res);
+        req.on('close', () => { try { stream.destroy(); } catch (e) {} });
+        return;
+      } else {
+        res.writeHead(200, {
+          'Content-Length': file.length,
+          'Content-Type': mimeType,
+          'Accept-Ranges': 'bytes',
+          'Content-Disposition': `inline; filename="${encodeURIComponent(file.name)}"`,
+          ...corsHeaders,
+        });
+
+        if (req.method === 'HEAD') return res.end();
+        const stream = file.createReadStream();
+        stream.on('error', () => {});
+        stream.pipe(res);
+        req.on('close', () => { try { stream.destroy(); } catch (e) {} });
+        return;
+      }
+    }
+
+    // Video codec handling for MKV or requested transcode:
+    let vCodecArgs = ['-c:v', 'copy'];
     const isDarwin = process.platform === 'darwin';
 
     if (mode === 'transcode' || mode === '1080p') {
       vCodecArgs = isDarwin
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '10M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p']
-        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '10M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p'];
+        ? ['-c:v', 'h264_videotoolbox', '-b:v', '8M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p']
+        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '8M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p'];
     } else if (mode === '720p') {
       vCodecArgs = isDarwin
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '5M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p']
-        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p'];
+        ? ['-c:v', 'h264_videotoolbox', '-b:v', '4M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p']
+        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '4M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p'];
     } else if (mode === '480p') {
       vCodecArgs = isDarwin
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '2M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p']
-        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '2M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p'];
+        ? ['-c:v', 'h264_videotoolbox', '-b:v', '1.5M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p']
+        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '1.5M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p'];
     }
 
     const ffmpegArgs = [
@@ -1004,7 +1143,7 @@ app.get('/api/stream/remux', async (req, res) => {
       '-map', '0:a:0?',
       ...vCodecArgs,
       '-c:a', 'aac',
-      '-b:a', '384k',
+      '-b:a', '256k',
       '-ac', '2',
       '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
       '-f', 'mp4',
@@ -1016,6 +1155,8 @@ app.get('/api/stream/remux', async (req, res) => {
       'Accept-Ranges': 'none',
       'Cache-Control': 'no-cache, no-store',
       'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Range, Content-Type, Accept',
     });
 
     const ff = spawn(FFMPEG_BIN, ffmpegArgs);

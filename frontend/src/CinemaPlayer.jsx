@@ -72,6 +72,7 @@ export function CinemaPlayer() {
   const fileInputRef = useRef(null);
   const savedPositionRef = useRef(0);
   const playbackOffsetRef = useRef(0); // Stream start offset for seamless seek & quality transitions
+  const seekTimeRef = useRef(0); // Stable requested start timestamp (only changes on seek / quality change, never on ongoing playback ticks)
   const stallTimerRef = useRef(null); // Auto-downgrade timer when playback gets stuck
   const lastStallTimeRef = useRef(0);
   const forcePlayTimerRef = useRef(null); // Auto-dismiss overlay if video stalls
@@ -238,6 +239,7 @@ export function CinemaPlayer() {
           const cur = (playbackOffsetRef.current || 0) + (videoRef.current?.currentTime || 0);
           if (cur > 0) {
             savedPositionRef.current = cur;
+            seekTimeRef.current = Math.floor(cur);
             playbackOffsetRef.current = Math.floor(cur);
           }
           lastAutoSwitchRef.current = now;
@@ -265,6 +267,7 @@ export function CinemaPlayer() {
         const cur = (playbackOffsetRef.current || 0) + (videoRef.current?.currentTime || 0);
         if (cur > 0) {
           savedPositionRef.current = cur;
+          seekTimeRef.current = Math.floor(cur);
           playbackOffsetRef.current = Math.floor(cur);
         }
         lastAutoSwitchRef.current = now;
@@ -336,8 +339,9 @@ export function CinemaPlayer() {
     if (!status?.hasFirstPiece || !infoHash) return '';
     if (activeMode !== 'direct' && !hasRemuxBuffer) return '';
 
-    const startSec = Math.floor(savedPositionRef.current || playbackOffsetRef.current || 0);
-    const startParam = startSec > 3 ? `&startTime=${startSec}` : '';
+    // Stable startSec: ONLY changes when explicitly seeking or switching quality, NEVER on ongoing playback ticks
+    const startSec = Math.floor(seekTimeRef.current || 0);
+    const startParam = startSec > 0 ? `&startTime=${startSec}` : '';
 
     if (activeMode === 'direct') {
       return `http://localhost:3001/api/torrent/${infoHash}/stream`;
@@ -454,6 +458,7 @@ export function CinemaPlayer() {
     if (streamMode === 'direct') {
       video.currentTime = targetTime;
     } else {
+      seekTimeRef.current = targetTime;
       playbackOffsetRef.current = targetTime;
       setRemuxAttempt((prev) => prev + 1);
     }
@@ -487,6 +492,7 @@ export function CinemaPlayer() {
     const cur = (playbackOffsetRef.current || 0) + (videoRef.current?.currentTime || 0);
     if (cur > 0) {
       savedPositionRef.current = cur;
+      seekTimeRef.current = Math.floor(cur);
       playbackOffsetRef.current = Math.floor(cur);
     }
     remuxFailureCountRef.current = 0;
@@ -527,6 +533,7 @@ export function CinemaPlayer() {
     const cur = (playbackOffsetRef.current || 0) + (videoRef.current?.currentTime || 0);
     if (cur > 0) {
       savedPositionRef.current = cur;
+      seekTimeRef.current = Math.floor(cur);
       playbackOffsetRef.current = Math.floor(cur);
     }
     if (streamMode === 'direct') {

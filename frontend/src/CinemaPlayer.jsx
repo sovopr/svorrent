@@ -9,6 +9,14 @@ function formatBytes(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 }
 
+// Helper to convert SRT string into clean WebVTT
+function convertSrtToVtt(srtText) {
+  if (srtText.trim().startsWith('WEBVTT')) return srtText;
+  const normalized = srtText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const converted = normalized.replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+  return 'WEBVTT\n\n' + converted;
+}
+
 export function CinemaPlayer() {
   const [params, setParams] = useState(() => {
     const p = new URLSearchParams(window.location.search);
@@ -21,15 +29,29 @@ export function CinemaPlayer() {
     };
   });
 
-  const [streamMode, setStreamMode] = useState('copy'); // 'copy' | 'transcode' | 'raw'
+  // Quality / Stream Mode: 'copy' | '1080p' | '720p' | '480p' | 'raw'
+  const [streamMode, setStreamMode] = useState('copy');
   const [status, setStatus] = useState(null);
   const [error, setError] = useState('');
   const [actionFeedback, setActionFeedback] = useState('');
   const [showNerdModal, setShowNerdModal] = useState(false);
   const [isVideoLoading, setIsVideoLoading] = useState(true);
 
+  // Playback Speed State
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
+  const [showSpeedMenu, setShowSpeedMenu] = useState(false);
+
+  // Subtitles State
+  const [activeSubtitle, setActiveSubtitle] = useState(null); // { id, label, url }
+  const [customSubtitles, setCustomSubtitles] = useState([]);
+  const [showSubtitleMenu, setShowSubtitleMenu] = useState(false);
+  const [subtitleSize, setSubtitleSize] = useState('normal'); // 'normal' | 'large' | 'xlarge'
+  const [subtitleDelay, setSubtitleDelay] = useState(0); // seconds offset
+
   const videoRef = useRef(null);
   const pollRef = useRef(null);
+  const fileInputRef = useRef(null);
+  const savedPositionRef = useRef(0);
 
   // Poll status from backend
   useEffect(() => {
@@ -70,8 +92,12 @@ export function CinemaPlayer() {
 
     if (streamMode === 'copy') {
       return `http://localhost:3001/api/stream/remux?mode=copy&magnet=${encodeURIComponent(effectiveMagnet)}`;
-    } else if (streamMode === 'transcode') {
-      return `http://localhost:3001/api/stream/remux?mode=transcode&magnet=${encodeURIComponent(effectiveMagnet)}`;
+    } else if (streamMode === '1080p') {
+      return `http://localhost:3001/api/stream/remux?mode=1080p&magnet=${encodeURIComponent(effectiveMagnet)}`;
+    } else if (streamMode === '720p') {
+      return `http://localhost:3001/api/stream/remux?mode=720p&magnet=${encodeURIComponent(effectiveMagnet)}`;
+    } else if (streamMode === '480p') {
+      return `http://localhost:3001/api/stream/remux?mode=480p&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else {
       return `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(effectiveMagnet)}`;
     }
@@ -79,10 +105,86 @@ export function CinemaPlayer() {
 
   const streamUrl = getStreamUrl();
 
+  // Seamless Quality Switching (preserves playback position)
+  const handleQualityChange = (newMode) => {
+    if (newMode === streamMode) return;
+    if (videoRef.current) {
+      savedPositionRef.current = videoRef.current.currentTime || 0;
+    }
+    setStreamMode(newMode);
+    setActionFeedback(`Switching quality to ${newMode.toUpperCase()}...`);
+    setTimeout(() => setActionFeedback(''), 2500);
+  };
+
+  // Restore position and apply speed after quality switch or load
+  const handleVideoCanPlay = () => {
+    setIsVideoLoading(false);
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (savedPositionRef.current > 0) {
+      video.currentTime = savedPositionRef.current;
+      savedPositionRef.current = 0;
+      video.play().catch(() => {});
+    }
+    video.playbackRate = playbackSpeed;
+  };
+
+  // Speed Control
+  const handleSpeedChange = (speed) => {
+    setPlaybackSpeed(speed);
+    if (videoRef.current) {
+      videoRef.current.playbackRate = speed;
+    }
+    setShowSpeedMenu(false);
+    setActionFeedback(`Playback Speed: ${speed}x`);
+    setTimeout(() => setActionFeedback(''), 2000);
+  };
+
+  // Subtitle selection & HTML5 textTrack mode sync
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    if (video.textTracks && video.textTracks.length > 0) {
+      for (let i = 0; i < video.textTracks.length; i++) {
+        video.textTracks[i].mode = activeSubtitle ? 'showing' : 'disabled';
+      }
+    }
+  }, [activeSubtitle]);
+
+  // Handle local subtitle file upload
+  const handleSubtitleFileUpload = (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const raw = event.target.result;
+        const vtt = convertSrtToVtt(raw);
+        const blob = new Blob([vtt], { type: 'text/vtt' });
+        const url = URL.createObjectURL(blob);
+        const newSub = {
+          id: 'custom-' + Date.now(),
+          label: file.name.replace(/\.[^/.]+$/, ''),
+          url,
+          isCustom: true,
+        };
+        setCustomSubtitles((prev) => [...prev, newSub]);
+        setActiveSubtitle(newSub);
+        setActionFeedback(`Loaded subtitles: ${file.name}`);
+        setTimeout(() => setActionFeedback(''), 3000);
+      } catch (err) {
+        setActionFeedback('Failed to parse subtitle file');
+      }
+    };
+    reader.readAsText(file);
+  };
+
   // Keyboard controls for Cinema Player
   useEffect(() => {
     const handleKeyDown = (e) => {
-      // Don't trigger shortcuts if typing inside an input
       if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
 
       const video = videoRef.current;
@@ -108,12 +210,30 @@ export function CinemaPlayer() {
       } else if (e.key === 'm' || e.key === 'M') {
         e.preventDefault();
         video.muted = !video.muted;
+      } else if (e.key === '[') {
+        // Slow down speed
+        e.preventDefault();
+        const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+        const currIdx = speeds.indexOf(playbackSpeed);
+        const nextIdx = Math.max(0, (currIdx === -1 ? 2 : currIdx) - 1);
+        handleSpeedChange(speeds[nextIdx]);
+      } else if (e.key === ']') {
+        // Speed up
+        e.preventDefault();
+        const speeds = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+        const currIdx = speeds.indexOf(playbackSpeed);
+        const nextIdx = Math.min(speeds.length - 1, (currIdx === -1 ? 2 : currIdx) + 1);
+        handleSpeedChange(speeds[nextIdx]);
+      } else if (e.key === '\\') {
+        // Reset speed to 1.0x
+        e.preventDefault();
+        handleSpeedChange(1.0);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [playbackSpeed]);
 
   const handlePlayNative = async () => {
     if (!status?.infoHash) return;
@@ -151,8 +271,27 @@ export function CinemaPlayer() {
 
   const bufferPct = Math.round((status?.progress || 0) * 100);
 
+  // Subtitles from swarm
+  const swarmSubtitles = (status?.subtitleFiles || []).map((sub) => ({
+    id: `swarm-${sub.index}`,
+    label: sub.name.replace(/^.*[\\/]/, ''),
+    url: `http://localhost:3001/api/torrent/${status.infoHash}/subtitle/${sub.index}`,
+    isSwarm: true,
+  }));
+
+  const allSubtitles = [...swarmSubtitles, ...customSubtitles];
+
   return (
     <div className="cinema-wrapper">
+      {/* Hidden File Input for Custom Subtitle Upload */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        style={{ display: 'none' }}
+        accept=".srt,.vtt,.sub,.ass"
+        onChange={handleSubtitleFileUpload}
+      />
+
       {/* Top Theater Navigation */}
       <header className="cinema-header">
         <div className="cinema-header-left">
@@ -168,11 +307,17 @@ export function CinemaPlayer() {
               {status?.length > 0 && <span className="cinema-badge size-badge">{formatBytes(status.length)}</span>}
               <span className="cinema-badge mode-badge">
                 {streamMode === 'copy'
-                  ? '💎 100% Lossless Remux Direct'
-                  : streamMode === 'transcode'
-                  ? '⚡ Universal H.264 Transcode'
-                  : '📁 Raw Stream'}
+                  ? '💎 100% Lossless Remux'
+                  : streamMode === '1080p'
+                  ? '⚡ 1080p High Transcode'
+                  : streamMode === '720p'
+                  ? '📺 720p Balanced'
+                  : streamMode === '480p'
+                  ? '📱 480p Low Bandwidth'
+                  : '📁 Raw Swarm Stream'}
               </span>
+              {playbackSpeed !== 1.0 && <span className="cinema-badge speed-badge">⚡ {playbackSpeed}x Speed</span>}
+              {activeSubtitle && <span className="cinema-badge sub-badge">💬 {activeSubtitle.label}</span>}
             </div>
           </div>
         </div>
@@ -240,51 +385,177 @@ export function CinemaPlayer() {
           </div>
         ) : (
           <div className="cinema-viewport-container">
-            {/* Mode Selector Toolbar */}
-            <div className="cinema-mode-toolbar">
-              <div className="mode-selector-label">
-                <span>STREAM QUALITY:</span>
+            {/* Top Multi-Option Cinema Controls Strip */}
+            <div className="cinema-controls-bar">
+              {/* Quality Preset Selector */}
+              <div className="control-group quality-group">
+                <span className="control-label">QUALITY:</span>
+                <div className="control-pill-group">
+                  <button
+                    className={`control-pill-btn ${streamMode === 'copy' ? 'active' : ''}`}
+                    onClick={() => handleQualityChange('copy')}
+                    title="100% Bit-for-bit Remux (Untouched Blu-ray Video)"
+                  >
+                    💎 100% Remux
+                  </button>
+                  <button
+                    className={`control-pill-btn ${streamMode === '1080p' ? 'active' : ''}`}
+                    onClick={() => handleQualityChange('1080p')}
+                    title="Hardware Transcoded 1080p High Quality (12 Mbps)"
+                  >
+                    1080p
+                  </button>
+                  <button
+                    className={`control-pill-btn ${streamMode === '720p' ? 'active' : ''}`}
+                    onClick={() => handleQualityChange('720p')}
+                    title="Fast 720p Balanced (5 Mbps)"
+                  >
+                    720p
+                  </button>
+                  <button
+                    className={`control-pill-btn ${streamMode === '480p' ? 'active' : ''}`}
+                    onClick={() => handleQualityChange('480p')}
+                    title="Low Bandwidth Saver (2 Mbps)"
+                  >
+                    480p
+                  </button>
+                  <button
+                    className={`control-pill-btn ${streamMode === 'raw' ? 'active' : ''}`}
+                    onClick={() => handleQualityChange('raw')}
+                    title="Raw Swarm Stream"
+                  >
+                    Raw
+                  </button>
+                </div>
               </div>
-              <div className="mode-btn-group">
-                <button
-                  className={`mode-btn ${streamMode === 'copy' ? 'active' : ''}`}
-                  onClick={() => setStreamMode('copy')}
-                  title="Zero re-encoding. 100% original Blu-ray HEVC/AVC video bitstream preserved bit-for-bit with transparent 384k AAC audio."
-                >
-                  <span className="mode-btn-icon">💎</span>
-                  <span className="mode-btn-text">100% Remux Direct (Lossless Bit-for-Bit)</span>
-                  <span className="mode-btn-sub">Original Quality</span>
-                </button>
 
-                <button
-                  className={`mode-btn ${streamMode === 'transcode' ? 'active' : ''}`}
-                  onClick={() => setStreamMode('transcode')}
-                  title="Universal compatibility mode. Uses hardware-accelerated H.264 transcode (Apple VideoToolbox / Windows NVENC / QuickSync / AVX-2) at 14 Mbps."
-                >
-                  <span className="mode-btn-icon">⚡</span>
-                  <span className="mode-btn-text">Universal Fast (Hardware Transcode)</span>
-                  <span className="mode-btn-sub">Max Compatibility</span>
-                </button>
+              {/* Playback Speed Selector */}
+              <div className="control-group speed-group">
+                <span className="control-label">SPEED:</span>
+                <div className="control-pill-group">
+                  {[0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map((s) => (
+                    <button
+                      key={s}
+                      className={`control-pill-btn ${playbackSpeed === s ? 'active' : ''}`}
+                      onClick={() => handleSpeedChange(s)}
+                    >
+                      {s}x
+                    </button>
+                  ))}
+                </div>
+              </div>
 
-                <button
-                  className={`mode-btn ${streamMode === 'raw' ? 'active' : ''}`}
-                  onClick={() => setStreamMode('raw')}
-                  title="Direct HTTP byte range streaming for native MP4 / WebM files."
-                >
-                  <span className="mode-btn-icon">📁</span>
-                  <span className="mode-btn-text">Raw Swarm Stream</span>
-                  <span className="mode-btn-sub">Native MP4</span>
-                </button>
+              {/* Subtitles (CC) Selector */}
+              <div className="control-group subtitle-group">
+                <span className="control-label">SUBTITLES:</span>
+                <div className="subtitle-selector-box">
+                  <button
+                    className={`control-pill-btn sub-toggle-btn ${activeSubtitle ? 'active' : ''}`}
+                    onClick={() => setShowSubtitleMenu((prev) => !prev)}
+                    title="Toggle Subtitle Selection Menu"
+                  >
+                    💬 {activeSubtitle ? activeSubtitle.label : 'Subtitles (Off)'} ▾
+                  </button>
+
+                  <button
+                    className="control-pill-btn sub-upload-btn"
+                    onClick={() => fileInputRef.current?.click()}
+                    title="Upload external .srt or .vtt subtitle file"
+                  >
+                    + Upload .srt
+                  </button>
+
+                  {/* Subtitle Dropdown Menu */}
+                  {showSubtitleMenu && (
+                    <div className="subtitles-dropdown">
+                      <div className="dropdown-header">
+                        <span>Select Subtitle Track</span>
+                        <button className="dropdown-close" onClick={() => setShowSubtitleMenu(false)}>✕</button>
+                      </div>
+
+                      <div className="dropdown-list">
+                        <button
+                          className={`dropdown-item ${!activeSubtitle ? 'selected' : ''}`}
+                          onClick={() => {
+                            setActiveSubtitle(null);
+                            setShowSubtitleMenu(false);
+                          }}
+                        >
+                          <span className="track-name">None (Subtitles Off)</span>
+                          {!activeSubtitle && <span className="check-mark">✓</span>}
+                        </button>
+
+                        {allSubtitles.map((sub) => (
+                          <button
+                            key={sub.id}
+                            className={`dropdown-item ${activeSubtitle?.id === sub.id ? 'selected' : ''}`}
+                            onClick={() => {
+                              setActiveSubtitle(sub);
+                              setShowSubtitleMenu(false);
+                            }}
+                          >
+                            <span className="track-name">{sub.label}</span>
+                            <span className="track-badge">{sub.isCustom ? 'Custom' : 'Torrent'}</span>
+                            {activeSubtitle?.id === sub.id && <span className="check-mark">✓</span>}
+                          </button>
+                        ))}
+
+                        {allSubtitles.length === 0 && (
+                          <div className="dropdown-empty">
+                            <span>No embedded subtitle files found in torrent.</span>
+                            <button
+                              className="btn btn-secondary btn-sm"
+                              style={{ marginTop: '0.5rem' }}
+                              onClick={() => {
+                                setShowSubtitleMenu(false);
+                                fileInputRef.current?.click();
+                              }}
+                            >
+                              📂 Upload .srt / .vtt File
+                            </button>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Subtitle Size Adjuster */}
+                      {activeSubtitle && (
+                        <div className="dropdown-footer">
+                          <span className="footer-label">Font Size:</span>
+                          <div className="size-btns">
+                            <button
+                              className={`size-btn ${subtitleSize === 'normal' ? 'active' : ''}`}
+                              onClick={() => setSubtitleSize('normal')}
+                            >
+                              Standard
+                            </button>
+                            <button
+                              className={`size-btn ${subtitleSize === 'large' ? 'active' : ''}`}
+                              onClick={() => setSubtitleSize('large')}
+                            >
+                              Large
+                            </button>
+                            <button
+                              className={`size-btn ${subtitleSize === 'xlarge' ? 'active' : ''}`}
+                              onClick={() => setSubtitleSize('xlarge')}
+                            >
+                              Extra Large
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
 
             {/* Video Player Box */}
             <div className="cinema-player-frame">
               {status?.ready ? (
-                <div className="video-element-wrapper">
+                <div className={`video-element-wrapper subtitle-style-${subtitleSize}`}>
                   <video
                     ref={videoRef}
-                    key={streamUrl}
+                    key={`${streamUrl}-${activeSubtitle?.id || 'nosub'}`}
                     controls
                     autoPlay
                     playsInline
@@ -292,8 +563,18 @@ export function CinemaPlayer() {
                     src={streamUrl}
                     onWaiting={() => setIsVideoLoading(true)}
                     onPlaying={() => setIsVideoLoading(false)}
-                    onCanPlay={() => setIsVideoLoading(false)}
+                    onCanPlay={handleVideoCanPlay}
                   >
+                    {activeSubtitle && (
+                      <track
+                        key={activeSubtitle.url}
+                        kind="subtitles"
+                        src={activeSubtitle.url}
+                        srcLang="en"
+                        label={activeSubtitle.label}
+                        default
+                      />
+                    )}
                     Your browser does not support HTML5 video playback.
                   </video>
 
@@ -359,17 +640,17 @@ export function CinemaPlayer() {
                 <div>
                   <h4>100% Native Remux Quality</h4>
                   <p>
-                    Zero pixel re-encoding. Full original 10-bit HEVC / AVC resolution and dynamic range streamed bit-for-bit directly into your browser.
+                    Zero pixel re-encoding in Remux mode. Full original HEVC/AVC bitrate streamed bit-for-bit directly into your browser, with 1080p, 720p, and 480p instant fallbacks.
                   </p>
                 </div>
               </div>
 
               <div className="tech-banner-item">
-                <span className="tech-icon">🎧</span>
+                <span className="tech-icon">💬</span>
                 <div>
-                  <h4>Studio-Grade Audio Transmuxing</h4>
+                  <h4>Subtitles & Speed Control</h4>
                   <p>
-                    High-bitrate Dolby TrueHD, DTS-HD MA, or AC3 master audio is converted on-the-fly to 384k AAC for crystal-clear browser audio.
+                    Automatic extraction of torrent subtitles, local <kbd>.srt</kbd>/<kbd>.vtt</kbd> drag-and-drop upload, and multi-speed playback from <kbd>0.5x</kbd> up to <kbd>2.0x</kbd>.
                   </p>
                 </div>
               </div>
@@ -379,7 +660,7 @@ export function CinemaPlayer() {
                 <div>
                   <h4>Keyboard Shortcuts</h4>
                   <p>
-                    <kbd>Space</kbd> Play/Pause &nbsp;•&nbsp; <kbd>←</kbd> <kbd>→</kbd> Seek 10s &nbsp;•&nbsp; <kbd>F</kbd> Fullscreen &nbsp;•&nbsp; <kbd>M</kbd> Mute
+                    <kbd>Space</kbd> Play/Pause &nbsp;•&nbsp; <kbd>←</kbd> <kbd>→</kbd> Seek 10s &nbsp;•&nbsp; <kbd>[</kbd> <kbd>]</kbd> Speed &nbsp;•&nbsp; <kbd>\</kbd> Reset &nbsp;•&nbsp; <kbd>F</kbd> Fullscreen
                   </p>
                 </div>
               </div>

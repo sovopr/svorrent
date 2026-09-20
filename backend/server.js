@@ -445,6 +445,12 @@ app.get('/api/torrent/status', async (req, res) => {
     ? torrent.files.reduce((a, b) => (a.length > b.length ? a : b))
     : null;
 
+  const subtitleFiles = torrent.files
+    ? torrent.files
+        .map((f, idx) => ({ index: idx, name: f.name, length: f.length }))
+        .filter((f) => /\.(srt|vtt|sub|ass)$/i.test(f.name))
+    : [];
+
   return res.json({
     infoHash: torrent.infoHash,
     magnet: magnetURI,
@@ -458,9 +464,35 @@ app.get('/api/torrent/status', async (req, res) => {
     length: torrent.length || (largestFile ? largestFile.length : 0),
     fileName: largestFile ? largestFile.name : null,
     files,
+    subtitleFiles,
     streamUrl: `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(magnetURI)}`,
     remuxStreamUrl: `http://localhost:3001/api/stream/remux?mode=copy&magnet=${encodeURIComponent(magnetURI)}`,
     transcodeStreamUrl: `http://localhost:3001/api/stream/remux?mode=transcode&magnet=${encodeURIComponent(magnetURI)}`,
+  });
+});
+
+// Serve torrent subtitle as WebVTT for HTML5 video
+app.get('/api/torrent/:id/subtitle/:fileIndex', async (req, res) => {
+  const torrent = await client.get(req.params.id);
+  if (!torrent) return res.status(404).send('Torrent not found');
+  const idx = parseInt(req.params.fileIndex, 10);
+  const file = torrent.files && torrent.files[idx];
+  if (!file) return res.status(404).send('Subtitle file not found');
+
+  res.setHeader('Content-Type', 'text/vtt; charset=utf-8');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+
+  file.getBuffer((err, buffer) => {
+    if (err) return res.status(500).send('Error reading subtitle: ' + err.message);
+    const content = buffer.toString('utf8');
+    if (content.startsWith('WEBVTT')) {
+      return res.send(content);
+    }
+    const vtt = 'WEBVTT\n\n' + content
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n')
+      .replace(/(\d{2}:\d{2}:\d{2}),(\d{3})/g, '$1.$2');
+    return res.send(vtt);
   });
 });
 
@@ -623,15 +655,24 @@ app.get('/api/stream/remux', async (req, res) => {
 
     // Video codec handling:
     // 'copy' = 100% untouched bit-for-bit native quality (preserves 4K UHD, HDR, HEVC/AVC without any re-encoding loss)
-    // 'transcode' = Hardware-accelerated transcode (Apple Silicon VideoToolbox on macOS, NVENC/AVX on Windows, ultrafast libx264)
+    // '1080p' / 'transcode' = Hardware-accelerated 1080p transcode (Apple Silicon VideoToolbox / Windows NVENC / QuickSync)
+    // '720p' = Fast 720p transcode (5 Mbps)
+    // '480p' = Efficient 480p transcode (2 Mbps)
     let vCodecArgs = ['-c:v', 'copy'];
-    if (mode === 'transcode') {
-      if (process.platform === 'darwin') {
-        vCodecArgs = ['-c:v', 'h264_videotoolbox', '-b:v', '14M', '-pix_fmt', 'yuv420p'];
-      } else {
-        // Windows (win32) & Linux: universal ultrafast high-bitrate H.264
-        vCodecArgs = ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '18', '-pix_fmt', 'yuv420p'];
-      }
+    const isDarwin = process.platform === 'darwin';
+
+    if (mode === 'transcode' || mode === '1080p') {
+      vCodecArgs = isDarwin
+        ? ['-c:v', 'h264_videotoolbox', '-b:v', '12M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p']
+        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '10M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p'];
+    } else if (mode === '720p') {
+      vCodecArgs = isDarwin
+        ? ['-c:v', 'h264_videotoolbox', '-b:v', '5M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p']
+        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '5M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p'];
+    } else if (mode === '480p') {
+      vCodecArgs = isDarwin
+        ? ['-c:v', 'h264_videotoolbox', '-b:v', '2M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p']
+        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '2M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p'];
     }
 
     const ffmpegArgs = [

@@ -275,7 +275,7 @@ cleanStreamCache();
 // Initialize WebTorrent with secure: 0 for Node 24 OpenSSL compatibility and tuned connection limits
 const client = new WebTorrent({
   secure: 0,
-  maxConns: 120,
+  maxConns: 250,
   dht: true,
 });
 

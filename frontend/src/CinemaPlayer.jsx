@@ -73,7 +73,6 @@ export function CinemaPlayer() {
   const savedPositionRef = useRef(0);
   const playbackOffsetRef = useRef(0); // Stream start offset for seamless seek & quality transitions
   const seekTimeRef = useRef(0); // Stable requested start timestamp (only changes on seek / quality change, never on ongoing playback ticks)
-  const stallTimerRef = useRef(null); // Auto-downgrade timer when playback gets stuck
   const lastStallTimeRef = useRef(0);
   const forcePlayTimerRef = useRef(null); // Auto-dismiss overlay if video stalls
   const firstPieceReadyAtRef = useRef(null); // Timestamp when piece 0 was first seen
@@ -167,7 +166,7 @@ export function CinemaPlayer() {
 
         // Adaptive Buffer Safety Runway:
         // Wait until an uninterrupted safety runway is accumulated to prevent stuttering.
-        if (data.isRunwaySafe || (data.hasFirstPiece && (data.downloadSpeed || 0) > 2500000)) {
+        if (!isRebuffering && (data.isRunwaySafe || (data.hasFirstPiece && (data.downloadSpeed || 0) > 2500000))) {
           if (!firstPieceReadyAtRef.current) {
             firstPieceReadyAtRef.current = Date.now();
           }
@@ -176,7 +175,7 @@ export function CinemaPlayer() {
             forcePlayTimerRef.current = setTimeout(() => {
               setIsVideoLoading(false);
               const video = videoRef.current;
-              if (video && !userPausedRef.current) {
+              if (video && !userPausedRef.current && !isRebuffering) {
                 video.playbackRate = playbackSpeed;
                 video.play().catch(() => {});
               }
@@ -209,72 +208,13 @@ export function CinemaPlayer() {
     const effSpeed = smoothedSpeedRef.current;
     const now = Date.now();
 
-    // 1. Initial resolution on load
+    // 1. Initial resolution on load: Native direct for MP4, Remux (lossless copy) for MKV/other
     if (!autoProfileInitializedRef.current) {
       autoProfileInitializedRef.current = true;
-      let initialTarget = 'remux';
-      if (status.isNativeCompatible) {
-        initialTarget = 'direct';
-      } else if (status.isBandwidthConstrained || effSpeed < 1200000) {
-        initialTarget = effSpeed > 650000 ? '1080p' : '720p';
-      }
+      const initialTarget = status.isNativeCompatible ? 'direct' : 'remux';
       setEffectiveAutoProfile(initialTarget);
       lastAutoSwitchRef.current = now;
       return;
-    }
-
-    // 2. Real-time Emergency DOWNGRADE (when buffer health drops below 2.5s or during rebuffering)
-    if (bufferHealthSec < 2.5 || isRebuffering) {
-      if (now - lastAutoSwitchRef.current > 7000) { // 7s cooldown for emergency downgrade
-        let lower = effectiveAutoProfile;
-        if (effectiveAutoProfile === 'remux' || effectiveAutoProfile === 'browser4k') {
-          lower = effSpeed > 750000 ? '1080p' : '720p';
-        } else if (effectiveAutoProfile === '1080p') {
-          lower = '720p';
-        } else if (effectiveAutoProfile === '720p' && effSpeed < 300000) {
-          lower = '480p';
-        }
-
-        if (lower !== effectiveAutoProfile) {
-          const cur = (playbackOffsetRef.current || 0) + (videoRef.current?.currentTime || 0);
-          if (cur > 0) {
-            savedPositionRef.current = cur;
-            seekTimeRef.current = Math.floor(cur);
-            playbackOffsetRef.current = Math.floor(cur);
-          }
-          lastAutoSwitchRef.current = now;
-          lastStallTimeRef.current = now;
-          setEffectiveAutoProfile(lower);
-          setActionFeedback(`⚡ Swarm bottleneck: auto-downgraded to ${lower.toUpperCase()} for uninterrupted streaming`);
-          setTimeout(() => setActionFeedback(''), 3000);
-          return;
-        }
-      }
-    }
-
-    // 3. Opportunistic UPGRADE (when buffer runway is abundant > 15s and speed is sustained)
-    if (bufferHealthSec > 15.0 && now - lastStallTimeRef.current > 20000 && now - lastAutoSwitchRef.current > 20000) {
-      let higher = effectiveAutoProfile;
-      if (effectiveAutoProfile === '480p' && effSpeed > 500000) {
-        higher = '720p';
-      } else if (effectiveAutoProfile === '720p' && effSpeed > 1400000) {
-        higher = '1080p';
-      } else if (effectiveAutoProfile === '1080p' && effSpeed > 3000000 && !status.isBandwidthConstrained) {
-        higher = 'remux';
-      }
-
-      if (higher !== effectiveAutoProfile) {
-        const cur = (playbackOffsetRef.current || 0) + (videoRef.current?.currentTime || 0);
-        if (cur > 0) {
-          savedPositionRef.current = cur;
-          seekTimeRef.current = Math.floor(cur);
-          playbackOffsetRef.current = Math.floor(cur);
-        }
-        lastAutoSwitchRef.current = now;
-        setEffectiveAutoProfile(higher);
-        setActionFeedback(`⚡ Buffer healthy (${bufferHealthSec}s): auto-upgraded to ${higher.toUpperCase()}`);
-        setTimeout(() => setActionFeedback(''), 3000);
-      }
     }
   }, [
     status?.isNativeCompatible,
@@ -305,14 +245,20 @@ export function CinemaPlayer() {
       const aheadSec = Number(ahead.toFixed(1));
       setBufferHealthSec(aheadSec);
 
-      // If rebuffering after an underrun, wait until cushion reaches 5.5 seconds!
+      // Rebuffering cushion controller:
+      // When rebuffering, accumulate at least 3.5s cushion (or 2.0s if runway safe) before resuming
       if (isRebuffering) {
-        const minCushion = (status?.isRunwaySafe && (status?.downloadSpeed || 0) > 2000000) ? 3.0 : 5.5;
-        if (aheadSec >= minCushion || (status?.isRunwaySafe && aheadSec >= 2.5)) {
+        const hasEnoughRunway = aheadSec >= 3.5 || (status?.isRunwaySafe && aheadSec >= 2.0);
+        if (hasEnoughRunway) {
           setIsRebuffering(false);
           setIsVideoLoading(false);
           if (video.paused && !userPausedRef.current) {
             video.play().catch(() => {});
+          }
+        } else {
+          // Keep paused while buffer accumulates in RAM
+          if (!video.paused && !userPausedRef.current) {
+            video.pause();
           }
         }
       }
@@ -510,8 +456,6 @@ export function CinemaPlayer() {
 
   // Restore position and apply speed after quality switch or load
   const handleVideoCanPlay = () => {
-    setIsVideoLoading(false);
-    setIsRebuffering(false);
     const video = videoRef.current;
     if (!video) return;
 
@@ -519,6 +463,16 @@ export function CinemaPlayer() {
       video.currentTime = savedPositionRef.current;
     }
     video.playbackRate = playbackSpeed;
+
+    // If actively rebuffering, wait for the cushion controller to release
+    if (isRebuffering) {
+      if (!video.paused && !userPausedRef.current) {
+        video.pause();
+      }
+      return;
+    }
+
+    setIsVideoLoading(false);
     if (video.paused && !userPausedRef.current) {
       video.play().catch(() => {});
     }
@@ -567,27 +521,25 @@ export function CinemaPlayer() {
     setIsVideoLoading(true);
     setIsRebuffering(true);
     lastStallTimeRef.current = Date.now();
-    // In auto mode, if stalled for > 3.5s, auto-downgrade to unfreeze
-    if (streamMode === 'auto' && !stallTimerRef.current) {
-      stallTimerRef.current = setTimeout(() => {
-        stallTimerRef.current = null;
-        if (effectiveAutoProfile === 'remux' || effectiveAutoProfile === 'browser4k' || effectiveAutoProfile === '1080p') {
-          handleQualityChange('720p');
-        } else if (effectiveAutoProfile === '720p') {
-          handleQualityChange('480p');
-        }
-      }, 3500);
+    // Rebuffering: cleanly pause decoding so data accumulates a healthy cushion instead of rapid 1-frame jitter
+    const video = videoRef.current;
+    if (video && !video.paused && !userPausedRef.current) {
+      video.pause();
     }
   };
 
   const handlePlaying = () => {
+    if (isRebuffering && bufferHealthSec < 2.0) {
+      // Don't let a stray single frame un-pause before cushion is reached
+      const video = videoRef.current;
+      if (video && !video.paused && !userPausedRef.current) {
+        video.pause();
+        return;
+      }
+    }
     setIsVideoLoading(false);
     setIsRebuffering(false);
     setIsPaused(false);
-    if (stallTimerRef.current) {
-      clearTimeout(stallTimerRef.current);
-      stallTimerRef.current = null;
-    }
   };
 
   // Speed Control

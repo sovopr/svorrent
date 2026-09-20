@@ -70,6 +70,57 @@ app.get('/api/magnet', async (req, res) => {
   }
 });
 
+// Real-time torrent status & progress endpoint
+app.get('/api/torrent/status', async (req, res) => {
+  let magnetURI = req.query.magnet;
+  const { provider, desc, link } = req.query;
+
+  if (!magnetURI && provider && (desc || link)) {
+    try {
+      magnetURI = await TorrentSearchApi.getMagnet({ provider, desc, link });
+    } catch (err) {
+      return res.status(400).json({ error: 'Could not resolve magnet: ' + err.message });
+    }
+  }
+
+  if (!magnetURI) {
+    return res.status(400).json({ error: 'Magnet URI or provider details required' });
+  }
+
+  let torrent = await client.get(magnetURI);
+  if (!torrent) {
+    try {
+      torrent = client.add(magnetURI);
+    } catch (err) {
+      return res.status(500).json({ error: 'Failed to add torrent: ' + err.message });
+    }
+
+    torrent.on('error', (err) => {
+      console.error('Torrent status client error:', err.message);
+    });
+  }
+
+  const files = torrent.files ? torrent.files.map((f) => ({ name: f.name, length: f.length })) : [];
+  const largestFile = torrent.files && torrent.files.length > 0
+    ? torrent.files.reduce((a, b) => (a.length > b.length ? a : b))
+    : null;
+
+  return res.json({
+    magnet: magnetURI,
+    name: torrent.name || 'Resolving metadata from swarm...',
+    ready: !!torrent.ready,
+    progress: torrent.progress || 0,
+    downloadSpeed: torrent.downloadSpeed || 0,
+    uploadSpeed: torrent.uploadSpeed || 0,
+    numPeers: torrent.numPeers || 0,
+    downloaded: torrent.downloaded || 0,
+    length: torrent.length || (largestFile ? largestFile.length : 0),
+    fileName: largestFile ? largestFile.name : null,
+    files,
+    streamUrl: `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(magnetURI)}`,
+  });
+});
+
 // Stream / Direct download endpoint
 app.get('/api/stream', async (req, res) => {
   let magnetURI = req.query.magnet;
@@ -88,6 +139,15 @@ app.get('/api/stream', async (req, res) => {
     return res.status(400).send('Magnet URI or provider/desc parameters required');
   }
 
+  // If request comes from a direct browser navigation (Accept: text/html) and raw != true,
+  // redirect to the frontend player so the user sees the real-time progress loader instead of a blank screen
+  const isHtmlNavigation = req.headers.accept && req.headers.accept.includes('text/html') && req.query.raw !== 'true';
+  if (isHtmlNavigation) {
+    const streamTarget = new URLSearchParams();
+    streamTarget.set('streamMagnet', magnetURI);
+    return res.redirect(`http://localhost:5173/?${streamTarget.toString()}`);
+  }
+
   // Check if torrent already exists in client
   let torrent = await client.get(magnetURI);
 
@@ -99,21 +159,21 @@ app.get('/api/stream', async (req, res) => {
     }
 
     torrent.on('error', (err) => {
-      console.error('Torrent client error:', err);
+      console.error('Torrent stream client error:', err);
       if (!res.headersSent) {
         res.status(500).send('Torrent stream error: ' + err.message);
       }
     });
   }
 
-  // Safety timeout: if swarm doesn't respond within 25 seconds
+  // Safety timeout: if swarm doesn't respond within 35 seconds
   const swarmTimeout = setTimeout(() => {
     if (!res.headersSent) {
       res.status(504).send(
         'Swarm timeout: No active peers found to stream directly in the browser. Please use the "Magnet" button to download using your desktop client.'
       );
     }
-  }, 25000);
+  }, 35000);
 
   if (torrent.ready) {
     streamFile();
@@ -168,7 +228,9 @@ app.get('/api/stream', async (req, res) => {
       };
 
       res.writeHead(206, head);
-      file.createReadStream({ start, end }).pipe(res);
+      const stream = file.createReadStream({ start, end });
+      stream.pipe(res);
+      req.on('close', () => stream.destroy());
     } else {
       const head = {
         'Content-Length': file.length,
@@ -176,7 +238,9 @@ app.get('/api/stream', async (req, res) => {
         'Content-Disposition': `inline; filename="${encodeURIComponent(file.name)}"`,
       };
       res.writeHead(200, head);
-      file.createReadStream().pipe(res);
+      const stream = file.createReadStream();
+      stream.pipe(res);
+      req.on('close', () => stream.destroy());
     }
   }
 });

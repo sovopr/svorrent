@@ -491,17 +491,38 @@ app.post('/api/torrent/:id/delete', async (req, res) => {
 // Reveal in macOS Finder / Windows File Explorer
 app.post('/api/torrent/:id/open-finder', async (req, res) => {
   const torrent = await client.get(req.params.id);
-  const targetPath = torrent ? torrent.path : DOWNLOAD_DIR;
-  const cmd = process.platform === 'win32'
-    ? `explorer.exe "${targetPath}"`
-    : process.platform === 'darwin'
-    ? `open "${targetPath}"`
-    : `xdg-open "${targetPath}"`;
+  ensureDownloadDir();
 
-  exec(cmd, (err) => {
+  // Permanent downloads belong in DOWNLOAD_DIR. Stream-only torrents may
+  // point at a temporary in-memory/cache location, so never reveal that path.
+  const configuredPath = torrent && torrent._isPermanentDownload && torrent.path
+    ? torrent.path
+    : DOWNLOAD_DIR;
+  const basePath = fs.existsSync(configuredPath) ? configuredPath : DOWNLOAD_DIR;
+  const largestFile = torrent?.files?.length
+    ? torrent.files.reduce((a, b) => (a.length > b.length ? a : b))
+    : null;
+  const candidateFile = largestFile?.path ? path.join(basePath, largestFile.path) : null;
+  const targetFile = candidateFile && fs.existsSync(candidateFile) ? candidateFile : null;
+
+  const onOpen = (err) => {
     if (err) return res.status(500).json({ error: err.message });
-    res.json({ success: true, path: targetPath });
-  });
+    res.json({ success: true, path: targetFile || basePath });
+  };
+
+  if (process.platform === 'darwin') {
+    // Reveal the actual partial file when available; otherwise open the
+    // configured folder so Finder still lands somewhere useful.
+    return spawn('open', targetFile ? ['-R', targetFile] : [basePath]).on('error', onOpen).on('close', (code) => {
+      if (code !== 0) return onOpen(new Error('Finder could not open the download location'));
+      onOpen(null);
+    });
+  }
+
+  const cmd = process.platform === 'win32'
+    ? `explorer.exe "${basePath}"`
+    : `xdg-open "${basePath}"`;
+  exec(cmd, onOpen);
 });
 
 function getMimeType(filename) {

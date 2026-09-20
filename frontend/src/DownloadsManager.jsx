@@ -67,8 +67,14 @@ export function DownloadsManager() {
   };
 
   const handleOpenFinder = async (infoHash) => {
-    await fetch(`http://localhost:3001/api/torrent/${infoHash}/open-finder`, { method: 'POST' });
-    setActionFeedback('Opened download location');
+    try {
+      const res = await fetch(`http://localhost:3001/api/torrent/${infoHash}/open-finder`, { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Could not open download location');
+      setActionFeedback(data.path ? `Opened: ${data.path}` : 'Opened download location');
+    } catch (err) {
+      setActionFeedback(err.message);
+    }
     setTimeout(() => setActionFeedback(''), 2500);
   };
 

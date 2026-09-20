@@ -8,6 +8,7 @@ import zlib from 'node:zlib';
 import TorrentSearchApi from 'torrent-search-api';
 import WebTorrent from 'webtorrent';
 import peerid from 'bittorrent-peerid';
+import MemoryChunkStore from 'memory-chunk-store';
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -132,10 +133,15 @@ async function getOrAddTorrent(magnetURI, opts = {}) {
   let torrent = await client.get(magnetURI);
   if (!torrent) {
     const isPermanent = opts.isPermanentDownload === true || (!opts.isStreamOnly && opts.path === DOWNLOAD_DIR);
-    const savePath = opts.path || (isPermanent ? DOWNLOAD_DIR : STREAM_CACHE_DIR);
-    torrent = client.add(magnetURI, {
-      path: savePath,
-    });
+
+    // Stream-only torrents use in-memory storage (zero disk footprint, like Netflix).
+    // Permanent downloads use ~/Downloads/Svorrent on disk as expected.
+    const addOpts = isPermanent
+      ? { path: opts.path || DOWNLOAD_DIR }
+      : { store: MemoryChunkStore };
+
+    torrent = client.add(magnetURI, addOpts);
+
     torrent._isPermanentDownload = isPermanent;
     torrent._isStreamOnly = !isPermanent;
     torrent._addedAt = Date.now();

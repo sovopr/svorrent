@@ -1,7 +1,7 @@
-const express = require('express');
-const cors = require('cors');
-const TorrentSearchApi = require('torrent-search-api');
-const WebTorrent = require('webtorrent');
+import express from 'express';
+import cors from 'cors';
+import TorrentSearchApi from 'torrent-search-api';
+import WebTorrent from 'webtorrent';
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -10,9 +10,13 @@ const client = new WebTorrent();
 app.use(cors());
 app.use(express.json());
 
-// Enable active public providers for search
-TorrentSearchApi.enablePublicProviders();
+// Enable working public providers
+TorrentSearchApi.disableAllProviders();
+TorrentSearchApi.enableProvider('ThePirateBay');
+TorrentSearchApi.enableProvider('Limetorrents');
+TorrentSearchApi.enableProvider('TorrentProject');
 
+// Search endpoint
 app.get('/api/search', async (req, res) => {
   const query = req.query.q;
   if (!query) {
@@ -20,82 +24,123 @@ app.get('/api/search', async (req, res) => {
   }
 
   try {
-    // Search up to 20 results across all categories
-    const torrents = await TorrentSearchApi.search(query, 'All', 20);
-    
-    // Some indexers don't return magnets directly, but the API usually tries.
-    // We will return everything, but prioritize those with magnets.
-    res.json(torrents);
+    const torrents = await TorrentSearchApi.search(query, 'All', 30);
+    // Sort by seeds descending
+    const sorted = (torrents || []).sort((a, b) => (parseInt(b.seeds) || 0) - (parseInt(a.seeds) || 0));
+    res.json(sorted);
   } catch (error) {
     console.error('Search error:', error);
     res.status(500).json({ error: 'Failed to search torrents' });
   }
 });
 
+// Resolve Magnet endpoint
+app.get('/api/magnet', async (req, res) => {
+  const { provider, desc, link, magnet } = req.query;
+
+  if (magnet) {
+    return res.json({ magnet });
+  }
+
+  if (!provider) {
+    return res.status(400).json({ error: 'Provider is required to resolve magnet' });
+  }
+
+  try {
+    const resolvedMagnet = await TorrentSearchApi.getMagnet({ provider, desc, link });
+    if (!resolvedMagnet) {
+      return res.status(404).json({ error: 'Magnet link could not be found' });
+    }
+    res.json({ magnet: resolvedMagnet });
+  } catch (err) {
+    console.error('Magnet resolution error:', err);
+    res.status(500).json({ error: 'Failed to resolve magnet: ' + err.message });
+  }
+});
+
+// Stream / Direct download endpoint
 app.get('/api/stream', async (req, res) => {
   let magnetURI = req.query.magnet;
-  
-  if (!magnetURI) {
-    // Some providers might need us to fetch the magnet explicitly if it wasn't returned in the search list
-    const torrentDesc = req.query.desc; // We can pass a description URL if magnet is missing
-    if (torrentDesc) {
-      try {
-        magnetURI = await TorrentSearchApi.getMagnet({ desc: torrentDesc });
-      } catch (err) {
-        return res.status(400).send('Could not fetch magnet URI from description');
-      }
-    }
-    
-    if (!magnetURI) {
-        return res.status(400).send('Magnet URI or description link is required');
+  const { provider, desc, link } = req.query;
+
+  if (!magnetURI && provider && (desc || link)) {
+    try {
+      magnetURI = await TorrentSearchApi.getMagnet({ provider, desc, link });
+    } catch (err) {
+      console.error('Stream getMagnet error:', err);
+      return res.status(400).send('Could not fetch magnet URI: ' + err.message);
     }
   }
 
-  // Check if already downloading this magnet
+  if (!magnetURI) {
+    return res.status(400).send('Magnet URI or provider/desc parameters required');
+  }
+
+  // Check if torrent already exists in client
   let torrent = client.get(magnetURI);
 
   if (!torrent) {
-    torrent = client.add(magnetURI);
-    
+    try {
+      torrent = client.add(magnetURI);
+    } catch (err) {
+      return res.status(500).send('Error adding torrent: ' + err.message);
+    }
+
     torrent.on('error', (err) => {
-      console.error('Torrent error:', err);
+      console.error('Torrent client error:', err);
       if (!res.headersSent) {
-          res.status(500).send('Torrent stream error');
+        res.status(500).send('Torrent stream error: ' + err.message);
       }
     });
   }
 
+  // Safety timeout: if swarm doesn't respond within 25 seconds
+  const swarmTimeout = setTimeout(() => {
+    if (!res.headersSent) {
+      res.status(504).send(
+        'Swarm timeout: No active peers found to stream directly in the browser. Please use the "Magnet" button to download using your desktop client.'
+      );
+    }
+  }, 25000);
+
   if (torrent.ready) {
     streamFile();
   } else {
-    torrent.on('ready', streamFile);
+    torrent.once('ready', streamFile);
   }
 
   function streamFile() {
-    // Find the largest file in the torrent (usually the main video)
+    clearTimeout(swarmTimeout);
+    if (res.headersSent) return;
+
+    if (!torrent.files || torrent.files.length === 0) {
+      return res.status(404).send('No files found in torrent');
+    }
+
+    // Find the largest file (typically the primary movie, ISO, or archive)
     const file = torrent.files.reduce((a, b) => (a.length > b.length ? a : b));
 
     const range = req.headers.range;
     if (range) {
-      const parts = range.replace(/bytes=/, "").split("-");
+      const parts = range.replace(/bytes=/, '').split('-');
       const start = parseInt(parts[0], 10);
       const end = parts[1] ? parseInt(parts[1], 10) : file.length - 1;
-      const chunksize = (end - start) + 1;
-      
+      const chunksize = end - start + 1;
+
       const head = {
         'Content-Range': `bytes ${start}-${end}/${file.length}`,
         'Accept-Ranges': 'bytes',
         'Content-Length': chunksize,
-        'Content-Type': 'video/mp4', // Default to mp4 for video streaming
+        'Content-Type': 'video/mp4',
       };
-      
+
       res.writeHead(206, head);
       file.createReadStream({ start, end }).pipe(res);
     } else {
       const head = {
         'Content-Length': file.length,
-        'Content-Type': 'application/octet-stream', // Fallback for raw download
-        'Content-Disposition': `attachment; filename="${file.name}"`
+        'Content-Type': 'application/octet-stream',
+        'Content-Disposition': `attachment; filename="${encodeURIComponent(file.name)}"`,
       };
       res.writeHead(200, head);
       file.createReadStream().pipe(res);

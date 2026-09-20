@@ -94,9 +94,7 @@ function App() {
   return (
     <div className="container">
       <header>
-        <div className="logo-badge">Svorrent</div>
-        <h1>Torrent Discovery & 1-Click Launch</h1>
-        <p className="subtitle">Instant aggregator across top trackers with native client launch and proxy streaming.</p>
+        <h1>Svorrent</h1>
       </header>
 
       <form className="search-box" onSubmit={handleSearch}>

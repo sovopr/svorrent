@@ -1137,21 +1137,29 @@ app.get('/api/stream/remux', async (req, res) => {
         : ['-c:v', 'libx264', '-preset', 'ultrafast', '-b:v', '1.5M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p'];
     }
 
+    // For transcode modes, force IDR keyframes every 2s so the browser can seek/start cleanly
+    const gopArgs = (mode === 'copy' || mode === 'remux')
+      ? []  // copy mode: no transcoding, no forced GOP
+      : ['-g', '48', '-keyint_min', '24'];  // ~2s keyframe interval at 24fps
+
     const ffmpegArgs = [
       '-hide_banner',
-      '-loglevel', 'error',
-      '-probesize', '1048576',
-      '-analyzeduration', '1000000',
-      '-fflags', '+nobuffer+fastseek',
-      '-flush_packets', '1',
+      '-loglevel', 'warning',
+      '-fflags', '+discardcorrupt+genpts+igndts',
+      '-probesize', '32768',
+      '-analyzeduration', '50000',
       '-i', 'pipe:0',
+      '-avoid_negative_ts', 'make_zero',    // fix DTS/PTS so browser timeline starts at 0
       '-map', '0:v:0',
       '-map', '0:a:0?',
       ...vCodecArgs,
+      ...gopArgs,
       '-c:a', 'aac',
-      '-b:a', '256k',
+      '-b:a', '192k',
       '-ac', '2',
+      '-ar', '48000',
       '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+      '-flush_packets', '1',
       '-f', 'mp4',
       'pipe:1',
     ];

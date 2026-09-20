@@ -304,6 +304,18 @@ function App() {
                 <div className="result-title" title={torrent.title}>{torrent.title}</div>
                 <div className="result-meta">
                   <span className="meta-tag size-tag">{torrent.size || 'Unknown Size'}</span>
+                  {(() => {
+                    const sizeStr = (torrent.size || '').toLowerCase();
+                    const isHeavy = sizeStr.includes('gb') && parseFloat(sizeStr) >= 15;
+                    const isFast = (sizeStr.includes('gb') && parseFloat(sizeStr) <= 3.5) || sizeStr.includes('mb');
+                    if (isFast) {
+                      return <span className="meta-tag" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.3)' }}>⚡ Instant Stream</span>;
+                    }
+                    if (isHeavy) {
+                      return <span className="meta-tag" style={{ background: 'rgba(59, 130, 246, 0.15)', color: '#60a5fa', border: '1px solid rgba(59, 130, 246, 0.3)' }}>💎 BluRay Transcode Ready</span>;
+                    }
+                    return null;
+                  })()}
                   <span className="meta-tag seeds-tag" title="Seeders">
                     ▲ {torrent.seeds ?? 0} seeds
                   </span>

@@ -36,12 +36,11 @@ export function CinemaPlayer() {
   };
   const isSafariBrowser = /safari/i.test(navigator.userAgent) && !/chrome|chromium|android/i.test(navigator.userAgent);
 
-  // Quality / Stream Mode: 'direct' | 'remux' | '1080p' | '720p' | '480p'
-  const [streamMode, setStreamMode] = useState(() => {
-    const title = new URLSearchParams(window.location.search).get('title') || '';
-    if (isNativeVideoFile(title)) return 'direct';
-    return 'direct';
-  });
+  // Quality / Stream Mode: 'auto' | 'direct' | 'remux' | '1080p' | '720p' | '480p'
+  const [streamMode, setStreamMode] = useState('auto');
+  const [effectiveAutoProfile, setEffectiveAutoProfile] = useState('remux');
+  const [bufferHealthSec, setBufferHealthSec] = useState(0);
+  const [isRebuffering, setIsRebuffering] = useState(false);
   const [status, setStatus] = useState(null);
   const [error, setError] = useState('');
   const [actionFeedback, setActionFeedback] = useState('');
@@ -75,6 +74,9 @@ export function CinemaPlayer() {
   const forcePlayTimerRef = useRef(null); // Auto-dismiss overlay if video stalls
   const firstPieceReadyAtRef = useRef(null); // Timestamp when piece 0 was first seen
   const userPausedRef = useRef(false);
+  const lastAutoSwitchRef = useRef(0);
+  const smoothedSpeedRef = useRef(0);
+  const autoProfileInitializedRef = useRef(false);
 
   // Online Subtitles Search Method
   const searchOnlineSubtitles = async (searchTarget, langCode = subtitleLang) => {
@@ -142,16 +144,9 @@ export function CinemaPlayer() {
         if (data.magnet && !params.magnet) {
           setParams((prev) => ({ ...prev, magnet: data.magnet }));
         }
-        // Always enforce the safe mode for the resolved container. A page can
-        // receive an early status response before metadata settles; selecting
-        // Direct once at that point incorrectly sends MKV into Safari/Chrome.
-        if (data.fileName) {
-          const nativeCompatible = data.isNativeCompatible === true && isNativeVideoFile(data.fileName);
-          const desiredMode = nativeCompatible ? 'direct' : 'remux';
+        if (data.fileName && !hasAutoSelectedModeRef.current) {
           hasAutoSelectedModeRef.current = true;
-          // Use a functional update so this remains correct even while the
-          // polling effect holds an older render in its closure.
-          setStreamMode((currentMode) => currentMode === desiredMode ? currentMode : desiredMode);
+          // Auto remains active by default
         }
 
         // Adaptive Buffer Safety Runway:
@@ -185,6 +180,103 @@ export function CinemaPlayer() {
     };
   }, [params.magnet, params.provider, params.desc, params.link]);
 
+  // Dynamic ABR: Resolve effective quality profile for Auto mode (YouTube Style)
+  useEffect(() => {
+    if (!status) return;
+
+    // Smooth download speed to prevent jitter
+    const currentSpeed = status.downloadSpeed || 0;
+    if (smoothedSpeedRef.current === 0) {
+      smoothedSpeedRef.current = currentSpeed;
+    } else {
+      smoothedSpeedRef.current = 0.7 * smoothedSpeedRef.current + 0.3 * currentSpeed;
+    }
+    const effSpeed = smoothedSpeedRef.current;
+
+    let target = 'remux';
+    if (status.isNativeCompatible) {
+      target = 'direct';
+    } else if (
+      status.isBandwidthConstrained ||
+      (status.length && status.length > 15 * 1024 * 1024 * 1024) ||
+      status.sourceIsRemuxRelease
+    ) {
+      // Swarm speed is lower than raw BluRay bitrate, or it's a massive release.
+      // Choose a hardware-accelerated profile that streams smoothly like YouTube!
+      if (effSpeed > 750000) {
+        target = '1080p'; // ~560 KB/s - plays continuously on 1.3 MB/s
+      } else {
+        target = '720p'; // ~310 KB/s - plays continuously on low bandwidth
+      }
+    } else {
+      target = 'remux';
+    }
+
+    // Initial resolution on load: apply immediately so playback starts with the right profile
+    if (!autoProfileInitializedRef.current) {
+      autoProfileInitializedRef.current = true;
+      setEffectiveAutoProfile(target);
+      lastAutoSwitchRef.current = Date.now();
+      return;
+    }
+
+    // Cooldown check for subsequent auto switches (min 20 seconds to prevent rapid thrashing)
+    const now = Date.now();
+    if (target !== effectiveAutoProfile && now - lastAutoSwitchRef.current > 20000) {
+      // Save current video position before changing stream URL
+      const video = videoRef.current;
+      if (video && video.currentTime > 0) {
+        savedPositionRef.current = video.currentTime;
+      }
+      lastAutoSwitchRef.current = now;
+      setEffectiveAutoProfile(target);
+      setActionFeedback(`⚡ Auto-adjusted quality to ${target.toUpperCase()} for uninterrupted streaming`);
+      setTimeout(() => setActionFeedback(''), 3000);
+    }
+  }, [
+    status?.isNativeCompatible,
+    status?.isBandwidthConstrained,
+    status?.downloadSpeed,
+    status?.length,
+    status?.sourceIsRemuxRelease,
+    effectiveAutoProfile,
+  ]);
+
+  // YouTube-Style Buffer Health Monitor & Rebuffering Cushion Controller
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const video = videoRef.current;
+      if (!video || !video.buffered || !video.buffered.length) {
+        setBufferHealthSec(0);
+        return;
+      }
+      const ct = video.currentTime || 0;
+      let ahead = 0;
+      for (let i = 0; i < video.buffered.length; i++) {
+        if (video.buffered.start(i) <= ct + 0.3 && ct <= video.buffered.end(i)) {
+          ahead = video.buffered.end(i) - ct;
+          break;
+        }
+      }
+      const aheadSec = Number(ahead.toFixed(1));
+      setBufferHealthSec(aheadSec);
+
+      // If rebuffering after an underrun, wait until cushion reaches 5.5 seconds!
+      if (isRebuffering) {
+        const minCushion = (status?.isRunwaySafe && (status?.downloadSpeed || 0) > 2000000) ? 3.0 : 5.5;
+        if (aheadSec >= minCushion || (status?.isRunwaySafe && aheadSec >= 2.5)) {
+          setIsRebuffering(false);
+          setIsVideoLoading(false);
+          if (video.paused && !userPausedRef.current) {
+            video.play().catch(() => {});
+          }
+        }
+      }
+    }, 250);
+
+    return () => clearInterval(interval);
+  }, [isRebuffering, status?.isRunwaySafe, status?.downloadSpeed]);
+
   // Compute live stream URL based on mode
   // 'direct' = native HTTP 206 byte-range stream (MP4/WebM, no FFmpeg, instant)
   // 'remux'  = FFmpeg fmp4 pipe (for MKV/TrueHD/DTS files)
@@ -199,23 +291,23 @@ export function CinemaPlayer() {
     // Don't expose src until we have piece 0 + infoHash.
     // If we set src too early, the video element fires onerror immediately which
     // cascades: direct → remux → 1080p even for native MP4 files.
+    const activeMode = streamMode === 'auto' ? effectiveAutoProfile : streamMode;
     if (!status?.hasFirstPiece || !infoHash) return '';
-    if (streamMode !== 'direct' && !hasRemuxBuffer) return '';
+    if (activeMode !== 'direct' && !hasRemuxBuffer) return '';
 
-    if (streamMode === 'direct') {
+    if (activeMode === 'direct') {
       return `http://localhost:3001/api/torrent/${infoHash}/stream`;
-    } else if (streamMode === 'remux') {
+    } else if (activeMode === 'remux') {
       return `http://localhost:3001/api/stream/remux?mode=copy&attempt=${remuxAttempt}&magnet=${encodeURIComponent(effectiveMagnet)}`;
-    } else if (streamMode === '1080p') {
+    } else if (activeMode === '1080p') {
       return `http://localhost:3001/api/stream/remux?mode=1080p&magnet=${encodeURIComponent(effectiveMagnet)}`;
-    } else if (streamMode === '720p') {
+    } else if (activeMode === '720p') {
       return `http://localhost:3001/api/stream/remux?mode=720p&magnet=${encodeURIComponent(effectiveMagnet)}`;
-    } else if (streamMode === '480p') {
+    } else if (activeMode === '480p') {
       return `http://localhost:3001/api/stream/remux?mode=480p&magnet=${encodeURIComponent(effectiveMagnet)}`;
-    } else if (streamMode === 'browser4k') {
+    } else if (activeMode === 'browser4k') {
       return `http://localhost:3001/api/stream/remux?mode=browser4k&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else {
-      // 'copy' legacy fallback
       return `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(effectiveMagnet)}`;
     }
   };
@@ -557,6 +649,13 @@ export function CinemaPlayer() {
                 <span className="control-label">QUALITY:</span>
                 <div className="control-pill-group">
                   <button
+                    className={`control-pill-btn ${streamMode === 'auto' ? 'active' : ''}`}
+                    onClick={() => handleQualityChange('auto')}
+                    title="YouTube-Style Adaptive Bitrate — automatically adjusts quality based on swarm throughput to eliminate all buffering"
+                  >
+                    ⚡ Auto {streamMode === 'auto' && effectiveAutoProfile ? `(${effectiveAutoProfile.toUpperCase()})` : ''}
+                  </button>
+                  <button
                     className={`control-pill-btn ${streamMode === 'direct' ? 'active' : ''}`}
                     onClick={() => handleQualityChange('direct')}
                     disabled={status?.isNativeCompatible === false}
@@ -569,7 +668,7 @@ export function CinemaPlayer() {
                     onClick={() => handleQualityChange('remux')}
                     title="Browser playback adapter — keeps the source video intact and only repackages unsupported containers"
                   >
-                    💎 Browser
+                    💎 Source
                   </button>
                   <button
                     className={`control-pill-btn ${streamMode === '1080p' ? 'active' : ''}`}
@@ -592,6 +691,35 @@ export function CinemaPlayer() {
                   >
                     480p
                   </button>
+                </div>
+
+                {/* YouTube Buffer Health Live Gauge */}
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  background: bufferHealthSec > 12 ? 'rgba(16, 185, 129, 0.15)' : bufferHealthSec > 4 ? 'rgba(59, 130, 246, 0.15)' : 'rgba(239, 68, 68, 0.15)',
+                  border: `1px solid ${bufferHealthSec > 12 ? 'rgba(16, 185, 129, 0.4)' : bufferHealthSec > 4 ? 'rgba(59, 130, 246, 0.4)' : 'rgba(239, 68, 68, 0.4)'}`,
+                  color: bufferHealthSec > 12 ? '#34d399' : bufferHealthSec > 4 ? '#60a5fa' : '#f87171',
+                  fontSize: '0.74rem',
+                  fontWeight: '600',
+                  marginLeft: '8px',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.2)'
+                }}>
+                  <span style={{
+                    display: 'inline-block',
+                    width: '7px',
+                    height: '7px',
+                    borderRadius: '50%',
+                    background: bufferHealthSec > 12 ? '#34d399' : bufferHealthSec > 4 ? '#60a5fa' : '#f87171',
+                    boxShadow: `0 0 6px ${bufferHealthSec > 12 ? '#34d399' : bufferHealthSec > 4 ? '#60a5fa' : '#f87171'}`
+                  }}></span>
+                  <span>Buffer: {bufferHealthSec}s</span>
+                  {isRebuffering && (
+                    <span style={{ color: '#fbbf24', marginLeft: '4px', fontSize: '0.7rem' }}>(Cushioning...)</span>
+                  )}
                 </div>
               </div>
 
@@ -899,23 +1027,33 @@ export function CinemaPlayer() {
                       src={streamUrl}
                       onWaiting={() => {
                         setIsVideoLoading(true);
-                        // A slow swarm can temporarily exhaust the buffer.
-                        // Keep the player in a recoverable state and let the
-                        // canplay event resume it when the next pieces arrive.
+                        setIsRebuffering(true);
+                        const video = videoRef.current;
+                        if (video && !video.paused) {
+                          video.pause();
+                        }
                       }}
-                      onPlaying={() => setIsVideoLoading(false)}
+                      onPlaying={() => {
+                        setIsVideoLoading(false);
+                        setIsRebuffering(false);
+                      }}
                       onPlay={() => {
                         userPausedRef.current = false;
                         setIsVideoLoading(false);
                       }}
                       onPause={() => {
-                        if (!isVideoLoading) userPausedRef.current = true;
+                        if (!isVideoLoading && !isRebuffering) {
+                          userPausedRef.current = true;
+                        }
                       }}
-                      onLoadedData={() => setIsVideoLoading(false)}
+                      onLoadedData={() => {
+                        if (!isRebuffering) setIsVideoLoading(false);
+                      }}
                       onCanPlay={() => {
                         handleVideoCanPlay();
                         const video = videoRef.current;
-                        if (video && video.paused && !userPausedRef.current) {
+                        // CRITICAL ANTI-STALL: If we are rebuffering a cushion, do NOT resume prematurely on a 50ms packet!
+                        if (!isRebuffering && video && video.paused && !userPausedRef.current) {
                           video.play().catch(() => {});
                         }
                       }}
@@ -942,15 +1080,19 @@ export function CinemaPlayer() {
                           <div className="buffer-spinner-glow"></div>
                           <div>
                             <h3 className="buffer-title">
-                              {!streamReady
+                              {isRebuffering
+                                ? 'Buffering Safety Cushion...'
+                                : !streamReady
                                 ? 'Buffering BitTorrent Stream'
                                 : status?.isRunwaySafe
                                 ? 'Ready to Stream!'
                                 : 'Building Safety Buffer...'}
                             </h3>
                             <p className="buffer-desc">
-                              {!streamReady
-                                ? 'Connecting to swarm and downloading initial piece...'
+                              {isRebuffering
+                                ? `Holding playback briefly in memory to accumulate a ${bufferHealthSec}s / 5.5s buffer runway. Prevents choppy start-stop stuttering.`
+                                : !streamReady
+                                ? 'Connecting to swarm and downloading initial piece into memory...'
                                 : status?.isRunwaySafe
                                 ? 'Buffer runway secured — smooth playback ready.'
                                 : `Buffering pieces in memory to prevent mid-movie stalling (${status?.runwayPiecesReady || 0}/${status?.targetRunwayPieces || 6} pieces). Click Play Now to start immediately.`}
@@ -958,12 +1100,14 @@ export function CinemaPlayer() {
                           </div>
                         </div>
 
-                        {/* Runway Buffer Meter — shown while accumulating safety runway */}
-                        {streamReady && !status?.isRunwaySafe && (
-                          <div className="buffer-piece-meter" style={{ marginTop: '0.5rem', marginBottom: '0.5rem' }}>
+                        {/* Runway Buffer Meter — shown while accumulating safety runway or rebuffering cushion */}
+                        {(isRebuffering || (streamReady && !status?.isRunwaySafe)) && (
+                          <div className="buffer-piece-meter" style={{ marginTop: '0.65rem', marginBottom: '0.65rem' }}>
                             <div className="meter-label-row">
                               <span className="meter-main-text">
-                                Buffer Runway: {status?.runwayPiecesReady || 0} / {status?.targetRunwayPieces || 6} pieces ({formatBytes(status?.runwayBytesReady || 0)})
+                                {isRebuffering
+                                  ? `🛡️ Buffer Cushion: ${bufferHealthSec}s / 5.5s`
+                                  : `Buffer Runway: ${status?.runwayPiecesReady || 0} / ${status?.targetRunwayPieces || 6} pieces (${formatBytes(status?.runwayBytesReady || 0)})`}
                               </span>
                               <span className="meter-speed-text">
                                 ⚡ {formatBytes(status?.downloadSpeed || 0)}/s • {status?.numPeers || 0} peers
@@ -973,8 +1117,9 @@ export function CinemaPlayer() {
                               <div
                                 className="meter-bar-fill"
                                 style={{
-                                  width: `${Math.max(status?.runwayProgress || 0, 12)}%`,
-                                  background: 'linear-gradient(90deg, #3b82f6, #10b981)',
+                                  width: `${isRebuffering ? Math.min(100, Math.max(8, Math.round((bufferHealthSec / 5.5) * 100))) : Math.max(status?.runwayProgress || 0, 12)}%`,
+                                  background: isRebuffering ? 'linear-gradient(90deg, #3b82f6, #06b6d4, #10b981)' : 'linear-gradient(90deg, #3b82f6, #10b981)',
+                                  transition: 'width 0.25s ease',
                                 }}
                               ></div>
                             </div>
@@ -996,22 +1141,22 @@ export function CinemaPlayer() {
                             <div style={{ fontWeight: 'bold', marginBottom: '3px' }}>⚡ Why is it stopping?</div>
                             <div style={{ marginBottom: '8px', color: 'rgba(255,255,255,0.85)', lineHeight: '1.3' }}>
                               This 35GB BluRay requires <strong>~{formatBytes(status.requiredBitrateBytesPerSec)}/s</strong>, but the swarm is currently delivering <strong>{formatBytes(status.downloadSpeed)}/s</strong>.
-                              Switch to <strong>1080p</strong> or <strong>720p</strong> below to stream smoothly without pausing.
+                              Switch to <strong>Auto</strong> or <strong>1080p Smooth</strong> below to stream smoothly without pausing.
                             </div>
                             <div style={{ display: 'flex', gap: '8px' }}>
+                              <button
+                                className="control-pill-btn"
+                                style={{ background: '#3b82f6', color: '#fff', fontWeight: 'bold', padding: '4px 10px', fontSize: '0.74rem' }}
+                                onClick={() => handleQualityChange('auto')}
+                              >
+                                ⚡ Switch to Auto Mode
+                              </button>
                               <button
                                 className="control-pill-btn"
                                 style={{ background: '#eab308', color: '#000', fontWeight: 'bold', padding: '4px 10px', fontSize: '0.74rem' }}
                                 onClick={() => handleQualityChange('1080p')}
                               >
-                                ⚡ Switch to 1080p Smooth
-                              </button>
-                              <button
-                                className="control-pill-btn"
-                                style={{ padding: '4px 10px', fontSize: '0.74rem' }}
-                                onClick={() => handleQualityChange('720p')}
-                              >
-                                ⚡ Switch to 720p Fast
+                                ⚡ 1080p Smooth
                               </button>
                             </div>
                           </div>
@@ -1022,6 +1167,8 @@ export function CinemaPlayer() {
                           <button
                             className="buffer-play-now-btn"
                             onClick={() => {
+                              userPausedRef.current = false;
+                              setIsRebuffering(false);
                               setIsVideoLoading(false);
                               const video = videoRef.current;
                               if (video) {
@@ -1030,7 +1177,11 @@ export function CinemaPlayer() {
                               }
                             }}
                           >
-                            {status?.isRunwaySafe ? '▶ Start Streaming' : '▶ Play Now (Bypass Buffer)'}
+                            {isRebuffering
+                              ? '▶ Play Now (Bypass Cushion)'
+                              : status?.isRunwaySafe
+                              ? '▶ Start Streaming'
+                              : '▶ Play Now (Bypass Buffer)'}
                           </button>
                         )}
 

@@ -1377,16 +1377,16 @@ app.get('/api/stream/remux', async (req, res) => {
         : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'main', '-level', '5.1', '-b:v', '14M', '-vf', 'scale=-2:2160', '-pix_fmt', 'yuv420p', '-bf', '0'];
     } else if (mode === 'transcode' || mode === '1080p') {
       vCodecArgs = isDarwin
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '7M', '-maxrate', '10M', '-bufsize', '14M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p']
-        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'main', '-level', '4.2', '-b:v', '7M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p', '-bf', '0'];
+        ? ['-c:v', 'h264_videotoolbox', '-b:v', '4.5M', '-maxrate', '6M', '-bufsize', '8M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p']
+        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'main', '-level', '4.2', '-b:v', '4.5M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p', '-bf', '0'];
     } else if (mode === '720p') {
       vCodecArgs = isDarwin
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '3.5M', '-maxrate', '5M', '-bufsize', '7M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p']
-        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'baseline', '-level', '3.1', '-b:v', '3.5M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p', '-bf', '0'];
+        ? ['-c:v', 'h264_videotoolbox', '-b:v', '2.5M', '-maxrate', '3.5M', '-bufsize', '5M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p']
+        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'baseline', '-level', '3.1', '-b:v', '2.5M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p', '-bf', '0'];
     } else if (mode === '480p') {
       vCodecArgs = isDarwin
-        ? ['-c:v', 'h264_videotoolbox', '-b:v', '1.5M', '-maxrate', '2.5M', '-bufsize', '3M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p']
-        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'baseline', '-level', '3.0', '-b:v', '1.5M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p', '-bf', '0'];
+        ? ['-c:v', 'h264_videotoolbox', '-b:v', '1.2M', '-maxrate', '1.8M', '-bufsize', '2.5M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p']
+        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'baseline', '-level', '3.0', '-b:v', '1.2M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p', '-bf', '0'];
     }
 
     // Safari identifies copied HEVC in MP4 by the hvc1 sample entry. Many

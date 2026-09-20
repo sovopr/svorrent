@@ -641,8 +641,14 @@ app.post('/api/torrent/:id/play-native', async (req, res) => {
     return res.status(404).json({ error: 'Torrent not found in swarm' });
   }
 
-  const largestFile = torrent.files && torrent.files.length > 0
-    ? torrent.files.reduce((a, b) => (a.length > b.length ? a : b))
+  const mediaFiles = torrent.files
+    ? torrent.files.filter((f) => /\.(mp4|m4v|webm|mkv|avi|mov|ts|m2ts)$/i.test(f.name))
+    : [];
+  const largestFile = mediaFiles.length > 0
+    ? mediaFiles.reduce((a, b) => (a.length > b.length ? a : b))
+    : torrent.files && torrent.files.length > 0
+      ? torrent.files.reduce((a, b) => (a.length > b.length ? a : b))
+      : null;
     : null;
 
   // Stream-only torrents live in RAM. Never derive a native-player path from
@@ -828,6 +834,8 @@ app.get('/api/torrent/status', async (req, res) => {
     etaSeconds,
     isNativeCompatible,
     recommendedMode: isNativeCompatible ? 'direct' : 'remux',
+    sourceContainer: largestFile ? (largestFile.name.split('.').pop() || '').toLowerCase() : null,
+    sourceIsRemuxRelease: /(?:remux|bluray[ ._-]*remux)/i.test(largestFile?.name || ''),
     streamUrl: `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(magnetURI)}`,
     directStreamUrl: `http://localhost:3001/api/torrent/${torrent.infoHash}/stream`,
     remuxStreamUrl: `http://localhost:3001/api/stream/remux?mode=copy&magnet=${encodeURIComponent(magnetURI)}`,

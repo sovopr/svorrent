@@ -460,7 +460,7 @@ export function CinemaPlayer() {
                 {streamMode === 'direct'
                   ? '⚡ Native Direct Stream'
                   : streamMode === 'remux'
-                  ? '💎 Lossless Remux'
+                  ? `💎 Browser Remux${status?.sourceContainer ? ` · source .${status.sourceContainer}` : ''}`
                   : streamMode === '1080p'
                   ? '🎬 1080p Transcode'
                   : streamMode === '720p'
@@ -547,6 +547,7 @@ export function CinemaPlayer() {
                   <button
                     className={`control-pill-btn ${streamMode === 'direct' ? 'active' : ''}`}
                     onClick={() => handleQualityChange('direct')}
+                    disabled={status?.isNativeCompatible === false}
                     title="Native direct stream — zero FFmpeg, instant playback, best for MP4/WebM"
                   >
                     ⚡ Direct
@@ -554,9 +555,9 @@ export function CinemaPlayer() {
                   <button
                     className={`control-pill-btn ${streamMode === 'remux' ? 'active' : ''}`}
                     onClick={() => handleQualityChange('remux')}
-                    title="Lossless FFmpeg remux to fMP4 — use for MKV/TrueHD/DTS files"
+                    title="Browser playback adapter — keeps the source video intact and only repackages unsupported containers"
                   >
-                    💎 Remux
+                    💎 Browser
                   </button>
                   <button
                     className={`control-pill-btn ${streamMode === '1080p' ? 'active' : ''}`}

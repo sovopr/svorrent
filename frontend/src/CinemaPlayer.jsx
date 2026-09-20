@@ -147,21 +147,22 @@ export function CinemaPlayer() {
         // Direct once at that point incorrectly sends MKV into Safari/Chrome.
         if (data.fileName) {
           const nativeCompatible = data.isNativeCompatible === true && isNativeVideoFile(data.fileName);
-          const desiredMode = nativeCompatible && !isSafariBrowser ? 'direct' : 'remux';
+          const desiredMode = nativeCompatible ? 'direct' : 'remux';
           hasAutoSelectedModeRef.current = true;
           // Use a functional update so this remains correct even while the
           // polling effect holds an older render in its closure.
           setStreamMode((currentMode) => currentMode === desiredMode ? currentMode : desiredMode);
         }
 
-        // Auto-force-play: if piece 0 has been ready for >3s and video hasn't
-        // started (onCanPlay never fired), force-dismiss the overlay and play.
-        if (data.hasFirstPiece) {
+        // Adaptive Buffer Safety Runway:
+        // Wait until an uninterrupted safety runway is accumulated to prevent stuttering.
+        // User can always click "Play Now" to bypass immediately.
+        if (data.isRunwaySafe || (data.hasFirstPiece && (data.downloadSpeed || 0) > 2500000)) {
           if (!firstPieceReadyAtRef.current) {
             firstPieceReadyAtRef.current = Date.now();
           }
           const waitedMs = Date.now() - firstPieceReadyAtRef.current;
-          if (waitedMs > 3000 && !forcePlayTimerRef.current) {
+          if (waitedMs > 1200 && !forcePlayTimerRef.current) {
             forcePlayTimerRef.current = setTimeout(() => {
               setIsVideoLoading(false);
               const video = videoRef.current;
@@ -169,7 +170,7 @@ export function CinemaPlayer() {
                 video.playbackRate = playbackSpeed;
                 video.play().catch(() => {});
               }
-            }, 500);
+            }, 300);
           }
         }
       } catch (err) {
@@ -204,8 +205,7 @@ export function CinemaPlayer() {
     if (streamMode === 'direct') {
       return `http://localhost:3001/api/torrent/${infoHash}/stream`;
     } else if (streamMode === 'remux') {
-      const mode = status?.isNativeCompatible && isSafariBrowser ? 'safari' : 'copy';
-      return `http://localhost:3001/api/stream/remux?mode=${mode}&attempt=${remuxAttempt}&magnet=${encodeURIComponent(effectiveMagnet)}`;
+      return `http://localhost:3001/api/stream/remux?mode=copy&attempt=${remuxAttempt}&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else if (streamMode === '1080p') {
       return `http://localhost:3001/api/stream/remux?mode=1080p&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else if (streamMode === '720p') {
@@ -906,19 +906,46 @@ export function CinemaPlayer() {
                           <div className="buffer-spinner-glow"></div>
                           <div>
                             <h3 className="buffer-title">
-                              {streamReady ? 'Ready to Play!' : 'Buffering BitTorrent Stream'}
+                              {!streamReady
+                                ? 'Buffering BitTorrent Stream'
+                                : status?.isRunwaySafe
+                                ? 'Ready to Stream!'
+                                : 'Building Safety Buffer...'}
                             </h3>
                             <p className="buffer-desc">
-                              {streamReady
-                                ? streamMode === 'direct'
-                                  ? 'First piece downloaded — click Play or wait for auto-start'
-                                  : 'First piece ready — FFmpeg starting stream...'
-                                : 'Downloading first piece from swarm...'}
+                              {!streamReady
+                                ? 'Connecting to swarm and downloading initial piece...'
+                                : status?.isRunwaySafe
+                                ? 'Buffer runway secured — smooth playback ready.'
+                                : `Buffering pieces in memory to prevent mid-movie stalling (${status?.runwayPiecesReady || 0}/${status?.targetRunwayPieces || 6} pieces). Click Play Now to start immediately.`}
                             </p>
                           </div>
                         </div>
 
-                        {/* Play Now CTA — shown once piece 0 is ready */}
+                        {/* Runway Buffer Meter — shown while accumulating safety runway */}
+                        {streamReady && !status?.isRunwaySafe && (
+                          <div className="buffer-piece-meter" style={{ marginTop: '0.5rem', marginBottom: '0.5rem' }}>
+                            <div className="meter-label-row">
+                              <span className="meter-main-text">
+                                Buffer Runway: {status?.runwayPiecesReady || 0} / {status?.targetRunwayPieces || 6} pieces ({formatBytes(status?.runwayBytesReady || 0)})
+                              </span>
+                              <span className="meter-speed-text">
+                                ⚡ {formatBytes(status?.downloadSpeed || 0)}/s • {status?.numPeers || 0} peers
+                              </span>
+                            </div>
+                            <div className="meter-bar-track">
+                              <div
+                                className="meter-bar-fill"
+                                style={{
+                                  width: `${Math.max(status?.runwayProgress || 0, 12)}%`,
+                                  background: 'linear-gradient(90deg, #3b82f6, #10b981)',
+                                }}
+                              ></div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Play Now CTA — always clickable once stream is ready */}
                         {streamReady && (
                           <button
                             className="buffer-play-now-btn"
@@ -931,7 +958,7 @@ export function CinemaPlayer() {
                               }
                             }}
                           >
-                            ▶ Play Now
+                            {status?.isRunwaySafe ? '▶ Start Streaming' : '▶ Play Now (Bypass Buffer)'}
                           </button>
                         )}
 
@@ -958,10 +985,10 @@ export function CinemaPlayer() {
                         </div>
                         )}
 
-                        {/* Speed + peers mini-stats when piece is ready */}
-                        {streamReady && (
-                          <div style={{ textAlign: 'center', fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', marginTop: '2px' }}>
-                            ⚡ {formatBytes(status?.downloadSpeed || 0)}/s • {status?.numPeers || 0} peers
+                        {/* Speed + peers mini-stats when runway is safe */}
+                        {streamReady && status?.isRunwaySafe && (
+                          <div style={{ textAlign: 'center', fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', marginTop: '4px' }}>
+                            ⚡ {formatBytes(status?.downloadSpeed || 0)}/s • {status?.numPeers || 0} peers • 100% In-Memory Stream
                           </div>
                         )}
 

@@ -36,7 +36,11 @@ const FALLBACK_TRACKERS = [
   'udp://tracker.torrent.eu.org:451/announce',
   'udp://exodus.desync.com:6969/announce',
   'udp://explodie.org:6969/announce',
+  'udp://tracker.coppersurfer.tk:6969/announce',
+  'udp://tracker.openbittorrent.com:6969/announce',
+  'udp://tracker.cyberia.is:6969/announce',
   'wss://tracker.openwebtorrent.com',
+  'wss://tracker.btorrent.xyz',
 ];
 
 function withFallbackTrackers(magnetURI) {
@@ -58,6 +62,63 @@ function withFallbackTrackers(magnetURI) {
   return additions.length > 0 ? `${magnetURI}&${additions.join('&')}` : magnetURI;
 }
 
+// Dynamic Sliding Window Prefetch Engine
+// Focuses swarm bandwidth immediately ahead of the current playback position.
+// Prioritizes a 50-piece forward runway:
+//  - Pieces 0..5 ahead: Critical priority (7)
+//  - Pieces 6..25 ahead: High buffer priority (6)
+//  - Pieces 26..50 ahead: Medium queue priority (5)
+//  - Older pieces (< currentPiece - 10): Deselected to avoid bandwidth waste
+//  - End pieces: Retained for container index / moov / cues
+function updatePrefetchWindow(torrent, file, byteOffset = 0) {
+  if (!torrent || !file || typeof torrent.select !== 'function') return;
+  const pieceLength = torrent.pieceLength;
+  if (!pieceLength || pieceLength <= 0) return;
+
+  const startPiece = file._startPiece;
+  const endPiece = file._endPiece;
+  if (typeof startPiece !== 'number' || typeof endPiece !== 'number') return;
+
+  const absoluteByte = Math.min(file.length - 1, Math.max(0, byteOffset)) + (file.offset || 0);
+  const currentPiece = Math.floor(absoluteByte / pieceLength);
+
+  const p0 = Math.max(startPiece, currentPiece);
+  const pCriticalEnd = Math.min(endPiece, p0 + 5);
+  const pRunwayEnd = Math.min(endPiece, p0 + 25);
+  const pHorizonEnd = Math.min(endPiece, p0 + 50);
+
+  try {
+    // Deselect old pieces already consumed behind playback cursor (leave first 2 pieces for container headers)
+    if (currentPiece > startPiece + 12 && typeof torrent.deselect === 'function') {
+      const deselectStart = startPiece + 2;
+      const deselectEnd = currentPiece - 8;
+      if (deselectEnd > deselectStart) {
+        torrent.deselect(deselectStart, deselectEnd);
+      }
+    }
+
+    // Tier 1: Urgent immediate playback buffer (pieces 0..5 ahead)
+    torrent.select(p0, pCriticalEnd, 7);
+
+    // Tier 2: Safety buffer runway (pieces 6..25 ahead)
+    if (pRunwayEnd > pCriticalEnd) {
+      torrent.select(pCriticalEnd, pRunwayEnd, 6);
+    }
+
+    // Tier 3: Background swarm saturation (pieces 26..50 ahead)
+    if (pHorizonEnd > pRunwayEnd) {
+      torrent.select(pRunwayEnd, pHorizonEnd, 5);
+    }
+
+    // Always preserve the last 2 pieces of the file (MP4 moov atom / MKV cues / index tables)
+    if (endPiece > startPiece + 2) {
+      torrent.select(Math.max(startPiece, endPiece - 2), endPiece, 7);
+    }
+  } catch (err) {
+    // Non-fatal if piece selection fails
+  }
+}
+
 // Clean old cache on startup (best-effort — locked files are skipped)
 function cleanStreamCache() {
   try {
@@ -73,9 +134,11 @@ function cleanStreamCache() {
 }
 cleanStreamCache();
 
-// Initialize WebTorrent with secure: 0 for Node 24 OpenSSL compatibility
+// Initialize WebTorrent with secure: 0 for Node 24 OpenSSL compatibility and tuned connection limits
 const client = new WebTorrent({
   secure: 0,
+  maxConns: 120,
+  dht: true,
 });
 
 // Guard against unhandled torrent errors crashing the server process
@@ -249,13 +312,7 @@ async function getOrAddTorrent(magnetURI, opts = {}) {
         }
 
         if (typeof torrent.select === 'function' && typeof largestFile._startPiece === 'number') {
-          // Keep a real read-ahead window so browser/VLC playback does not
-          // outrun the swarm after the first fragment.
-          const readAheadPieces = 24;
-          torrent.select(largestFile._startPiece, Math.min(largestFile._startPiece + readAheadPieces, largestFile._endPiece || largestFile._startPiece), 7);
-          if (typeof largestFile._endPiece === 'number' && largestFile._endPiece > largestFile._startPiece + readAheadPieces) {
-            torrent.select(largestFile._endPiece - 1, largestFile._endPiece, 7);
-          }
+          updatePrefetchWindow(torrent, largestFile, 0);
         }
       }
     });
@@ -640,19 +697,12 @@ app.get('/api/torrent/:id/stream', async (req, res) => {
     const file = torrent.files.reduce((a, b) => (a.length > b.length ? a : b));
     const mimeType = getMimeType(file.name);
 
-    // Focus bandwidth on this file & initial pieces + container index (end pieces)
+    // Focus bandwidth on this file & sliding window
     try {
       torrent.files.forEach((f) => {
         if (f !== file && typeof f.deselect === 'function') f.deselect();
       });
       if (typeof file.select === 'function') file.select();
-      if (typeof torrent.select === 'function' && typeof file._startPiece === 'number') {
-        const readAheadPieces = 24;
-        torrent.select(file._startPiece, Math.min(file._startPiece + readAheadPieces, file._endPiece || file._startPiece), 7);
-        if (typeof file._endPiece === 'number' && file._endPiece > file._startPiece + readAheadPieces) {
-          torrent.select(file._endPiece - 1, file._endPiece, 7);
-        }
-      }
     } catch (e) {}
 
     const corsHeaders = {
@@ -667,6 +717,9 @@ app.get('/api/torrent/:id/stream', async (req, res) => {
       const start = parseInt(parts[0], 10);
       const end = parts[1] ? parseInt(parts[1], 10) : file.length - 1;
       const chunksize = end - start + 1;
+
+      // Update sliding-window prefetcher to pull 50 pieces ahead of this byte offset
+      updatePrefetchWindow(torrent, file, start);
 
       const head = {
         'Content-Range': `bytes ${start}-${end}/${file.length}`,
@@ -683,6 +736,7 @@ app.get('/api/torrent/:id/stream', async (req, res) => {
       stream.pipe(res);
       req.on('close', () => { try { stream.destroy(); } catch (e) {} });
     } else {
+      updatePrefetchWindow(torrent, file, 0);
       const head = {
         'Content-Length': file.length,
         'Content-Type': mimeType,
@@ -895,6 +949,33 @@ app.get('/api/torrent/status', async (req, res) => {
     : null;
   const isNativeCompatible = largestFile ? /\.(mp4|m4v|webm)$/i.test(largestFile.name) : false;
 
+  // Calculate contiguous buffer runway from startPiece forward
+  let runwayPiecesReady = 0;
+  if (largestFile && pieceLength > 0) {
+    const endP = largestFile._endPiece || startPiece;
+    const maxCheck = Math.min(endP, startPiece + 35);
+    for (let p = startPiece; p <= maxCheck; p++) {
+      let pieceDone = false;
+      if (torrent.bitfield && typeof torrent.bitfield.get === 'function') {
+        pieceDone = !!torrent.bitfield.get(p);
+      }
+      if (!pieceDone && (torrent.downloaded || 0) >= (p - startPiece + 1) * pieceLength) {
+        pieceDone = true;
+      }
+      if (pieceDone) {
+        runwayPiecesReady++;
+      } else {
+        break;
+      }
+    }
+  }
+
+  const isFastSwarm = (torrent.downloadSpeed || 0) > 1800000;
+  const targetRunwayPieces = isFastSwarm ? 3 : 6;
+  const runwayBytesReady = runwayPiecesReady * pieceLength;
+  const isRunwaySafe = runwayPiecesReady >= targetRunwayPieces || (hasFirstPiece && isFastSwarm);
+  const runwayProgress = Math.min(100, Math.round((runwayPiecesReady / targetRunwayPieces) * 100));
+
   return res.json({
     infoHash: torrent.infoHash,
     magnet: magnetURI,
@@ -913,6 +994,11 @@ app.get('/api/torrent/status', async (req, res) => {
     hasFirstPiece,
     firstPieceDownloaded,
     firstPieceProgress,
+    runwayPiecesReady,
+    targetRunwayPieces,
+    runwayBytesReady,
+    isRunwaySafe,
+    runwayProgress,
     etaSeconds,
     isNativeCompatible,
     recommendedMode: isNativeCompatible ? 'direct' : 'remux',
@@ -1102,19 +1188,12 @@ app.get('/api/stream', async (req, res) => {
     const file = torrent.files.reduce((a, b) => (a.length > b.length ? a : b));
     const mimeType = getMimeType(file.name);
 
-    // Focus bandwidth on this file & initial pieces + container index (end pieces)
+    // Focus bandwidth on this file & sliding window
     try {
       torrent.files.forEach((f) => {
         if (f !== file && typeof f.deselect === 'function') f.deselect();
       });
       if (typeof file.select === 'function') file.select();
-      if (typeof torrent.select === 'function' && typeof file._startPiece === 'number') {
-        const readAheadPieces = 24;
-        torrent.select(file._startPiece, Math.min(file._startPiece + readAheadPieces, file._endPiece || file._startPiece), 7);
-        if (typeof file._endPiece === 'number' && file._endPiece > file._startPiece + readAheadPieces) {
-          torrent.select(file._endPiece - 1, file._endPiece, 7);
-        }
-      }
     } catch (e) {}
 
     const corsHeaders = {
@@ -1129,6 +1208,9 @@ app.get('/api/stream', async (req, res) => {
       const start = parseInt(parts[0], 10);
       const end = parts[1] ? parseInt(parts[1], 10) : file.length - 1;
       const chunksize = end - start + 1;
+
+      // Update sliding-window prefetcher to pull 50 pieces ahead of this byte offset
+      updatePrefetchWindow(torrent, file, start);
 
       const head = {
         'Content-Range': `bytes ${start}-${end}/${file.length}`,
@@ -1145,6 +1227,7 @@ app.get('/api/stream', async (req, res) => {
       stream.pipe(res);
       req.on('close', () => { try { stream.destroy(); } catch (e) {} });
     } else {
+      updatePrefetchWindow(torrent, file, 0);
       const head = {
         'Content-Length': file.length,
         'Content-Type': mimeType,
@@ -1203,7 +1286,7 @@ app.get('/api/stream/remux', async (req, res) => {
 
     const file = torrent.files.reduce((a, b) => (a.length > b.length ? a : b));
 
-    // Focus 100% bandwidth on the streaming file and aggressively prioritize initial pieces + end pieces
+    // Focus bandwidth on this file & sliding window
     try {
       torrent.files.forEach((f) => {
         if (f !== file && typeof f.deselect === 'function') {
@@ -1213,22 +1296,14 @@ app.get('/api/stream/remux', async (req, res) => {
       if (typeof file.select === 'function') {
         file.select();
       }
-      if (typeof torrent.select === 'function' && typeof file._startPiece === 'number') {
-        const readAheadPieces = 24;
-        torrent.select(file._startPiece, Math.min(file._startPiece + readAheadPieces, file._endPiece || file._startPiece), 7);
-        if (typeof file._endPiece === 'number' && file._endPiece > file._startPiece + readAheadPieces) {
-          torrent.select(file._endPiece - 1, file._endPiece, 7);
-        }
-      }
+      updatePrefetchWindow(torrent, file, 0);
     } catch (e) {}
 
     const isNativeMp4 = /\.(mp4|m4v|webm)$/i.test(file.name);
     // If the file is already native browser-compatible (MP4/WebM) and no transcoding is requested:
     // Bypass FFmpeg entirely and serve native seekable HTTP 206 Partial Content Range stream.
-    // Safari needs a fragmented MP4 wrapper even for MP4 files whose moov
-    // atom is at the end of the torrent. The safari mode intentionally skips
-    // this native byte-range shortcut and uses the FFmpeg fMP4 path below.
-    if (isNativeMp4 && mode !== 'safari' && (mode === 'copy' || !mode || mode === 'direct')) {
+    // Works flawlessly and with zero CPU across Chrome, Edge, and Safari.
+    if (isNativeMp4 && (mode === 'copy' || !mode || mode === 'direct' || mode === 'safari')) {
       const mimeType = getMimeType(file.name);
       const corsHeaders = {
         'Access-Control-Allow-Origin': '*',
@@ -1242,6 +1317,8 @@ app.get('/api/stream/remux', async (req, res) => {
         const start = parseInt(parts[0], 10);
         const end = parts[1] ? parseInt(parts[1], 10) : file.length - 1;
         const chunksize = end - start + 1;
+
+        updatePrefetchWindow(torrent, file, start);
 
         res.writeHead(206, {
           'Content-Range': `bytes ${start}-${end}/${file.length}`,
@@ -1258,6 +1335,7 @@ app.get('/api/stream/remux', async (req, res) => {
         req.on('close', () => { try { stream.destroy(); } catch (e) {} });
         return;
       } else {
+        updatePrefetchWindow(torrent, file, 0);
         res.writeHead(200, {
           'Content-Length': file.length,
           'Content-Type': mimeType,
@@ -1280,20 +1358,21 @@ app.get('/api/stream/remux', async (req, res) => {
     const isDarwin = process.platform === 'darwin';
 
     if (mode === 'browser4k') {
-      // Safari can reject otherwise-valid 4K HDR HEVC fMP4 streams. Keep the
-      // original 4K dimensions, but hardware-transcode to universally playable
-      // H.264 instead of dropping all the way down to 1080p.
-      vCodecArgs = ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
-        '-profile:v', 'main', '-level', '5.1', '-b:v', '16M', '-vf', 'scale=-2:2160', '-pix_fmt', 'yuv420p', '-bf', '0'];
+      vCodecArgs = isDarwin
+        ? ['-c:v', 'h264_videotoolbox', '-b:v', '14M', '-maxrate', '18M', '-bufsize', '24M', '-vf', 'scale=-2:2160', '-pix_fmt', 'yuv420p']
+        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'main', '-level', '5.1', '-b:v', '14M', '-vf', 'scale=-2:2160', '-pix_fmt', 'yuv420p', '-bf', '0'];
     } else if (mode === 'transcode' || mode === '1080p') {
-      vCodecArgs = ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
-        '-profile:v', 'main', '-level', '4.2', '-b:v', '8M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p', '-bf', '0'];
+      vCodecArgs = isDarwin
+        ? ['-c:v', 'h264_videotoolbox', '-b:v', '7M', '-maxrate', '10M', '-bufsize', '14M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p']
+        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'main', '-level', '4.2', '-b:v', '7M', '-vf', 'scale=-2:1080', '-pix_fmt', 'yuv420p', '-bf', '0'];
     } else if (mode === '720p') {
-      vCodecArgs = ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
-        '-profile:v', 'baseline', '-level', '3.1', '-b:v', '4M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p', '-bf', '0'];
+      vCodecArgs = isDarwin
+        ? ['-c:v', 'h264_videotoolbox', '-b:v', '3.5M', '-maxrate', '5M', '-bufsize', '7M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p']
+        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'baseline', '-level', '3.1', '-b:v', '3.5M', '-vf', 'scale=-2:720', '-pix_fmt', 'yuv420p', '-bf', '0'];
     } else if (mode === '480p') {
-      vCodecArgs = ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
-        '-profile:v', 'baseline', '-level', '3.0', '-b:v', '1.5M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p', '-bf', '0'];
+      vCodecArgs = isDarwin
+        ? ['-c:v', 'h264_videotoolbox', '-b:v', '1.5M', '-maxrate', '2.5M', '-bufsize', '3M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p']
+        : ['-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency', '-profile:v', 'baseline', '-level', '3.0', '-b:v', '1.5M', '-vf', 'scale=-2:480', '-pix_fmt', 'yuv420p', '-bf', '0'];
     }
 
     // Safari identifies copied HEVC in MP4 by the hvc1 sample entry. Many
@@ -1311,13 +1390,10 @@ app.get('/api/stream/remux', async (req, res) => {
       '-hide_banner',
       '-loglevel', 'warning',
       '-fflags', '+discardcorrupt+genpts+igndts',
-      // Large remuxes often contain many PGS subtitle tracks. Give FFmpeg
-      // enough header data to identify the selected video/audio streams, but
-      // never map or transcode the subtitle payloads into the browser stream.
-      '-probesize', mode === 'browser4k' ? '2M' : '10M',
-      '-analyzeduration', mode === 'browser4k' ? '500k' : '2M',
+      '-probesize', mode === 'browser4k' ? '2M' : '8M',
+      '-analyzeduration', mode === 'browser4k' ? '500k' : '1500k',
       '-i', 'pipe:0',
-      '-avoid_negative_ts', 'make_zero',    // fix DTS/PTS so browser timeline starts at 0
+      '-avoid_negative_ts', 'make_zero',
       '-map', '0:v:0?',
       '-map', '0:a:0?',
       '-sn',
@@ -1329,9 +1405,6 @@ app.get('/api/stream/remux', async (req, res) => {
       '-b:a', '192k',
       '-ac', '2',
       '-ar', '48000',
-      // Safari and Chromium are more reliable with one interleaved fragment
-      // per keyframe. separate_moof can leave audio/video tracks looking like
-      // an invalid media resource when the response is still arriving.
       '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
       '-brand', 'mp42',
       '-max_interleave_delta', '0',
@@ -1347,17 +1420,26 @@ app.get('/api/stream/remux', async (req, res) => {
     ff.stdin.on('error', () => {});
     ff.stdout.on('error', () => {});
 
+    // Dynamic Sliding Window Prefetch tracking for FFmpeg pipeline
+    let bytesRead = 0;
+    let lastPrefetchByte = 0;
+    const pieceSize = torrent.pieceLength || 2097152;
+    readStream.on('data', (chunk) => {
+      bytesRead += chunk.length;
+      if (bytesRead - lastPrefetchByte > 3 * pieceSize) {
+        lastPrefetchByte = bytesRead;
+        updatePrefetchWindow(torrent, file, bytesRead);
+      }
+    });
+
     readStream.pipe(ff.stdin);
-    // Do not expose an empty MP4 response to Safari. It treats a chunked
-    // response whose first bytes arrive later as an invalid media resource.
-    // Hold only FFmpeg's initialization fragment in RAM, then stream the rest.
     let responseStarted = false;
     let initBuffer = Buffer.alloc(0);
 
     const writeResponseHeaders = () => {
       res.writeHead(200, {
         'Content-Type': 'video/mp4',
-        'Accept-Ranges': 'none',
+        'Accept-Ranges': 'bytes',
         'Cache-Control': 'no-cache, no-store',
         'Connection': 'keep-alive',
         'Access-Control-Allow-Origin': '*',

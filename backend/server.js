@@ -174,11 +174,13 @@ async function getOrAddTorrent(magnetURI, opts = {}) {
       const filePath = path.join(DOWNLOAD_DIR, file.path || '');
       return fs.existsSync(filePath);
     });
-    const needsDiskStore = torrent._isStreamOnly || torrent._diskBacked !== true;
+    const needsDiskStore = torrent._isStreamOnly ||
+      torrent._diskBacked !== true ||
+      torrent.path !== DOWNLOAD_DIR;
     if (needsDiskStore && !materializedFile) {
       await new Promise((resolve) => {
         try {
-          torrent.destroy({ destroyStore: false }, resolve);
+          client.remove(torrent, { destroyStore: false }, resolve);
         } catch (err) {
           console.warn('Could not release in-memory stream torrent:', err.message);
           resolve();
@@ -216,6 +218,36 @@ async function getOrAddTorrent(magnetURI, opts = {}) {
           });
           if (typeof largestFile.select === 'function') largestFile.select();
         }
+
+        // Keep an immediately visible, genuinely downloaded partial file in
+        // Finder while the filesystem chunk store is still filling pieces.
+        // The normal WebTorrent store remains the source of truth; this sidecar
+        // is renamed when the sequential file stream reaches EOF.
+        if (torrent._isPermanentDownload && !torrent._materializerStarted) {
+          torrent._materializerStarted = true;
+          const partialPath = path.join(DOWNLOAD_DIR, `${largestFile.path}.svorrent-partial`);
+          const finalPath = path.join(DOWNLOAD_DIR, largestFile.path);
+          fs.mkdirSync(path.dirname(partialPath), { recursive: true });
+          const output = fs.createWriteStream(partialPath);
+          const input = largestFile.createReadStream();
+          input.on('error', (err) => {
+            console.warn('Partial download materializer stopped:', err.message);
+            output.destroy();
+          });
+          output.on('error', (err) => {
+            console.warn('Partial download file error:', err.message);
+            input.destroy();
+          });
+          input.on('end', () => {
+            if (fs.existsSync(finalPath)) {
+              try { fs.unlinkSync(partialPath); } catch (e) {}
+            } else {
+              try { fs.renameSync(partialPath, finalPath); } catch (e) {}
+            }
+          });
+          input.pipe(output);
+        }
+
         if (typeof torrent.select === 'function' && typeof largestFile._startPiece === 'number') {
           // Keep a real read-ahead window so browser/VLC playback does not
           // outrun the swarm after the first fragment.

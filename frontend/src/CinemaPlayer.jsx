@@ -145,10 +145,11 @@ export function CinemaPlayer() {
         // Direct once at that point incorrectly sends MKV into Safari/Chrome.
         if (data.fileName) {
           const nativeCompatible = data.isNativeCompatible === true && isNativeVideoFile(data.fileName);
-          if (!hasAutoSelectedModeRef.current || !nativeCompatible) {
-            hasAutoSelectedModeRef.current = true;
-            setStreamMode(nativeCompatible ? 'direct' : 'remux');
-          }
+          const desiredMode = nativeCompatible ? 'direct' : 'remux';
+          hasAutoSelectedModeRef.current = true;
+          // Use a functional update so this remains correct even while the
+          // polling effect holds an older render in its closure.
+          setStreamMode((currentMode) => currentMode === desiredMode ? currentMode : desiredMode);
         }
 
         // Auto-force-play: if piece 0 has been ready for >3s and video hasn't
@@ -254,12 +255,15 @@ export function CinemaPlayer() {
       // Retry remux while more torrent data arrives. Do not silently switch to
       // a lossy 1080p transcode; that is a manual user choice.
       remuxFailureCountRef.current += 1;
-      if (remuxFailureCountRef.current <= 3) {
-        setActionFeedback(`Remux is still buffering — retrying (${remuxFailureCountRef.current}/3)...`);
+      if (remuxFailureCountRef.current <= 8) {
+        setActionFeedback(`Remux is still buffering — retrying (${remuxFailureCountRef.current}/8)...`);
         setRemuxAttempt((attempt) => attempt + 1);
       } else {
-        setActionFeedback('Safari cannot decode this 4K HEVC stream — switching to hardware 4K compatibility mode...');
-        setTimeout(() => handleQualityChange('browser4k'), 500);
+        // Keep a normal MKV on a browser-safe fallback. The old browser4k
+        // fallback was wrong for ordinary 720p H.264 files and produced an
+        // invalid Safari source after only three transient read errors.
+        setActionFeedback('Remux is unavailable for this swarm — switching to a fast 720p stream...');
+        setTimeout(() => handleQualityChange('720p'), 500);
       }
     }
   };

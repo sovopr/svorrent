@@ -1236,7 +1236,10 @@ app.get('/api/stream/remux', async (req, res) => {
       '-b:a', '192k',
       '-ac', '2',
       '-ar', '48000',
-      '-movflags', 'frag_keyframe+empty_moov+default_base_moof+separate_moof',
+      // Safari and Chromium are more reliable with one interleaved fragment
+      // per keyframe. separate_moof can leave audio/video tracks looking like
+      // an invalid media resource when the response is still arriving.
+      '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
       '-flush_packets', '1',
       '-f', 'mp4',
       'pipe:1',

@@ -77,7 +77,7 @@ app.get('/api/stream', async (req, res) => {
   }
 
   // Check if torrent already exists in client
-  let torrent = client.get(magnetURI);
+  let torrent = await client.get(magnetURI);
 
   if (!torrent) {
     try {
@@ -109,6 +109,26 @@ app.get('/api/stream', async (req, res) => {
     torrent.once('ready', streamFile);
   }
 
+  function getMimeType(filename) {
+    const ext = filename.split('.').pop().toLowerCase();
+    const mimeTypes = {
+      mp4: 'video/mp4',
+      m4v: 'video/mp4',
+      mkv: 'video/x-matroska',
+      webm: 'video/webm',
+      avi: 'video/x-msvideo',
+      mov: 'video/quicktime',
+      mp3: 'audio/mpeg',
+      flac: 'audio/flac',
+      wav: 'audio/wav',
+      iso: 'application/x-iso9660-image',
+      zip: 'application/zip',
+      tar: 'application/x-tar',
+      gz: 'application/gzip',
+    };
+    return mimeTypes[ext] || 'application/octet-stream';
+  }
+
   function streamFile() {
     clearTimeout(swarmTimeout);
     if (res.headersSent) return;
@@ -119,6 +139,7 @@ app.get('/api/stream', async (req, res) => {
 
     // Find the largest file (typically the primary movie, ISO, or archive)
     const file = torrent.files.reduce((a, b) => (a.length > b.length ? a : b));
+    const mimeType = getMimeType(file.name);
 
     const range = req.headers.range;
     if (range) {
@@ -131,7 +152,7 @@ app.get('/api/stream', async (req, res) => {
         'Content-Range': `bytes ${start}-${end}/${file.length}`,
         'Accept-Ranges': 'bytes',
         'Content-Length': chunksize,
-        'Content-Type': 'video/mp4',
+        'Content-Type': mimeType,
       };
 
       res.writeHead(206, head);
@@ -139,8 +160,8 @@ app.get('/api/stream', async (req, res) => {
     } else {
       const head = {
         'Content-Length': file.length,
-        'Content-Type': 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="${encodeURIComponent(file.name)}"`,
+        'Content-Type': mimeType,
+        'Content-Disposition': `inline; filename="${encodeURIComponent(file.name)}"`,
       };
       res.writeHead(200, head);
       file.createReadStream().pipe(res);

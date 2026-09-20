@@ -140,15 +140,14 @@ export function CinemaPlayer() {
         if (data.magnet && !params.magnet) {
           setParams((prev) => ({ ...prev, magnet: data.magnet }));
         }
-        // Auto-select optimal stream mode once we know the file type
-        if (!hasAutoSelectedModeRef.current && data.fileName) {
-          hasAutoSelectedModeRef.current = true;
-          if (data.isNativeCompatible !== false) {
-            // MP4/WebM: use direct seekable byte-range stream (no FFmpeg)
-            setStreamMode('direct');
-          } else {
-            // MKV / other: use remux (FFmpeg fmp4 pipe)
-            setStreamMode('remux');
+        // Always enforce the safe mode for the resolved container. A page can
+        // receive an early status response before metadata settles; selecting
+        // Direct once at that point incorrectly sends MKV into Safari/Chrome.
+        if (data.fileName) {
+          const nativeCompatible = data.isNativeCompatible === true && isNativeVideoFile(data.fileName);
+          if (!hasAutoSelectedModeRef.current || !nativeCompatible) {
+            hasAutoSelectedModeRef.current = true;
+            setStreamMode(nativeCompatible ? 'direct' : 'remux');
           }
         }
 

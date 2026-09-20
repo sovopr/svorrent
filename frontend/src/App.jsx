@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { CinemaPlayer } from './CinemaPlayer';
+import { DownloadsManager } from './DownloadsManager';
 import { NerdModal } from './NerdModal';
 import './index.css';
 
@@ -33,6 +34,15 @@ function App() {
     return <CinemaPlayer />;
   }
 
+  const isDownloadsRoute =
+    window.location.pathname === '/downloads' ||
+    window.location.pathname.endsWith('/downloads') ||
+    new URLSearchParams(window.location.search).has('downloads');
+
+  if (isDownloadsRoute) {
+    return <DownloadsManager />;
+  }
+
   const [query, setQuery] = useState('');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -41,7 +51,6 @@ function App() {
 
   // Downloads Manager State
   const [downloads, setDownloads] = useState([]);
-  const [showDownloadsDrawer, setShowDownloadsDrawer] = useState(false);
 
   // Streaming Preview Modal State
   const [activeStream, setActiveStream] = useState(null);
@@ -174,11 +183,10 @@ function App() {
         throw new Error(d.error || 'Failed to start download');
       }
       const data = await res.json();
-      setActionState((prev) => ({ ...prev, [idx]: { loading: false, status: '✓ Downloading to Disk' } }));
-      setShowDownloadsDrawer(true);
+      setActionState((prev) => ({ ...prev, [idx]: { loading: false, status: '✓ Downloading to ~/Downloads/Svorrent' } }));
       setTimeout(() => {
         setActionState((prev) => ({ ...prev, [idx]: null }));
-      }, 3000);
+      }, 3500);
     } catch (err) {
       setActionState((prev) => ({ ...prev, [idx]: { loading: false, status: 'Download failed' } }));
     }
@@ -260,23 +268,26 @@ function App() {
     await fetch(`http://localhost:3001/api/torrent/${infoHash}/play-native`, { method: 'POST' });
   };
 
-  const totalSpeed = downloads.reduce((acc, t) => acc + (t.downloadSpeed || 0), 0);
-  const activeCount = downloads.filter((t) => !t.done && !t.paused).length;
+  const permanentDownloads = downloads.filter((t) => t.isPermanentDownload || !t.isStreamOnly);
+  const totalSpeed = permanentDownloads.reduce((acc, t) => acc + (t.downloadSpeed || 0), 0);
 
   return (
     <div className="container">
-      {/* Top Navigation / Downloads Bar */}
+      {/* Top Navigation Bar */}
       <nav className="top-nav">
         <div className="nav-brand">
           <span className="brand-dot"></span> Svorrent
         </div>
-        <button
-          className={`downloads-toggle-btn ${downloads.length > 0 ? 'active' : ''}`}
-          onClick={() => setShowDownloadsDrawer(!showDownloadsDrawer)}
-        >
-          <span>⬇ Downloads ({downloads.length})</span>
-          {totalSpeed > 0 && <span className="speed-badge">⚡ {formatBytes(totalSpeed)}/s</span>}
-        </button>
+        <div className="nav-actions">
+          <button
+            className={`downloads-toggle-btn ${permanentDownloads.length > 0 ? 'active' : ''}`}
+            onClick={() => window.open('/downloads', '_blank')}
+            title="Open Downloads in a dedicated separate tab"
+          >
+            <span>⬇ Downloads ({permanentDownloads.length})</span>
+            {totalSpeed > 0 && <span className="speed-badge">⚡ {formatBytes(totalSpeed)}/s</span>}
+          </button>
+        </div>
       </nav>
 
       {/* Main Header */}
@@ -301,106 +312,6 @@ function App() {
       </form>
 
       {error && <div className="error-banner">{error}</div>}
-
-      {/* Active Downloads Drawer / Panel */}
-      {showDownloadsDrawer && (
-        <div className="downloads-panel">
-          <div className="panel-header">
-            <div className="panel-title">
-              <h3>Active Downloads on Mac</h3>
-              <span className="folder-hint">📁 Saved to ~/Downloads/Svorrent</span>
-            </div>
-            <button className="panel-close" onClick={() => setShowDownloadsDrawer(false)}>✕</button>
-          </div>
-
-          {downloads.length === 0 ? (
-            <div className="empty-panel">
-              <p>No active downloads in Svorrent.</p>
-              <p className="dim-text">Search for any torrent above and click <strong>⬇ Download</strong> to save directly to disk.</p>
-            </div>
-          ) : (
-            <div className="downloads-list">
-              {downloads.map((t) => {
-                const pct = Math.round((t.progress || 0) * 100);
-                return (
-                  <div className="download-item-card" key={t.infoHash}>
-                    <div className="download-item-top">
-                      <div className="download-item-info">
-                        <span className="download-item-title" title={t.name}>{t.name}</span>
-                        <div className="download-item-meta">
-                          <span>{formatBytes(t.downloaded)} / {formatBytes(t.length)} ({pct}%)</span>
-                          <span>⚡ {formatBytes(t.downloadSpeed)}/s</span>
-                          <span>● {t.numPeers} peers</span>
-                          <span>ETA: {formatTime(t.timeRemaining)}</span>
-                        </div>
-                      </div>
-
-                      <div className="download-item-actions">
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => {
-                            const playerUrl = `/player?magnet=${encodeURIComponent(t.magnet)}&title=${encodeURIComponent(t.name)}`;
-                            window.open(playerUrl, '_blank');
-                          }}
-                          title="Stream 100% lossless remux in dedicated separate tab"
-                        >
-                          ⚡ Stream
-                        </button>
-
-                        <button
-                          className="btn btn-nerd"
-                          onClick={() => setNerdModalTorrentId(t.infoHash)}
-                          title="Open deep packet, peer, bitfield and tracker inspector"
-                        >
-                          🔍 Nerd Info
-                        </button>
-
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => handleOpenFinder(t.infoHash)}
-                          title="Reveal folder in macOS Finder"
-                        >
-                          📂 Finder
-                        </button>
-
-                        <button
-                          className="btn btn-primary btn-sm"
-                          onClick={() => handlePlayNative(t.infoHash)}
-                          title="Open with default macOS player (IINA, VLC, QuickTime) with 100% native quality"
-                        >
-                          ▶ Open
-                        </button>
-
-                        <button
-                          className="btn btn-secondary btn-sm"
-                          onClick={() => handlePauseResume(t.infoHash, t.paused)}
-                        >
-                          {t.paused ? '▶ Resume' : '⏸ Pause'}
-                        </button>
-
-                        <button
-                          className="btn btn-ghost btn-sm"
-                          onClick={() => handleDeleteTorrent(t.infoHash)}
-                          title="Remove torrent"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="progress-bar-bg">
-                      <div
-                        className={`progress-bar-fill ${t.done ? 'fill-done' : t.paused ? 'fill-paused' : ''}`}
-                        style={{ width: `${pct}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* Search Results */}
       <div className="results-container">

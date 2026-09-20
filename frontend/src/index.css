@@ -1372,3 +1372,366 @@ kbd {
   font-size: 0.75rem;
   color: #cbd5e1;
 }
+
+/* ==========================================================================
+   Dedicated Downloads Manager Tab (/downloads)
+   ========================================================================== */
+
+.downloads-page-container {
+  min-height: 100vh;
+  background-color: #090b0e;
+  background-image: 
+    radial-gradient(at 0% 0%, rgba(59, 130, 246, 0.05) 0px, transparent 50%),
+    radial-gradient(at 100% 100%, rgba(139, 92, 246, 0.04) 0px, transparent 50%);
+  color: #f1f5f9;
+  padding: 2rem 3rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  box-sizing: border-box;
+}
+
+.downloads-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  flex-wrap: wrap;
+  gap: 1.25rem;
+}
+
+.header-left {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.downloads-title-group h1 {
+  font-size: 1.65rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0 0 0.25rem 0;
+  color: #ffffff;
+}
+
+.downloads-path-hint {
+  font-size: 0.8rem;
+  color: var(--text-dim);
+}
+
+.downloads-path-hint strong {
+  color: #94a3b8;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.action-feedback {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.25);
+  padding: 0.35rem 0.75rem;
+  border-radius: 20px;
+  animation: fadeIn 0.2s ease-out;
+}
+
+.global-stats-pill {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  background: #11141b;
+  border: 1px solid #1e2433;
+  padding: 0.45rem 0.95rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+}
+
+.stat-pill-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--text-muted);
+}
+
+.stat-pill-item strong {
+  color: #f1f5f9;
+}
+
+.speed-down strong {
+  color: #38bdf8;
+}
+
+.speed-up strong {
+  color: #a78bfa;
+}
+
+.pill-dot {
+  color: #10b981;
+  font-size: 0.65rem;
+}
+
+/* Filter bar */
+.downloads-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.filter-tab-group {
+  display: flex;
+  gap: 0.35rem;
+  background: #0f1217;
+  border: 1px solid #1a1e27;
+  padding: 0.3rem;
+  border-radius: 8px;
+}
+
+.filter-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 0.45rem 0.95rem;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.filter-btn:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.filter-btn.active {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 1px 4px rgba(37, 99, 235, 0.4);
+}
+
+.filter-btn.streams-tab {
+  color: #c084fc;
+}
+
+.filter-btn.streams-tab.active {
+  background: #7c3aed;
+  color: #ffffff;
+}
+
+/* Downloads Content */
+.downloads-content {
+  flex: 1;
+}
+
+.empty-downloads-card {
+  text-align: center;
+  padding: 5rem 2rem;
+  background: #0d1016;
+  border: 1px dashed #1e2433;
+  border-radius: 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.85rem;
+  margin-top: 1.5rem;
+}
+
+.empty-icon {
+  font-size: 2.75rem;
+  color: #3b82f6;
+  opacity: 0.8;
+}
+
+.empty-downloads-card h3 {
+  font-size: 1.25rem;
+  color: #ffffff;
+  margin: 0;
+}
+
+.empty-downloads-card p {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  max-width: 440px;
+  line-height: 1.5;
+  margin: 0 0 1rem 0;
+}
+
+.downloads-cards-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+
+.download-card {
+  background: #0e1117;
+  border: 1px solid #1a202c;
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.download-card:hover {
+  border-color: #2b3548;
+}
+
+.download-card.active {
+  border-left: 3px solid #38bdf8;
+}
+
+.download-card.paused {
+  border-left: 3px solid #eab308;
+  opacity: 0.85;
+}
+
+.download-card.done {
+  border-left: 3px solid #10b981;
+}
+
+.card-top-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+}
+
+.card-title-box {
+  flex: 1;
+  min-width: 280px;
+}
+
+.card-badges {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.4rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.status-tag {
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.2rem 0.55rem;
+  border-radius: 4px;
+}
+
+.tag-active {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+}
+
+.tag-paused {
+  background: rgba(234, 179, 8, 0.12);
+  color: #facc15;
+  border: 1px solid rgba(234, 179, 8, 0.25);
+}
+
+.tag-done {
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.tag-stream {
+  background: rgba(168, 85, 247, 0.12);
+  color: #c084fc;
+  border: 1px solid rgba(168, 85, 247, 0.25);
+}
+
+.size-tag {
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.download-name {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #f8fafc;
+  margin: 0;
+  word-break: break-all;
+  line-height: 1.35;
+}
+
+.card-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.card-progress-section {
+  width: 100%;
+}
+
+.progress-bar-bg {
+  width: 100%;
+  height: 6px;
+  background: #171b23;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2563eb, #38bdf8);
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.progress-bar-fill.fill-done {
+  background: #10b981;
+}
+
+.progress-bar-fill.fill-paused {
+  background: #ca8a04;
+}
+
+.card-metrics-row {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  flex-wrap: wrap;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.metric-item {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.metric-label {
+  color: var(--text-dim);
+}
+
+.metric-val {
+  font-weight: 600;
+  color: #cbd5e1;
+}
+
+.speed-val {
+  color: #38bdf8;
+  font-weight: 700;
+}
+
+.peers-val {
+  color: #94a3b8;
+}
+

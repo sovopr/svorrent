@@ -20,6 +20,12 @@ if (!fs.existsSync(DOWNLOAD_DIR)) {
   fs.mkdirSync(DOWNLOAD_DIR, { recursive: true });
 }
 
+// Temporary streaming buffer cache (does NOT clutter ~/Downloads/Svorrent)
+const STREAM_CACHE_DIR = path.join(os.tmpdir(), 'svorrent-cache');
+if (!fs.existsSync(STREAM_CACHE_DIR)) {
+  fs.mkdirSync(STREAM_CACHE_DIR, { recursive: true });
+}
+
 // Initialize WebTorrent with secure: 0 for Node 24 OpenSSL compatibility
 const client = new WebTorrent({
   secure: 0,
@@ -88,12 +94,19 @@ app.get('/api/magnet', async (req, res) => {
 async function getOrAddTorrent(magnetURI, opts = {}) {
   let torrent = await client.get(magnetURI);
   if (!torrent) {
+    const isPermanent = opts.isPermanentDownload === true || (!opts.isStreamOnly && opts.path === DOWNLOAD_DIR);
+    const savePath = opts.path || (isPermanent ? DOWNLOAD_DIR : STREAM_CACHE_DIR);
     torrent = client.add(magnetURI, {
-      path: opts.path || DOWNLOAD_DIR,
+      path: savePath,
     });
+    torrent._isPermanentDownload = isPermanent;
+    torrent._isStreamOnly = !isPermanent;
     torrent.on('error', (err) => {
       console.error('Torrent runtime error:', err.message);
     });
+  } else if (opts.isPermanentDownload) {
+    torrent._isPermanentDownload = true;
+    torrent._isStreamOnly = false;
   }
   return torrent;
 }
@@ -115,7 +128,7 @@ app.post('/api/torrent/download', async (req, res) => {
   }
 
   try {
-    const torrent = await getOrAddTorrent(magnet, { path: DOWNLOAD_DIR });
+    const torrent = await getOrAddTorrent(magnet, { path: DOWNLOAD_DIR, isPermanentDownload: true });
     res.json({
       success: true,
       infoHash: torrent.infoHash,
@@ -153,6 +166,8 @@ app.get('/api/torrents', (req, res) => {
       timeRemaining: isPaused ? Infinity : (t.timeRemaining || 0),
       fileName: largestFile ? largestFile.name : null,
       filesCount: t.files ? t.files.length : 0,
+      isPermanentDownload: !!t._isPermanentDownload,
+      isStreamOnly: !!t._isStreamOnly,
     };
   });
   res.json(list);
@@ -423,7 +438,7 @@ app.get('/api/torrent/status', async (req, res) => {
     return res.status(400).json({ error: 'Magnet URI or provider details required' });
   }
 
-  let torrent = await getOrAddTorrent(magnetURI, { path: DOWNLOAD_DIR });
+  let torrent = await getOrAddTorrent(magnetURI, { isStreamOnly: true });
 
   const files = torrent.files ? torrent.files.map((f) => ({ name: f.name, length: f.length })) : [];
   const largestFile = torrent.files && torrent.files.length > 0
@@ -474,7 +489,7 @@ app.get('/api/stream', async (req, res) => {
     return res.redirect(`http://localhost:5173/?${streamTarget.toString()}`);
   }
 
-  let torrent = await getOrAddTorrent(magnetURI, { path: DOWNLOAD_DIR });
+  let torrent = await getOrAddTorrent(magnetURI, { isStreamOnly: true });
 
   const swarmTimeout = setTimeout(() => {
     if (!res.headersSent) {
@@ -570,7 +585,7 @@ app.get('/api/stream/remux', async (req, res) => {
     return res.status(400).send('Magnet URI is required');
   }
 
-  let torrent = await getOrAddTorrent(magnetURI, { path: DOWNLOAD_DIR });
+  let torrent = await getOrAddTorrent(magnetURI, { isStreamOnly: true });
 
   const swarmTimeout = setTimeout(() => {
     if (!res.headersSent) {

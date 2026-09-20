@@ -3,13 +3,16 @@ import cors from 'cors';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
-import { exec } from 'node:child_process';
+import { exec, spawn } from 'node:child_process';
 import TorrentSearchApi from 'torrent-search-api';
 import WebTorrent from 'webtorrent';
 import peerid from 'bittorrent-peerid';
 
 const app = express();
 const port = process.env.PORT || 3001;
+
+// Path to FFmpeg binary
+const FFMPEG_BIN = process.env.FFMPEG_PATH || (fs.existsSync('/Users/soveet/miniforge3/bin/ffmpeg') ? '/Users/soveet/miniforge3/bin/ffmpeg' : 'ffmpeg');
 
 // Default download folder on user's Mac: ~/Downloads/Svorrent
 const DOWNLOAD_DIR = path.join(os.homedir(), 'Downloads', 'Svorrent');
@@ -306,17 +309,23 @@ app.post('/api/torrent/:id/delete', async (req, res) => {
   });
 });
 
-// Reveal in macOS Finder
+// Reveal in macOS Finder / Windows File Explorer
 app.post('/api/torrent/:id/open-finder', async (req, res) => {
   const torrent = await client.get(req.params.id);
   const targetPath = torrent ? torrent.path : DOWNLOAD_DIR;
-  exec(`open "${targetPath}"`, (err) => {
+  const cmd = process.platform === 'win32'
+    ? `explorer.exe "${targetPath}"`
+    : process.platform === 'darwin'
+    ? `open "${targetPath}"`
+    : `xdg-open "${targetPath}"`;
+
+  exec(cmd, (err) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ success: true, path: targetPath });
   });
 });
 
-// Open File in native player (IINA / VLC / QuickTime)
+// Open File in native player (IINA / VLC / Windows Media Player / MPC-HC)
 app.post('/api/torrent/:id/play-native', async (req, res) => {
   const torrent = await client.get(req.params.id);
   if (!torrent || !torrent.files || torrent.files.length === 0) {
@@ -325,8 +334,13 @@ app.post('/api/torrent/:id/play-native', async (req, res) => {
 
   const largestFile = torrent.files.reduce((a, b) => (a.length > b.length ? a : b));
   const fullPath = path.join(torrent.path || DOWNLOAD_DIR, largestFile.path);
+  const cmd = process.platform === 'win32'
+    ? `start "" "${fullPath}"`
+    : process.platform === 'darwin'
+    ? `open "${fullPath}"`
+    : `xdg-open "${fullPath}"`;
 
-  exec(`open "${fullPath}"`, (err) => {
+  exec(cmd, (err) => {
     if (err) return res.status(500).json({ error: err.message });
     res.json({ success: true, file: fullPath });
   });
@@ -370,6 +384,8 @@ app.get('/api/torrent/status', async (req, res) => {
     fileName: largestFile ? largestFile.name : null,
     files,
     streamUrl: `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(magnetURI)}`,
+    remuxStreamUrl: `http://localhost:3001/api/stream/remux?mode=copy&magnet=${encodeURIComponent(magnetURI)}`,
+    transcodeStreamUrl: `http://localhost:3001/api/stream/remux?mode=transcode&magnet=${encodeURIComponent(magnetURI)}`,
   });
 });
 
@@ -474,6 +490,118 @@ app.get('/api/stream', async (req, res) => {
       stream.pipe(res);
       req.on('close', () => stream.destroy());
     }
+  }
+});
+
+// Lossless on-the-fly Remux streaming endpoint for browser (MKV, TrueHD, DTS -> fMP4 / AAC with -c:v copy)
+app.get('/api/stream/remux', async (req, res) => {
+  let magnetURI = req.query.magnet;
+  const { provider, desc, link, mode } = req.query;
+
+  if (!magnetURI && provider && (desc || link)) {
+    try {
+      magnetURI = await TorrentSearchApi.getMagnet({ provider, desc, link });
+    } catch (err) {
+      return res.status(400).send('Could not fetch magnet URI: ' + err.message);
+    }
+  }
+
+  if (!magnetURI) {
+    return res.status(400).send('Magnet URI is required');
+  }
+
+  let torrent = await getOrAddTorrent(magnetURI, { path: DOWNLOAD_DIR });
+
+  const swarmTimeout = setTimeout(() => {
+    if (!res.headersSent) {
+      res.status(504).send('Swarm timeout: waiting for peers to begin streaming remux.');
+    }
+  }, 35000);
+
+  if (torrent.ready) {
+    startRemuxStream();
+  } else {
+    torrent.once('ready', startRemuxStream);
+  }
+
+  function startRemuxStream() {
+    clearTimeout(swarmTimeout);
+    if (res.headersSent) return;
+
+    if (!torrent.files || torrent.files.length === 0) {
+      return res.status(404).send('No files found in torrent');
+    }
+
+    const file = torrent.files.reduce((a, b) => (a.length > b.length ? a : b));
+
+    // Focus 100% bandwidth on the streaming file
+    try {
+      torrent.files.forEach((f) => {
+        if (f !== file && typeof f.deselect === 'function') {
+          f.deselect();
+        }
+      });
+      if (typeof file.select === 'function') {
+        file.select();
+      }
+    } catch (e) {}
+
+    // Video codec handling:
+    // 'copy' = 100% untouched bit-for-bit native quality (preserves 4K UHD, HDR, HEVC/AVC without any re-encoding loss)
+    // 'transcode' = Hardware-accelerated transcode (Apple Silicon VideoToolbox on macOS, NVENC/AVX on Windows, ultrafast libx264)
+    let vCodecArgs = ['-c:v', 'copy'];
+    if (mode === 'transcode') {
+      if (process.platform === 'darwin') {
+        vCodecArgs = ['-c:v', 'h264_videotoolbox', '-b:v', '14M', '-pix_fmt', 'yuv420p'];
+      } else {
+        // Windows (win32) & Linux: universal ultrafast high-bitrate H.264
+        vCodecArgs = ['-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '18', '-pix_fmt', 'yuv420p'];
+      }
+    }
+
+    const ffmpegArgs = [
+      '-hide_banner',
+      '-loglevel', 'error',
+      '-i', 'pipe:0',
+      '-map', '0:v:0',
+      '-map', '0:a:0?',
+      ...vCodecArgs,
+      '-c:a', 'aac',
+      '-b:a', '384k',
+      '-ac', '2',
+      '-movflags', 'frag_keyframe+empty_moov+default_base_moof',
+      '-f', 'mp4',
+      'pipe:1',
+    ];
+
+    res.writeHead(200, {
+      'Content-Type': 'video/mp4',
+      'Accept-Ranges': 'none',
+      'Cache-Control': 'no-cache, no-store',
+      'Connection': 'keep-alive',
+    });
+
+    const ff = spawn(FFMPEG_BIN, ffmpegArgs);
+    const readStream = file.createReadStream();
+
+    readStream.pipe(ff.stdin);
+    ff.stdout.pipe(res);
+
+    ff.stderr.on('data', (data) => {
+      console.error('FFmpeg stderr:', data.toString());
+    });
+
+    const cleanup = () => {
+      try { readStream.destroy(); } catch (e) {}
+      try { ff.kill('SIGKILL'); } catch (e) {}
+    };
+
+    req.on('close', cleanup);
+    res.on('finish', cleanup);
+    ff.on('error', (err) => {
+      console.error('FFmpeg process error:', err.message);
+      cleanup();
+    });
   }
 });
 

@@ -68,6 +68,8 @@ export function CinemaPlayer() {
   const pollRef = useRef(null);
   const fileInputRef = useRef(null);
   const savedPositionRef = useRef(0);
+  const forcePlayTimerRef = useRef(null); // Auto-dismiss overlay if video stalls
+  const firstPieceReadyAtRef = useRef(null); // Timestamp when piece 0 was first seen
 
   // Online Subtitles Search Method
   const searchOnlineSubtitles = async (searchTarget, langCode = subtitleLang) => {
@@ -144,6 +146,25 @@ export function CinemaPlayer() {
           } else {
             // MKV / other: use remux (FFmpeg fmp4 pipe)
             setStreamMode('remux');
+          }
+        }
+
+        // Auto-force-play: if piece 0 has been ready for >3s and video hasn't
+        // started (onCanPlay never fired), force-dismiss the overlay and play.
+        if (data.hasFirstPiece) {
+          if (!firstPieceReadyAtRef.current) {
+            firstPieceReadyAtRef.current = Date.now();
+          }
+          const waitedMs = Date.now() - firstPieceReadyAtRef.current;
+          if (waitedMs > 3000 && !forcePlayTimerRef.current) {
+            forcePlayTimerRef.current = setTimeout(() => {
+              setIsVideoLoading(false);
+              const video = videoRef.current;
+              if (video) {
+                video.playbackRate = playbackSpeed;
+                video.play().catch(() => {});
+              }
+            }, 500);
           }
         }
       } catch (err) {
@@ -832,29 +853,43 @@ export function CinemaPlayer() {
                       <div className="buffer-telemetry-card">
                         <div className="buffer-telemetry-top">
                           <div className="buffer-spinner-glow"></div>
-                        <div>
+                          <div>
                             <h3 className="buffer-title">
-                              {status?.hasFirstPiece ? 'Starting Playback...' : 'Buffering BitTorrent Stream'}
+                              {status?.hasFirstPiece ? 'Ready to Play!' : 'Buffering BitTorrent Stream'}
                             </h3>
                             <p className="buffer-desc">
                               {status?.hasFirstPiece
                                 ? streamMode === 'direct'
-                                  ? 'Piece 0 ready — browser connecting to native byte-range stream...'
-                                  : 'Piece 0 ready — FFmpeg remuxing to fragmented MP4...'
-                                : 'Downloading initial stream piece from BitTorrent swarm...'}
+                                  ? 'First piece downloaded — click Play or wait for auto-start'
+                                  : 'First piece ready — FFmpeg starting stream...'
+                                : 'Downloading first piece from swarm...'}
                             </p>
                           </div>
                         </div>
 
-                        {/* Piece Progress Bar */}
+                        {/* Play Now CTA — shown once piece 0 is ready */}
+                        {status?.hasFirstPiece && (
+                          <button
+                            className="buffer-play-now-btn"
+                            onClick={() => {
+                              setIsVideoLoading(false);
+                              const video = videoRef.current;
+                              if (video) {
+                                video.playbackRate = playbackSpeed;
+                                video.play().catch(() => {});
+                              }
+                            }}
+                          >
+                            ▶ Play Now
+                          </button>
+                        )}
+
+                        {/* Piece Progress Bar — shown while waiting for piece 0 */}
+                        {!status?.hasFirstPiece && (
                         <div className="buffer-piece-meter">
                           <div className="meter-label-row">
                             <span className="meter-main-text">
-                              {status?.hasFirstPiece ? (
-                                <span style={{ color: '#4ade80' }}>✓ Initial Piece Verified (Ready)</span>
-                              ) : (
-                                `Piece #0: ${formatBytes(status?.firstPieceDownloaded || 0)} / ${formatBytes(status?.pieceLength || 16777216)} (${status?.firstPieceProgress || 0}%)`
-                              )}
+                              {`Piece #0: ${formatBytes(status?.firstPieceDownloaded || 0)} / ${formatBytes(status?.pieceLength || 16777216)} (${status?.firstPieceProgress || 0}%)`}
                             </span>
                             <span className="meter-speed-text">
                               ⚡ {formatBytes(status?.downloadSpeed || 0)}/s • {status?.numPeers || 0} peers
@@ -865,11 +900,19 @@ export function CinemaPlayer() {
                             <div
                               className="meter-bar-fill"
                               style={{
-                                width: status?.hasFirstPiece ? '100%' : `${Math.max(status?.firstPieceProgress || 0, 8)}%`,
+                                width: `${Math.max(status?.firstPieceProgress || 0, 8)}%`,
                               }}
                             ></div>
                           </div>
                         </div>
+                        )}
+
+                        {/* Speed + peers mini-stats when piece is ready */}
+                        {status?.hasFirstPiece && (
+                          <div style={{ textAlign: 'center', fontSize: '0.72rem', color: 'rgba(255,255,255,0.45)', marginTop: '2px' }}>
+                            ⚡ {formatBytes(status?.downloadSpeed || 0)}/s • {status?.numPeers || 0} peers
+                          </div>
+                        )}
 
                         {/* Fast Action: Native Desktop Player */}
                         <div className="buffer-native-shortcut">

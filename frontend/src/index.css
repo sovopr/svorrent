@@ -1718,12 +1718,13 @@ h1 {
 .buffer-play-now-btn {
   background: linear-gradient(135deg, #10b981, #059669);
   color: #ffffff;
-  font-weight: 700;
-  font-size: 0.92rem;
-  padding: 0.65rem 1.25rem;
-  border-radius: 10px;
-  border: 1px solid rgba(52, 211, 153, 0.5);
-  box-shadow: 0 4px 20px rgba(16, 185, 129, 0.35);
+  font-weight: 800;
+  font-size: 1.05rem;
+  letter-spacing: 0.02em;
+  padding: 0.85rem 2rem;
+  border-radius: 12px;
+  border: 1px solid rgba(52, 211, 153, 0.6);
+  box-shadow: 0 4px 24px rgba(16, 185, 129, 0.5);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1731,12 +1732,20 @@ h1 {
   gap: 0.5rem;
   transition: all 0.2s ease;
   width: 100%;
+  margin: 0.5rem 0 0.2rem;
+  animation: playBtnPulse 2s ease-in-out infinite;
+}
+
+@keyframes playBtnPulse {
+  0%, 100% { box-shadow: 0 4px 24px rgba(16, 185, 129, 0.5); }
+  50%       { box-shadow: 0 4px 36px rgba(16, 185, 129, 0.85); }
 }
 
 .buffer-play-now-btn:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 6px 25px rgba(16, 185, 129, 0.5);
+  transform: scale(1.03);
+  box-shadow: 0 6px 32px rgba(16, 185, 129, 0.75);
   background: linear-gradient(135deg, #34d399, #059669);
+  animation: none;
 }
 
 .buffer-quick-profiles {

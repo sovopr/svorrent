@@ -71,6 +71,9 @@ export function CinemaPlayer() {
   const pollRef = useRef(null);
   const fileInputRef = useRef(null);
   const savedPositionRef = useRef(0);
+  const playbackOffsetRef = useRef(0); // Stream start offset for seamless seek & quality transitions
+  const stallTimerRef = useRef(null); // Auto-downgrade timer when playback gets stuck
+  const lastStallTimeRef = useRef(0);
   const forcePlayTimerRef = useRef(null); // Auto-dismiss overlay if video stalls
   const firstPieceReadyAtRef = useRef(null); // Timestamp when piece 0 was first seen
   const userPausedRef = useRef(false);
@@ -191,11 +194,11 @@ export function CinemaPlayer() {
     };
   }, [params.magnet, params.provider, params.desc, params.link]);
 
-  // Dynamic ABR: Resolve effective quality profile for Auto mode (YouTube Style)
+  // Dynamic ABR: Real-time Auto Quality Upgrade & Downgrade (YouTube Style)
   useEffect(() => {
-    if (!status) return;
+    if (!status || streamMode !== 'auto') return;
 
-    // Smooth download speed to prevent jitter
+    // Smooth download speed to prevent rapid jitter
     const currentSpeed = status.downloadSpeed || 0;
     if (smoothedSpeedRef.current === 0) {
       smoothedSpeedRef.current = currentSpeed;
@@ -203,53 +206,80 @@ export function CinemaPlayer() {
       smoothedSpeedRef.current = 0.7 * smoothedSpeedRef.current + 0.3 * currentSpeed;
     }
     const effSpeed = smoothedSpeedRef.current;
+    const now = Date.now();
 
-    let target = 'remux';
-    if (status.isNativeCompatible) {
-      target = 'direct';
-    } else if (
-      status.isBandwidthConstrained ||
-      (status.length && status.length > 15 * 1024 * 1024 * 1024) ||
-      status.sourceIsRemuxRelease
-    ) {
-      // Swarm speed is lower than raw BluRay bitrate, or it's a massive release.
-      // Choose a hardware-accelerated profile that streams smoothly like YouTube!
-      if (effSpeed > 750000) {
-        target = '1080p'; // ~560 KB/s - plays continuously on 1.3 MB/s
-      } else {
-        target = '720p'; // ~310 KB/s - plays continuously on low bandwidth
-      }
-    } else {
-      target = 'remux';
-    }
-
-    // Initial resolution on load: apply immediately so playback starts with the right profile
+    // 1. Initial resolution on load
     if (!autoProfileInitializedRef.current) {
       autoProfileInitializedRef.current = true;
-      setEffectiveAutoProfile(target);
-      lastAutoSwitchRef.current = Date.now();
+      let initialTarget = 'remux';
+      if (status.isNativeCompatible) {
+        initialTarget = 'direct';
+      } else if (status.isBandwidthConstrained || effSpeed < 1200000) {
+        initialTarget = effSpeed > 650000 ? '1080p' : '720p';
+      }
+      setEffectiveAutoProfile(initialTarget);
+      lastAutoSwitchRef.current = now;
       return;
     }
 
-    // Cooldown check for subsequent auto switches (min 20 seconds to prevent rapid thrashing)
-    const now = Date.now();
-    if (target !== effectiveAutoProfile && now - lastAutoSwitchRef.current > 20000) {
-      // Save current video position before changing stream URL
-      const video = videoRef.current;
-      if (video && video.currentTime > 0) {
-        savedPositionRef.current = video.currentTime;
+    // 2. Real-time Emergency DOWNGRADE (when buffer health drops below 2.5s or during rebuffering)
+    if (bufferHealthSec < 2.5 || isRebuffering) {
+      if (now - lastAutoSwitchRef.current > 7000) { // 7s cooldown for emergency downgrade
+        let lower = effectiveAutoProfile;
+        if (effectiveAutoProfile === 'remux' || effectiveAutoProfile === 'browser4k') {
+          lower = effSpeed > 750000 ? '1080p' : '720p';
+        } else if (effectiveAutoProfile === '1080p') {
+          lower = '720p';
+        } else if (effectiveAutoProfile === '720p' && effSpeed < 300000) {
+          lower = '480p';
+        }
+
+        if (lower !== effectiveAutoProfile) {
+          const cur = (playbackOffsetRef.current || 0) + (videoRef.current?.currentTime || 0);
+          if (cur > 0) {
+            savedPositionRef.current = cur;
+            playbackOffsetRef.current = Math.floor(cur);
+          }
+          lastAutoSwitchRef.current = now;
+          lastStallTimeRef.current = now;
+          setEffectiveAutoProfile(lower);
+          setActionFeedback(`⚡ Swarm bottleneck: auto-downgraded to ${lower.toUpperCase()} for uninterrupted streaming`);
+          setTimeout(() => setActionFeedback(''), 3000);
+          return;
+        }
       }
-      lastAutoSwitchRef.current = now;
-      setEffectiveAutoProfile(target);
-      setActionFeedback(`⚡ Auto-adjusted quality to ${target.toUpperCase()} for uninterrupted streaming`);
-      setTimeout(() => setActionFeedback(''), 3000);
+    }
+
+    // 3. Opportunistic UPGRADE (when buffer runway is abundant > 15s and speed is sustained)
+    if (bufferHealthSec > 15.0 && now - lastStallTimeRef.current > 20000 && now - lastAutoSwitchRef.current > 20000) {
+      let higher = effectiveAutoProfile;
+      if (effectiveAutoProfile === '480p' && effSpeed > 500000) {
+        higher = '720p';
+      } else if (effectiveAutoProfile === '720p' && effSpeed > 1400000) {
+        higher = '1080p';
+      } else if (effectiveAutoProfile === '1080p' && effSpeed > 3000000 && !status.isBandwidthConstrained) {
+        higher = 'remux';
+      }
+
+      if (higher !== effectiveAutoProfile) {
+        const cur = (playbackOffsetRef.current || 0) + (videoRef.current?.currentTime || 0);
+        if (cur > 0) {
+          savedPositionRef.current = cur;
+          playbackOffsetRef.current = Math.floor(cur);
+        }
+        lastAutoSwitchRef.current = now;
+        setEffectiveAutoProfile(higher);
+        setActionFeedback(`⚡ Buffer healthy (${bufferHealthSec}s): auto-upgraded to ${higher.toUpperCase()}`);
+        setTimeout(() => setActionFeedback(''), 3000);
+      }
     }
   }, [
     status?.isNativeCompatible,
     status?.isBandwidthConstrained,
     status?.downloadSpeed,
-    status?.length,
-    status?.sourceIsRemuxRelease,
+    bufferHealthSec,
+    isRebuffering,
+    streamMode,
     effectiveAutoProfile,
   ]);
 
@@ -306,18 +336,21 @@ export function CinemaPlayer() {
     if (!status?.hasFirstPiece || !infoHash) return '';
     if (activeMode !== 'direct' && !hasRemuxBuffer) return '';
 
+    const startSec = Math.floor(savedPositionRef.current || playbackOffsetRef.current || 0);
+    const startParam = startSec > 3 ? `&startTime=${startSec}` : '';
+
     if (activeMode === 'direct') {
       return `http://localhost:3001/api/torrent/${infoHash}/stream`;
     } else if (activeMode === 'remux') {
-      return `http://localhost:3001/api/stream/remux?mode=copy&attempt=${remuxAttempt}&magnet=${encodeURIComponent(effectiveMagnet)}`;
+      return `http://localhost:3001/api/stream/remux?mode=copy&attempt=${remuxAttempt}${startParam}&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else if (activeMode === '1080p') {
-      return `http://localhost:3001/api/stream/remux?mode=1080p&magnet=${encodeURIComponent(effectiveMagnet)}`;
+      return `http://localhost:3001/api/stream/remux?mode=1080p&attempt=${remuxAttempt}${startParam}&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else if (activeMode === '720p') {
-      return `http://localhost:3001/api/stream/remux?mode=720p&magnet=${encodeURIComponent(effectiveMagnet)}`;
+      return `http://localhost:3001/api/stream/remux?mode=720p&attempt=${remuxAttempt}${startParam}&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else if (activeMode === '480p') {
-      return `http://localhost:3001/api/stream/remux?mode=480p&magnet=${encodeURIComponent(effectiveMagnet)}`;
+      return `http://localhost:3001/api/stream/remux?mode=480p&attempt=${remuxAttempt}${startParam}&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else if (activeMode === 'browser4k') {
-      return `http://localhost:3001/api/stream/remux?mode=browser4k&magnet=${encodeURIComponent(effectiveMagnet)}`;
+      return `http://localhost:3001/api/stream/remux?mode=browser4k&attempt=${remuxAttempt}${startParam}&magnet=${encodeURIComponent(effectiveMagnet)}`;
     } else {
       return `http://localhost:3001/api/stream?raw=true&magnet=${encodeURIComponent(effectiveMagnet)}`;
     }
@@ -410,18 +443,19 @@ export function CinemaPlayer() {
     const rect = scrubberRef.current.getBoundingClientRect();
     const clickX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
     const targetPct = clickX / rect.width;
-    const targetTime = targetPct * movieDuration;
+    const targetTime = Math.floor(targetPct * movieDuration);
 
     const video = videoRef.current;
     if (!video) return;
 
+    savedPositionRef.current = targetTime;
+    setCurrentTime(targetTime);
+
     if (streamMode === 'direct') {
       video.currentTime = targetTime;
-      setCurrentTime(targetTime);
     } else {
-      savedPositionRef.current = targetTime;
-      setCurrentTime(targetTime);
-      video.currentTime = targetTime;
+      playbackOffsetRef.current = targetTime;
+      setRemuxAttempt((prev) => prev + 1);
     }
   };
 
@@ -447,11 +481,13 @@ export function CinemaPlayer() {
     }
   };
 
-  // Seamless Quality Switching (preserves playback position)
+  // Seamless Quality Switching (preserves exact playback position)
   const handleQualityChange = (newMode) => {
-    if (newMode === streamMode) return;
-    if (videoRef.current) {
-      savedPositionRef.current = videoRef.current.currentTime || 0;
+    if (newMode === streamMode && streamMode !== 'auto') return;
+    const cur = (playbackOffsetRef.current || 0) + (videoRef.current?.currentTime || 0);
+    if (cur > 0) {
+      savedPositionRef.current = cur;
+      playbackOffsetRef.current = Math.floor(cur);
     }
     remuxFailureCountRef.current = 0;
     if (recoveryTimerRef.current) {
@@ -459,6 +495,9 @@ export function CinemaPlayer() {
       recoveryTimerRef.current = null;
     }
     setStreamMode(newMode);
+    if (newMode === 'auto') {
+      setEffectiveAutoProfile('720p');
+    }
     setActionFeedback(`Switching quality to ${newMode.toUpperCase()}...`);
     setTimeout(() => setActionFeedback(''), 2500);
   };
@@ -466,14 +505,17 @@ export function CinemaPlayer() {
   // Restore position and apply speed after quality switch or load
   const handleVideoCanPlay = () => {
     setIsVideoLoading(false);
+    setIsRebuffering(false);
     const video = videoRef.current;
     if (!video) return;
 
-    if (savedPositionRef.current > 0) {
+    if (streamMode === 'direct' && savedPositionRef.current > 0) {
       video.currentTime = savedPositionRef.current;
-      savedPositionRef.current = 0;
     }
     video.playbackRate = playbackSpeed;
+    if (video.paused && !userPausedRef.current) {
+      video.play().catch(() => {});
+    }
   };
 
   const handleVideoError = (e) => {
@@ -482,25 +524,62 @@ export function CinemaPlayer() {
       clearTimeout(forcePlayTimerRef.current);
       forcePlayTimerRef.current = null;
     }
+    const cur = (playbackOffsetRef.current || 0) + (videoRef.current?.currentTime || 0);
+    if (cur > 0) {
+      savedPositionRef.current = cur;
+      playbackOffsetRef.current = Math.floor(cur);
+    }
     if (streamMode === 'direct') {
-      // Direct stream failed — try remux as fallback
-      setActionFeedback('Direct stream unavailable — trying remux fallback...');
+      setActionFeedback('Direct stream unavailable — switching to remux fallback...');
       setTimeout(() => handleQualityChange('remux'), 800);
-    } else if (streamMode === 'remux') {
-      // Safari emits repeated media errors while the torrent buffer is still
-      // filling. Changing the URL on every error destroys the partial buffer
-      // and creates an endless retry/jitter loop. Allow one delayed recovery,
-      // then leave the source stable for a deliberate quality change.
+    } else {
       remuxFailureCountRef.current += 1;
-      if (remuxFailureCountRef.current === 1) {
-        setActionFeedback('Browser stream paused while the swarm catches up — retrying once...');
+      if (remuxFailureCountRef.current <= 2) {
+        setActionFeedback('Catching up with buffer runway — resuming...');
         recoveryTimerRef.current = setTimeout(() => {
           recoveryTimerRef.current = null;
           setRemuxAttempt((attempt) => attempt + 1);
-        }, 4000);
+        }, 2000);
       } else {
-        setActionFeedback('Browser stream paused. Choose 720p or press Play Now to retry without restarting repeatedly.');
+        // If repeatedly stalling, auto-downgrade to 720p
+        setActionFeedback('⚡ Swarm bottleneck: auto-switching to 720p to eliminate buffering...');
+        setTimeout(() => handleQualityChange('720p'), 1000);
       }
+    }
+  };
+
+  const handleTimeUpdate = () => {
+    const video = videoRef.current;
+    if (!video) return;
+    const actual = (playbackOffsetRef.current || 0) + (video.currentTime || 0);
+    setCurrentTime(actual);
+    savedPositionRef.current = actual;
+  };
+
+  const handleWaiting = () => {
+    setIsVideoLoading(true);
+    setIsRebuffering(true);
+    lastStallTimeRef.current = Date.now();
+    // In auto mode, if stalled for > 3.5s, auto-downgrade to unfreeze
+    if (streamMode === 'auto' && !stallTimerRef.current) {
+      stallTimerRef.current = setTimeout(() => {
+        stallTimerRef.current = null;
+        if (effectiveAutoProfile === 'remux' || effectiveAutoProfile === 'browser4k' || effectiveAutoProfile === '1080p') {
+          handleQualityChange('720p');
+        } else if (effectiveAutoProfile === '720p') {
+          handleQualityChange('480p');
+        }
+      }, 3500);
+    }
+  };
+
+  const handlePlaying = () => {
+    setIsVideoLoading(false);
+    setIsRebuffering(false);
+    setIsPaused(false);
+    if (stallTimerRef.current) {
+      clearTimeout(stallTimerRef.current);
+      stallTimerRef.current = null;
     }
   };
 
@@ -1147,7 +1226,7 @@ export function CinemaPlayer() {
             <div className="cinema-player-frame">
               {status?.ready ? (
                 <div
-                  className={`video-element-wrapper subtitle-style-${subtitleSize} ${isUserIdle ? 'user-idle' : ''}`}
+                  className={`video-element-wrapper subtitle-style-${subtitleSize} ${isUserIdle ? 'user-idle' : ''} ${isPaused ? 'paused' : ''}`}
                   onMouseMove={handleMouseMovePlayer}
                   onMouseLeave={() => !userPausedRef.current && setIsUserIdle(true)}
                 >
@@ -1162,14 +1241,9 @@ export function CinemaPlayer() {
                       src={streamUrl}
                       onClick={togglePlayPause}
                       onDoubleClick={handleVideoDoubleClick}
-                      onTimeUpdate={() => setCurrentTime(videoRef.current?.currentTime || 0)}
-                      onWaiting={() => {
-                        setIsVideoLoading(true);
-                      }}
-                      onPlaying={() => {
-                        setIsVideoLoading(false);
-                        setIsPaused(false);
-                      }}
+                      onTimeUpdate={handleTimeUpdate}
+                      onWaiting={handleWaiting}
+                      onPlaying={handlePlaying}
                       onPlay={() => {
                         userPausedRef.current = false;
                         setIsPaused(false);
@@ -1181,13 +1255,7 @@ export function CinemaPlayer() {
                       onLoadedData={() => {
                         setIsVideoLoading(false);
                       }}
-                      onCanPlay={() => {
-                        handleVideoCanPlay();
-                        const video = videoRef.current;
-                        if (video && video.paused && !userPausedRef.current) {
-                          video.play().catch(() => {});
-                        }
-                      }}
+                      onCanPlay={handleVideoCanPlay}
                       onError={handleVideoError}
                     >
                       {activeSubtitle && (

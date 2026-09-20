@@ -1606,55 +1606,65 @@ h1 {
   bottom: 0;
   left: 0;
   right: 0;
-  padding: 0 14px 10px 14px;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.9) 0%, rgba(0, 0, 0, 0.45) 60%, transparent 100%);
+  padding: 0 16px 12px 16px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.95) 0%, rgba(0, 0, 0, 0.55) 50%, rgba(0, 0, 0, 0.1) 85%, transparent 100%);
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  z-index: 25;
-  transition: opacity 0.3s ease;
+  gap: 10px;
+  z-index: 35;
+  transition: opacity 0.25s ease, background 0.25s ease;
   user-select: none;
+  pointer-events: auto;
 }
 
-.video-element-wrapper.user-idle .yt-scrubber-wrapper {
+/* When idle during active playback, gracefully hide controls row while keeping scrubber visible */
+.video-element-wrapper.user-idle:not(.paused) .yt-controls-row {
   opacity: 0;
   pointer-events: none;
+  transition: opacity 0.25s ease;
 }
 
-/* The YouTube Progress Track */
+.video-element-wrapper.user-idle:not(.paused) .yt-scrubber-wrapper {
+  background: transparent;
+  padding-bottom: 2px;
+}
+
+/* The YouTube Progress Track Container (Touch & Click Hit Area) */
 .yt-progress-container {
   position: relative;
   width: 100%;
-  height: 4px;
+  height: 20px;
   cursor: pointer;
   display: flex;
   align-items: center;
-  padding: 6px 0;
-  transition: height 0.15s ease;
+  box-sizing: border-box;
 }
 
-.yt-progress-container:hover {
-  height: 8px;
-}
-
+/* The Visual Progress Track Bar */
 .yt-progress-bg {
   position: relative;
   width: 100%;
-  height: 100%;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 2px;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.25);
+  border-radius: 3px;
+  transition: height 0.12s ease;
 }
 
-/* THE YOUTUBE GREY BUFFER BAR */
+.yt-progress-container:hover .yt-progress-bg {
+  height: 8px;
+}
+
+/* THE YOUTUBE GREY BUFFER BAR (Directly shows forward runway buffered in RAM) */
 .yt-progress-buffer {
   position: absolute;
   left: 0;
   top: 0;
-  bottom: 0;
-  background: rgba(255, 255, 255, 0.45);
-  border-radius: 2px;
-  transition: width 0.25s ease-out;
+  height: 100%;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 3px;
+  transition: width 0.2s ease-out;
   pointer-events: none;
+  z-index: 1;
 }
 
 /* THE YOUTUBE RED PLAYED BAR */
@@ -1662,24 +1672,27 @@ h1 {
   position: absolute;
   left: 0;
   top: 0;
-  bottom: 0;
+  height: 100%;
   background: #ff0000;
-  border-radius: 2px;
+  border-radius: 3px;
   pointer-events: none;
+  z-index: 2;
 }
 
 /* RED PLAYHEAD THUMB */
 .yt-scrubber-thumb {
   position: absolute;
-  right: -6px;
+  right: -7px;
   top: 50%;
   transform: translateY(-50%) scale(0);
-  width: 13px;
-  height: 13px;
+  width: 14px;
+  height: 14px;
   background: #ff0000;
   border-radius: 50%;
-  box-shadow: 0 0 4px rgba(0, 0, 0, 0.6);
+  box-shadow: 0 0 5px rgba(0, 0, 0, 0.8);
   transition: transform 0.15s cubic-bezier(0, 0, 0.2, 1);
+  pointer-events: none;
+  z-index: 3;
 }
 
 .yt-progress-container:hover .yt-scrubber-thumb {
@@ -1689,18 +1702,19 @@ h1 {
 /* HOVER TIME TOOLTIP */
 .yt-time-tooltip {
   position: absolute;
-  bottom: 24px;
+  bottom: 26px;
   transform: translateX(-50%);
-  background: rgba(20, 20, 20, 0.95);
+  background: rgba(18, 18, 18, 0.95);
   color: #ffffff;
   font-size: 0.74rem;
-  font-weight: 500;
-  padding: 3px 7px;
-  border-radius: 3px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 4px;
   pointer-events: none;
   white-space: nowrap;
-  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  z-index: 4;
 }
 
 /* YouTube Controls Row */

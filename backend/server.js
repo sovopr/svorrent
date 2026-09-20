@@ -1477,7 +1477,10 @@ app.get('/api/stream/remux', async (req, res) => {
       if (typeof file.select === 'function') {
         file.select();
       }
-      updatePrefetchWindow(torrent, file, 0);
+      const seekByte = (seekSec > 0 && torrent._detectedDuration && torrent._detectedDuration > 0)
+        ? Math.min(file.length - 1, Math.floor((seekSec / torrent._detectedDuration) * file.length))
+        : 0;
+      updatePrefetchWindow(torrent, file, seekByte);
     } catch (e) {}
 
     const isNativeMp4 = /\.(mp4|m4v|webm)$/i.test(file.name);
@@ -1575,8 +1578,8 @@ app.get('/api/stream/remux', async (req, res) => {
       '-fflags', '+discardcorrupt+genpts+igndts',
       '-probesize', mode === 'browser4k' ? '2M' : '8M',
       '-analyzeduration', mode === 'browser4k' ? '500k' : '1500k',
-      ...seekArgs,
       '-i', 'pipe:0',
+      ...seekArgs,
       '-avoid_negative_ts', 'make_zero',
       '-map', '0:v:0?',
       '-map', '0:a:0?',

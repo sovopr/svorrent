@@ -8,10 +8,10 @@ Svorrent takes the security and privacy of its users seriously. As a peer-to-pee
 
 Only the latest release branch actively receives security patches:
 
-| Version | Supported          |
-| :---    | :---               |
-| `1.0.x` | :white_check_mark: |
-| `< 1.0` | :x:                |
+| Version | Supported |
+| :---    | :---      |
+| `1.0.x` | Yes       |
+| `< 1.0` | No        |
 
 We strongly encourage all users to run the latest version or update using the built-in in-app updater.
 

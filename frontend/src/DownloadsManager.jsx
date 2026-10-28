@@ -63,10 +63,10 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
     try {
       await apiPost('/settings', { autoStopSeeding: nextVal });
       if (nextVal) {
-        notify('Auto-stop seeding enabled · Uploading stopped on completed downloads');
+        notify('Auto-stop seeding enabled');
         refresh();
       } else {
-        notify('Auto-stop seeding disabled · Completed downloads will continue seeding');
+        notify('Auto-stop seeding disabled');
       }
     } catch (err) {
       setAutoStopSeeding(!nextVal);
@@ -145,7 +145,7 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
         if (detailsId === t.infoHash) setDetailsId(null);
         notify(
           deleteFromDisk
-            ? `Deleted “${t.name}” and permanently erased files from disk`
+            ? `Deleted “${t.name}” and removed files from disk`
             : `Removed “${t.name}” (local files retained)`
         );
       }
@@ -184,7 +184,7 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
     try {
       notify(`Resuming “${t.name}” against existing files…`);
       await apiPost('/folder-files/resume', { infoHash, magnet });
-      notify(`Resumed “${t.name}”! Checking local pieces…`);
+      notify(`Resumed “${t.name}”`);
       refresh();
     } catch (err) {
       notify(err.message || 'Failed to resume download', 'error');
@@ -207,7 +207,7 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
     setResuming(true);
     try {
       await apiPost('/folder-files/resume', { magnet: uri });
-      notify('Download added! Verifying existing local files on disk…');
+      notify('Download added · Verifying local files…');
       setMagnetInput('');
       setResumeModalOpen(false);
       refresh();
@@ -236,9 +236,9 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
               setMagnetInput('');
               setResumeModalOpen(true);
             }}
-            title="Resume a halfway download by pasting its magnet link or infohash"
+            title="Resume a download by pasting its magnet link or infohash"
           >
-            <Icon name="magnet" size={14} /> Resume with magnet
+            <Icon name="magnet" size={13} /> Resume with magnet
           </button>
           <button
             id="open-downloads-folder"
@@ -246,7 +246,7 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
             onClick={() => reveal('root')}
             title={`Open ${location} in Finder`}
           >
-            <Icon name="folder" size={14} /> Open folder
+            <Icon name="folder" size={13} /> Open folder
           </button>
         </div>
       </div>
@@ -268,7 +268,7 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
           ))}
         </div>
         <div className="toolbar-actions">
-          <label className="toggle-setting" title="When enabled, completed downloads automatically stop uploading so they don't consume bandwidth or mobile data">
+          <label className="toggle-setting" title="Automatically stop uploading when downloads finish">
             <span className="toggle-setting-label">Stop seeding when done</span>
             <button
               type="button"
@@ -332,9 +332,9 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
                             {t.name}
                           </span>
                           {t.isRecoverable ? (
-                            <span className="tag tag-recoverable-inline">Incomplete</span>
+                            <span className="tag-inline-warn">Incomplete</span>
                           ) : (
-                            <span className="tag tag-folder-inline">On disk</span>
+                            <span className="tag-inline-muted">On disk</span>
                           )}
                         </div>
                       ) : (
@@ -357,7 +357,7 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
                         <span className="dl-status">
                           <span className="mono">{t.done ? '100%' : `${pct.toFixed(1)}%`}</span>
                           <span className="dot-sep" />
-                          {status.label}
+                          <span>{status.label}</span>
                           {t.length > 0 && (
                             <>
                               <span className="dot-sep" />
@@ -370,7 +370,15 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
                           {t.filesCount > 1 && (
                             <>
                               <span className="dot-sep" />
-                              {t.filesCount} files
+                              <span>{t.filesCount} files</span>
+                            </>
+                          )}
+                          {t.playability?.isMedia && !t.playability.canPlay && (
+                            <>
+                              <span className="dot-sep" />
+                              <span className="muted" title={t.playability.reason}>
+                                {t.paused ? 'Resume to buffer' : 'Buffering for playback'}
+                              </span>
                             </>
                           )}
                         </span>
@@ -392,109 +400,86 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
                     </td>
 
                     <td className="col-actions">
-                      <div className="dl-actions">
+                      <div className="dl-actions-row">
                         {isFolder ? (
                           <>
-                            <div className="dl-action-primary">
-                              {t.isRecoverable && (
-                                <button
-                                  className="btn btn-outline btn-sm"
-                                  onClick={() => runAction(t.infoHash, () => resumeRecoverable(t))}
-                                  disabled={pending.has(t.infoHash)}
-                                  title="Resume download halfway"
-                                >
-                                  <Icon name="play" size={13} /> Resume
-                                </button>
-                              )}
-                              {t.playability?.isMedia && (
-                                <button
-                                  className="btn btn-outline btn-sm"
-                                  disabled={!t.playability.canPlay}
-                                  onClick={() => playMedia(t)}
-                                  title={t.playability.reason}
-                                  aria-label={`Play media: ${t.playability.reason}`}
-                                >
-                                  <Icon name="play" size={13} /> Play
-                                </button>
-                              )}
-                            </div>
-                            <div className="dl-action-secondary">
+                            {t.isRecoverable && (
                               <button
-                                className="icon-btn"
-                                onClick={() => {
-                                  setMagnetInput(t.magnet || '');
-                                  setResumeModalOpen(true);
-                                }}
-                                title={t.isRecoverable ? 'Resume with custom magnet' : 'Seed / Resume via magnet link'}
-                                aria-label="Resume with magnet link"
+                                className="btn btn-outline btn-sm"
+                                onClick={() => runAction(t.infoHash, () => resumeRecoverable(t))}
+                                disabled={pending.has(t.infoHash)}
+                                title="Resume download"
                               >
-                                <Icon name="magnet" />
+                                <Icon name="play" size={12} /> Resume
                               </button>
-                              <button className="icon-btn" onClick={() => reveal(t.folderItemName || t.name)} title="Show in Finder" aria-label="Show in Finder">
-                                <Icon name="folder" />
+                            )}
+                            {t.playability?.isMedia && (
+                              <button
+                                className="btn btn-outline btn-sm"
+                                disabled={!t.playability.canPlay}
+                                onClick={() => playMedia(t)}
+                                title={t.playability.reason}
+                                aria-label={`Play media: ${t.playability.reason}`}
+                              >
+                                <Icon name="play" size={12} /> Play
                               </button>
-                              <button className="icon-btn icon-btn-danger" onClick={() => promptRemove(t)} title="Delete from disk" aria-label="Delete from disk">
-                                <Icon name="trash" />
-                              </button>
-                            </div>
+                            )}
+                            <button
+                              className="icon-btn"
+                              onClick={() => {
+                                setMagnetInput(t.magnet || '');
+                                setResumeModalOpen(true);
+                              }}
+                              title={t.isRecoverable ? 'Resume with custom magnet' : 'Seed or resume via magnet link'}
+                              aria-label="Resume with magnet link"
+                            >
+                              <Icon name="magnet" size={14} />
+                            </button>
+                            <button className="icon-btn" onClick={() => reveal(t.folderItemName || t.name)} title="Show in Finder" aria-label="Show in Finder">
+                              <Icon name="folder" size={14} />
+                            </button>
+                            <button className="icon-btn icon-btn-danger" onClick={() => promptRemove(t)} title="Delete from disk" aria-label="Delete from disk">
+                              <Icon name="trash" size={14} />
+                            </button>
                           </>
                         ) : (
                           <>
-                            <div className="dl-action-primary">
-                              {t.done ? (
-                                <button
-                                  className="btn btn-outline btn-sm"
-                                  onClick={() => runAction(t.infoHash, () => togglePause(t))}
-                                  disabled={pending.has(t.infoHash)}
-                                  title={t.paused ? 'Resume seeding this completed download' : 'Stop seeding and uploading this download'}
-                                >
-                                  <Icon name={t.paused ? 'play' : 'pause'} size={13} /> {t.paused ? 'Seed' : 'Stop Seeding'}
-                                </button>
-                              ) : (
-                                <button
-                                  className="btn btn-outline btn-sm"
-                                  onClick={() => runAction(t.infoHash, () => togglePause(t))}
-                                  disabled={pending.has(t.infoHash)}
-                                  title={t.paused ? 'Resume download' : 'Pause download'}
-                                >
-                                  <Icon name={t.paused ? 'play' : 'pause'} size={13} /> {t.paused ? 'Resume' : 'Pause'}
-                                </button>
-                              )}
-                              {t.playability?.isMedia && (
-                                <button
-                                  className="btn btn-outline btn-sm"
-                                  disabled={!t.playability.canPlay}
-                                  onClick={() => playMedia(t)}
-                                  title={t.playability.reason}
-                                  aria-label={`Play media: ${t.playability.reason}`}
-                                >
-                                  <Icon name="play" size={13} /> Play
-                                </button>
-                              )}
-                            </div>
-                            <div className="dl-action-secondary">
-                              <button className="icon-btn" onClick={() => runAction(t.infoHash, () => recheckTorrent(t.infoHash, t.name))} disabled={pending.has(t.infoHash)} title="Force Recheck / Verify local data on disk" aria-label="Force Recheck">
-                                <Icon name="refresh" />
+                            <button
+                              className="btn btn-outline btn-sm"
+                              onClick={() => runAction(t.infoHash, () => togglePause(t))}
+                              disabled={pending.has(t.infoHash)}
+                              title={t.done ? (t.paused ? 'Resume seeding' : 'Stop seeding') : (t.paused ? 'Resume download' : 'Pause download')}
+                            >
+                              <Icon name={t.paused ? 'play' : 'pause'} size={12} />
+                              <span>{t.done ? (t.paused ? 'Seed' : 'Stop') : (t.paused ? 'Resume' : 'Pause')}</span>
+                            </button>
+                            {t.playability?.isMedia && (
+                              <button
+                                className="btn btn-outline btn-sm"
+                                disabled={!t.playability.canPlay}
+                                onClick={() => playMedia(t)}
+                                title={t.playability.reason}
+                                aria-label={`Play media: ${t.playability.reason}`}
+                              >
+                                <Icon name="play" size={12} /> Play
                               </button>
-                              <button className="icon-btn" onClick={() => reveal(t.infoHash)} title="Show in Finder" aria-label="Show in Finder">
-                                <Icon name="folder" />
-                              </button>
-                              <button className="icon-btn" onClick={() => setSwarmTorrent(t)} title="Peers and pieces" aria-label="Peers and pieces">
-                                <Icon name="globe" />
-                              </button>
-                              <button className="dl-details-link" onClick={() => setDetailsId(t.infoHash)} title="Details">
-                                Details
-                              </button>
-                              <button className="icon-btn icon-btn-danger" onClick={() => promptRemove(t)} title="Remove" aria-label="Remove">
-                                <Icon name="trash" />
-                              </button>
-                            </div>
+                            )}
+                            <button className="icon-btn" onClick={() => setSwarmTorrent(t)} title="Peers and pieces" aria-label="Peers and pieces">
+                              <Icon name="globe" size={14} />
+                            </button>
+                            <button className="icon-btn" onClick={() => setDetailsId(t.infoHash)} title="Details" aria-label="Details">
+                              <Icon name="info" size={14} />
+                            </button>
+                            <button className="icon-btn" onClick={() => reveal(t.infoHash)} title="Show in Finder" aria-label="Show in Finder">
+                              <Icon name="folder" size={14} />
+                            </button>
+                            <button className="icon-btn" onClick={() => runAction(t.infoHash, () => recheckTorrent(t.infoHash, t.name))} disabled={pending.has(t.infoHash)} title="Verify local data" aria-label="Force Recheck">
+                              <Icon name="refresh" size={14} />
+                            </button>
+                            <button className="icon-btn icon-btn-danger" onClick={() => promptRemove(t)} title="Remove" aria-label="Remove">
+                              <Icon name="trash" size={14} />
+                            </button>
                           </>
-                        )}
-                        {t.playability?.isMedia && !t.playability.canPlay && (
-                          <span className="dl-play-hint" title={t.playability.reason}>
-                            {t.paused ? 'Resume to buffer playback' : 'Waiting for enough buffer to play'}
-                          </span>
                         )}
                       </div>
                     </td>
@@ -518,7 +503,7 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
             </div>
             <form onSubmit={handleResumeMagnetSubmit} className="modal-body">
               <p className="modal-desc muted">
-                Paste a magnet link or info hash. Existing files in <span className="mono">{location}</span> will be checked before missing pieces are downloaded.
+                Paste a magnet link or info hash. Existing files in <span className="mono">{location}</span> will be verified before missing pieces are downloaded.
               </p>
               <div className="field">
                 <input
@@ -561,11 +546,9 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
             aria-labelledby="modal-delete-title"
           >
             <div className="modal-head">
-              <div className="delete-modal-head-title">
-                <h2 id="modal-delete-title" className="modal-title">
-                  {deleteTarget.isFolderFile ? 'Delete file?' : 'Remove download?'}
-                </h2>
-              </div>
+              <h2 id="modal-delete-title" className="modal-title">
+                {deleteTarget.isFolderFile ? 'Delete file?' : 'Remove download?'}
+              </h2>
               <button
                 className="icon-btn"
                 onClick={() => !deleting && setDeleteTarget(null)}
@@ -581,13 +564,13 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
                 <div className="delete-target-name ellipsis" title={deleteTarget.name}>
                   {deleteTarget.name}
                 </div>
-                <div className="delete-target-meta text-xs mono">
+                <div className="delete-target-meta mono muted">
                   {deleteTarget.isFolderFile ? (
-                    <span>Size on disk: {formatBytes(deleteTarget.length || deleteTarget.downloaded || 0)}</span>
+                    <span>{formatBytes(deleteTarget.length || deleteTarget.downloaded || 0)} on disk</span>
                   ) : (
                     <span>
-                      Downloaded: {formatBytes(deleteTarget.downloaded || 0)}
-                      {deleteTarget.length > 0 && ` / ${formatBytes(deleteTarget.length)}`}
+                      {formatBytes(deleteTarget.downloaded || 0)}
+                      {deleteTarget.length > 0 && ` of ${formatBytes(deleteTarget.length)}`}
                       {deleteTarget.progress > 0 && ` (${Math.round(deleteTarget.progress * 100)}%)`}
                     </span>
                   )}
@@ -595,41 +578,27 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
               </div>
 
               {deleteTarget.isFolderFile ? (
-                <div className="delete-impact-notice is-danger">
-                  <Icon name="alert" size={15} />
-                  <span>
-                    This permanently deletes the item from <span className="mono">{location}</span>. It cannot be undone.
-                  </span>
-                </div>
+                <p className="modal-desc muted">
+                  This permanently deletes the file from <span className="mono">{location}</span>.
+                </p>
               ) : (
-                <div className="delete-options-group">
-                  <label className="delete-disk-option">
-                    <input
-                      type="checkbox"
-                      className="delete-disk-checkbox"
-                      checked={deleteFromDisk}
-                      onChange={(e) => setDeleteFromDisk(e.target.checked)}
-                      disabled={deleting}
-                    />
-                    <div className="delete-disk-label">
-                      <span className="delete-disk-title">Also delete downloaded files from disk</span>
-                      <span className="delete-disk-sub">
-                        Permanently erases all downloaded files for this torrent from <span className="mono">{location}</span>.
-                      </span>
-                    </div>
-                  </label>
-
-                  <div className={`delete-impact-notice ${deleteFromDisk ? 'is-danger' : 'is-safe'}`}>
-                    <Icon name={deleteFromDisk ? 'alert' : 'info'} size={15} />
-                    <span>
-                      {deleteFromDisk ? (
-                        <>The downloaded files and partial data will be permanently deleted. This cannot be undone.</>
-                      ) : (
-                        <>Files already on disk are retained. You can resume later via <em>Resume with Magnet</em>.</>
-                      )}
+                <label className="delete-disk-option">
+                  <input
+                    type="checkbox"
+                    className="delete-disk-checkbox"
+                    checked={deleteFromDisk}
+                    onChange={(e) => setDeleteFromDisk(e.target.checked)}
+                    disabled={deleting}
+                  />
+                  <div className="delete-disk-label">
+                    <span className="delete-disk-title">Also delete downloaded files from disk</span>
+                    <span className="delete-disk-sub">
+                      {deleteFromDisk
+                        ? `Permanently removes downloaded data from ${location}.`
+                        : 'Leaves downloaded files on disk so you can access or resume them later.'}
                     </span>
                   </div>
-                </div>
+                </label>
               )}
 
               <div className="modal-actions">
@@ -647,16 +616,11 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
                   onClick={confirmDelete}
                   disabled={deleting}
                 >
-                  {deleting ? (
-                    'Removing…'
-                  ) : deleteFromDisk || deleteTarget.isFolderFile ? (
-                    <>
-                      <Icon name="trash" size={14} />
-                      <span>Delete files</span>
-                    </>
-                  ) : (
-                    'Remove download'
-                  )}
+                  {deleting
+                    ? 'Removing…'
+                    : deleteFromDisk || deleteTarget.isFolderFile
+                    ? 'Delete files'
+                    : 'Remove download'}
                 </button>
               </div>
             </div>

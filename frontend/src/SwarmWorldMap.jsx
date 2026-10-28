@@ -14,13 +14,11 @@ export function SwarmWorldMap({
   const [hoveredCountry, setHoveredCountry] = useState(null);
   const [mousePos, setMousePos] = useState({ x: 0, y: 0, width: 260 });
 
-  // Filter peers by selected interface if applicable
   const filteredPeers = useMemo(() => {
     if (selectedInterface === 'all') return peers;
     return peers.filter((p) => p.networkDevice === selectedInterface || p.networkType === selectedInterface);
   }, [peers, selectedInterface]);
 
-  // Group peers by ISO country code
   const countryPeerMap = useMemo(() => {
     const map = new Map();
     for (const p of filteredPeers) {
@@ -61,7 +59,6 @@ export function SwarmWorldMap({
     return map;
   }, [filteredPeers]);
 
-  // Compute SVG element centroids for each country directly from browser geometry
   useEffect(() => {
     if (!containerRef.current) return;
     const svgEl = containerRef.current.querySelector('svg');
@@ -83,7 +80,6 @@ export function SwarmWorldMap({
       } catch {}
     });
 
-    // Special visual adjustments for countries with distant islands or expansive polygons
     if (computed['us']) computed['us'] = { x: 235, y: 395 };
     if (computed['fr']) computed['fr'] = { x: 415, y: 395 };
     if (computed['ru']) computed['ru'] = { x: 575, y: 350 };
@@ -93,7 +89,6 @@ export function SwarmWorldMap({
     setCentroids(computed);
   }, []);
 
-  // Update country fill and stroke styles directly in the SVG DOM
   useEffect(() => {
     if (!containerRef.current) return;
     const svgEl = containerRef.current.querySelector('svg');
@@ -120,7 +115,6 @@ export function SwarmWorldMap({
     });
   }, [countryPeerMap, selectedCountry, hoveredCountry]);
 
-  // Extract inner SVG markup from worldMapRawSvg
   const innerSvgMarkup = useMemo(() => {
     const start = worldMapRawSvg.indexOf('<g>');
     const end = worldMapRawSvg.lastIndexOf('</g>');
@@ -155,13 +149,11 @@ export function SwarmWorldMap({
         className="swarm-map-svg"
         preserveAspectRatio="xMidYMid meet"
         onClick={(e) => {
-          // If clicking background, deselect
           if (e.target.tagName === 'svg' || e.target.classList.contains('swarm-map-bg')) {
             onSelectCountry(null);
           }
         }}
       >
-        {/* Ocean Background */}
         <rect
           x="30.767"
           y="241.591"
@@ -170,19 +162,11 @@ export function SwarmWorldMap({
           className="swarm-map-bg"
         />
 
-        {/* Subtle Lat/Lon Reference Lines */}
-        <g className="swarm-grid-lines" stroke="rgba(255, 255, 255, 0.035)" strokeDasharray="3 4">
-          {/* Equator */}
-          <line x1="30.767" y1="470.9" x2="814.844" y2="470.9" strokeWidth="0.8" />
-          {/* Prime Meridian */}
-          <line x1="422.8" y1="241.591" x2="422.8" y2="700.218" strokeWidth="0.8" />
-          {/* Tropic of Cancer (23.5 N) */}
-          <line x1="30.767" y1="410" x2="814.844" y2="410" strokeWidth="0.5" />
-          {/* Tropic of Capricorn (23.5 S) */}
-          <line x1="30.767" y1="530" x2="814.844" y2="530" strokeWidth="0.5" />
+        <g className="swarm-grid-lines" stroke="rgba(255, 255, 255, 0.03)" strokeDasharray="3 4">
+          <line x1="30.767" y1="470.9" x2="814.844" y2="470.9" strokeWidth="0.7" />
+          <line x1="422.8" y1="241.591" x2="422.8" y2="700.218" strokeWidth="0.7" />
         </g>
 
-        {/* Continents Base SVG */}
         <g
           className="swarm-continents-group"
           dangerouslySetInnerHTML={{ __html: innerSvgMarkup }}
@@ -208,7 +192,6 @@ export function SwarmWorldMap({
           }}
         />
 
-        {/* Peer Markers Overlay */}
         <g className="swarm-pins-layer">
           {Array.from(countryPeerMap.values()).map((data) => {
             const pos = centroids[data.code];
@@ -216,23 +199,9 @@ export function SwarmWorldMap({
 
             const isSelected = selectedCountry === data.code;
             const isHovered = hoveredCountry === data.code;
-            const hasWifi = data.wifiCount > 0;
-            const hasTether = data.tetherCount > 0;
-            const isDualChannel = hasWifi && hasTether;
-
-            // Marker sizing scaled subtly by peer count
-            const radius = Math.min(10, Math.max(5, 4 + Math.log2(data.peers.length + 1) * 2.2));
-
-            // Pin coloring based on interface
-            let strokeColor = '#38bdf8'; // Cyan for Wi-Fi
-            let fillColor = 'rgba(56, 189, 248, 0.85)';
-            if (isDualChannel) {
-              strokeColor = '#38bdf8';
-              fillColor = '#10b981'; // Green core for Tether + Cyan ring for Wi-Fi
-            } else if (hasTether) {
-              strokeColor = '#10b981'; // Emerald for Android Tether
-              fillColor = 'rgba(16, 185, 129, 0.85)';
-            }
+            const hasTether = data.tetherCount > 0 && data.wifiCount === 0;
+            const radius = Math.min(9, Math.max(4.5, 3.8 + Math.log2(data.peers.length + 1) * 1.9));
+            const pinColor = hasTether ? '#57ab72' : '#5b8dee';
 
             return (
               <g
@@ -256,44 +225,19 @@ export function SwarmWorldMap({
                 onMouseEnter={() => setHoveredCountry(data.code)}
                 style={{ cursor: 'pointer' }}
               >
-                {/* Subtle pulse ring on active download */}
-                {data.downSpeed > 0 && (
-                  <circle
-                    r={radius + 4}
-                    fill="none"
-                    stroke={strokeColor}
-                    strokeWidth="0.75"
-                    strokeOpacity="0.35"
-                  />
-                )}
-
-                {/* Base Marker Circle */}
                 <circle
                   r={radius}
-                  fill={fillColor}
+                  fill={pinColor}
                   stroke="#0b0f17"
                   strokeWidth="1.2"
                 />
-
-                {/* Dual Channel Indicator Ring */}
-                {isDualChannel && (
-                  <circle
-                    r={radius - 2}
-                    fill="none"
-                    stroke="#ffffff"
-                    strokeWidth="0.8"
-                    strokeOpacity="0.8"
-                  />
-                )}
-
-                {/* Peer Count Label inside marker if large enough */}
-                {radius >= 6.5 && (
+                {radius >= 6 && (
                   <text
                     textAnchor="middle"
-                    dy="1.6"
-                    fontSize="4.8"
+                    dy="1.5"
+                    fontSize="4.6"
                     fontWeight="700"
-                    fill="#0a0e17"
+                    fill="#0b0f17"
                     fontFamily="monospace"
                   >
                     {data.peers.length}
@@ -305,7 +249,6 @@ export function SwarmWorldMap({
         </g>
       </svg>
 
-      {/* Floating Precision Tooltip */}
       {hoveredData && (
         <div
           className="swarm-tooltip"
@@ -317,39 +260,31 @@ export function SwarmWorldMap({
           <div className="tooltip-header">
             <span className="tooltip-flag">{hoveredData.flag}</span>
             <span className="tooltip-country">{hoveredData.name}</span>
-            <span className="tooltip-badge mono">{hoveredData.peers.length} peer{hoveredData.peers.length !== 1 ? 's' : ''}</span>
+            <span className="tooltip-badge mono">{hoveredData.peers.length}</span>
           </div>
 
           <div className="tooltip-body">
             {hoveredData.cities.size > 0 && (
               <div className="tooltip-row">
-                <span className="tooltip-label">Location</span>
+                <span className="tooltip-label">City</span>
                 <span className="tooltip-val ellipsis">
                   {Array.from(hoveredData.cities).slice(0, 2).join(', ')}
                 </span>
               </div>
             )}
             <div className="tooltip-row">
-              <span className="tooltip-label">Speed</span>
+              <span className="tooltip-label">Rate</span>
               <span className="tooltip-val mono">
                 ↓ {formatSpeed(hoveredData.downSpeed)}
                 {hoveredData.upSpeed > 0 && ` · ↑ ${formatSpeed(hoveredData.upSpeed)}`}
               </span>
             </div>
             <div className="tooltip-row">
-              <span className="tooltip-label">Interfaces</span>
+              <span className="tooltip-label">Route</span>
               <span className="tooltip-val mono">
                 {[...hoveredData.interfaces].map(([name, count]) => `${name} (${count})`).join(' · ')}
               </span>
             </div>
-            {hoveredData.clients.size > 0 && (
-              <div className="tooltip-row">
-                <span className="tooltip-label">Clients</span>
-                <span className="tooltip-val ellipsis">
-                  {Array.from(hoveredData.clients).slice(0, 2).join(', ')}
-                </span>
-              </div>
-            )}
           </div>
         </div>
       )}

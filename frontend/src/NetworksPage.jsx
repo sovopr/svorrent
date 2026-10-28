@@ -2,20 +2,28 @@ import { useState, useEffect, useRef } from 'react';
 import { Icon } from './Icon';
 import { apiGet, apiPost, formatBytes, formatSpeed } from './lib';
 
-// Color map for distinct interface types in infographics
-const TYPE_COLORS = {
-  wifi: '#5b8dee',       // Steel blue
-  cellular: '#57ab72',   // Muted green
-  ethernet: '#c9a24a',   // Muted amber
-  bridge: '#a3a4a8',     // Gray
-  other: '#a3a4a8',      // Gray
+const TYPE_LABELS = {
+  wifi: 'Wi-Fi',
+  cellular: 'Cellular',
+  ethernet: 'Ethernet',
+  bridge: 'Bridge',
+  other: 'Adapter',
 };
 
-function MiniSparkline({ data = [], color = '#5b8dee', height = 24, width = 80 }) {
+const TYPE_COLORS = {
+  wifi: '#5b8dee',
+  cellular: '#57ab72',
+  ethernet: '#c9a24a',
+  bridge: '#a3a4a8',
+  other: '#a3a4a8',
+};
+
+function MiniSparkline({ data = [], color = '#5b8dee', height = 18, width = 64 }) {
   if (!data || data.length < 2) {
     return <div style={{ width, height }} className="sparkline-placeholder" />;
   }
 
+  const hasSignal = data.some((val) => val > 0);
   const max = Math.max(...data, 1024);
   const points = data.map((val, idx) => {
     const x = (idx / (data.length - 1)) * width;
@@ -28,67 +36,13 @@ function MiniSparkline({ data = [], color = '#5b8dee', height = 24, width = 80 }
       <polyline
         fill="none"
         stroke={color}
-        strokeWidth="1.5"
+        strokeOpacity={hasSignal ? 1 : 0.45}
+        strokeWidth="1.4"
         strokeLinecap="round"
         strokeLinejoin="round"
         points={points}
       />
     </svg>
-  );
-}
-
-function BandwidthAreaChart({ data = [], height = 72, peakSpeed = 0 }) {
-  if (!data || data.length < 2) {
-    return (
-      <div className="bandwidth-chart-empty" style={{ height }}>
-        <span className="muted mono">Collecting traffic data…</span>
-      </div>
-    );
-  }
-
-  const width = 640;
-  // The chart scale has a floor; the reported peak uses measured traffic only.
-  const measuredPeak = Math.max(peakSpeed, ...data, 0);
-  const max = Math.max(...data, 1024);
-  const coords = data.map((val, idx) => {
-    const x = (idx / (data.length - 1)) * width;
-    const y = height - (Math.min(val, max) / max) * (height - 8) - 4;
-    return { x, y };
-  });
-
-  const linePoints = coords.map((c) => `${c.x.toFixed(1)},${c.y.toFixed(1)}`).join(' ');
-  const areaPoints = `${coords[0].x.toFixed(1)},${height} ${linePoints} ${coords[coords.length - 1].x.toFixed(1)},${height}`;
-
-  return (
-    <div className="bandwidth-chart-wrap">
-      <div className="chart-header">
-        <span className="chart-label">Total download speed (last 24 samples)</span>
-        <span className="chart-peak mono">Peak: {measuredPeak > 0 ? formatSpeed(measuredPeak) : '0 B/s'}</span>
-      </div>
-      <svg viewBox={`0 0 ${width} ${height}`} className="bandwidth-chart-svg" preserveAspectRatio="none">
-        <defs>
-          <linearGradient id="chartGradient" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#5b8dee" stopOpacity="0.25" />
-            <stop offset="100%" stopColor="#5b8dee" stopOpacity="0.0" />
-          </linearGradient>
-        </defs>
-        <line x1="0" y1={height - 1} x2={width} y2={height - 1} stroke="var(--border)" strokeWidth="1" />
-        <line x1="0" y1={height / 2} x2={width} y2={height / 2} stroke="var(--border)" strokeDasharray="3 3" strokeWidth="1" opacity="0.6" />
-        <polygon points={areaPoints} fill="url(#chartGradient)" />
-        <polyline
-          fill="none"
-          stroke="#5b8dee"
-          strokeWidth="1.6"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          points={linePoints}
-        />
-      </svg>
-      <div className="chart-footer">
-        <span className="mono muted">Earlier</span>
-        <span className="mono muted">Now</span>
-      </div>
-    </div>
   );
 }
 
@@ -110,7 +64,6 @@ export function NetworksPage({ notify, isActive = true }) {
   const requestRef = useRef(null);
   const notifyRef = useRef(notify);
 
-  // Software updates state
   const [updater, setUpdater] = useState(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [isRestartingUpdate, setIsRestartingUpdate] = useState(false);
@@ -138,15 +91,15 @@ export function NetworksPage({ notify, isActive = true }) {
       if (res && typeof res === 'object') {
         setUpdater(res);
         if (res.status === 'error') {
-          notifyRef.current?.(res.error || 'Update check failed', 'danger');
+          notifyRef.current?.(res.error || 'Update check failed', 'error');
         } else if (res.updateAvailable) {
-          notifyRef.current?.(`New version available: ${res.latestVersion}`, 'info');
+          notifyRef.current?.(`Update available: ${res.latestVersion}`);
         } else {
-          notifyRef.current?.(`Svorrent is up to date (v${res.currentVersion || '1.0.4'})`, 'ok');
+          notifyRef.current?.(`Up to date (v${res.currentVersion || '1.0.4'})`);
         }
       }
     } catch (err) {
-      notifyRef.current?.(err.message || 'Failed to check for updates', 'danger');
+      notifyRef.current?.(err.message || 'Failed to check for updates', 'error');
     } finally {
       setIsCheckingUpdate(false);
     }
@@ -155,11 +108,11 @@ export function NetworksPage({ notify, isActive = true }) {
   const handleRestartUpdate = async () => {
     if (isRestartingUpdate) return;
     setIsRestartingUpdate(true);
-    notifyRef.current?.('Restarting Svorrent to apply update...', 'info');
+    notifyRef.current?.('Restarting Svorrent to apply update…');
     try {
       await apiPost('/updater/restart');
     } catch (err) {
-      notifyRef.current?.(err.message || 'Failed to trigger restart', 'danger');
+      notifyRef.current?.(err.message || 'Failed to restart', 'error');
       setIsRestartingUpdate(false);
     }
   };
@@ -175,7 +128,6 @@ export function NetworksPage({ notify, isActive = true }) {
     let currentRequest = null;
 
     const requestNetworks = async (kind = 'poll', iface) => {
-      // Serialize user actions, including clicks before React renders disabled controls.
       if (disposed || (currentRequest && (kind === 'poll' || currentRequest.kind !== 'poll'))) return;
       clearTimeout(timer);
       currentRequest?.controller.abort();
@@ -207,7 +159,6 @@ export function NetworksPage({ notify, isActive = true }) {
           currentRequest = null;
           setLoading(false);
           setPendingAction(null);
-          // Start the next poll only after the current request settles.
           timer = setTimeout(() => requestNetworks(), 1200);
         }
       }
@@ -236,15 +187,15 @@ export function NetworksPage({ notify, isActive = true }) {
     aggregateHistory = [],
   } = data;
 
-  const connectedInterfaces = interfaces.filter((i) => i.connected);
   const selfAssignedInterfaces = interfaces.filter((i) => i.statusReason === 'link-local');
-  const activeInterfaces = interfaces.filter((i) => i.connected && i.enabled);
   const iphoneDhcpIface = interfaces.find(
     (i) => (i.name?.toLowerCase().includes('iphone') || (data?.iosTether?.detected && i.type === 'cellular')) && i.statusReason === 'link-local'
   );
   const showIosBanner = (data?.iosTether?.detected && !data?.iosTether?.interfaceActive) || !!iphoneDhcpIface;
   const nonIosSelfAssigned = selfAssignedInterfaces.filter((i) => i !== iphoneDhcpIface);
   const hasMultiple = bondedCount > 1;
+  const totalPeers = interfaces.reduce((sum, i) => sum + (Number(i.peers) || 0), 0);
+  const measuredPeak = Math.max(peakSpeed, ...(aggregateHistory || []), 0);
   const downloadShare = (iface) => totalDownSpeed > 0 && iface.connected && iface.enabled
     ? Math.max(0, Math.min(100, Number(iface.sharePercent) || 0))
     : 0;
@@ -255,7 +206,7 @@ export function NetworksPage({ notify, isActive = true }) {
         <div>
           <h1 className="page-title">Networks</h1>
           <p className="page-sub">
-            Peer connections can use enabled network adapters. Speeds depend on each connection and available peers.
+            Route peer connections across one or more network interfaces.
           </p>
         </div>
         <div className="page-actions">
@@ -266,13 +217,13 @@ export function NetworksPage({ notify, isActive = true }) {
             disabled={pendingAction !== null}
             title="Rescan network adapters"
           >
-            <Icon name="refresh" size={14} className={isRefreshing ? 'icon-spin' : ''} />
+            <Icon name="refresh" size={13} className={isRefreshing ? 'icon-spin' : ''} />
             <span>{isRefreshing ? 'Scanning…' : 'Refresh adapters'}</span>
           </button>
         </div>
       </div>
 
-      {error && <p className="muted" role="alert">Network update failed: {error} Retrying automatically.</p>}
+      {error && <p className="notice notice-error" role="alert">Network update failed: {error} Retrying automatically.</p>}
 
       {showIosBanner && (
         <div className="usb-tether-banner" role="status">
@@ -302,7 +253,7 @@ export function NetworksPage({ notify, isActive = true }) {
       )}
 
       {data?.usbTether?.detected && !data?.usbTether?.interfaceActive && (
-        <div className="usb-tether-banner">
+        <div className="usb-tether-banner" role="status">
           <div className="usb-tether-dot" />
           <div className="usb-tether-content">
             <span className="usb-tether-title">
@@ -312,125 +263,60 @@ export function NetworksPage({ notify, isActive = true }) {
               {!data.usbTether.helperInstalled
                 ? 'Reopen Svorrent from Applications and choose Enable Android USB tethering when prompted.'
                 : data.usbTether.daemonActive
-                  ? 'Connected via USB. On your phone, go to Settings → Connections → Mobile Hotspot and Tethering (or Hotspot & Tethering) and turn ON "USB Tethering".'
+                  ? 'Connected via USB. On your phone, go to Settings → Connections → Mobile Hotspot and Tethering and turn on "USB Tethering".'
                   : 'The Android USB helper is not running. Reopen Svorrent to retry setup.'}
             </span>
           </div>
         </div>
       )}
 
-      {/* Top Telemetry KPI Cards */}
+      {/* Compact Telemetry Summary Strip */}
       <div className="stat-grid network-kpi-grid">
         <div>
-          <span className="stat-label">Download speed</span>
-          <span className="stat-value mono">
-            {formatSpeed(totalDownSpeed)}
-          </span>
+          <span className="stat-label">Download</span>
+          <div className="stat-value-row">
+            <span className="stat-value mono">{formatSpeed(totalDownSpeed)}</span>
+            <MiniSparkline data={aggregateHistory} color="#5b8dee" width={68} height={18} />
+          </div>
           <span className="stat-meta mono muted">
-            ↑ {formatSpeed(totalUpSpeed)}
+            Peak {measuredPeak > 0 ? formatSpeed(measuredPeak) : '0 B/s'}
           </span>
         </div>
 
         <div>
-          <span className="stat-label">Active adapters</span>
-          <span className="stat-value">
-            {bondedCount} <span className="stat-unit">of {connectedCount} connected</span>
+          <span className="stat-label">Upload</span>
+          <span className="stat-value mono">{formatSpeed(totalUpSpeed)}</span>
+          <span className="stat-meta mono muted">
+            {totalPeers} active peer{totalPeers === 1 ? '' : 's'}
+          </span>
+        </div>
+
+        <div>
+          <span className="stat-label">Routing</span>
+          <span className="stat-value mono">
+            {bondedCount} <span className="stat-unit">of {connectedCount} active</span>
           </span>
           <span className="stat-meta">
             <span className={`status-indicator ${bondedCount > 0 ? 'online' : 'offline'}`} />
-            {bondedCount === 0 ? 'No active adapters' : hasMultiple ? 'Multiple adapters enabled' : 'One adapter enabled'}
+            {bondedCount === 0 ? 'No active adapters' : hasMultiple ? 'Multi-interface bonding' : 'Single interface'}
           </span>
         </div>
 
         <div>
-          <span className="stat-label">Download distribution</span>
-          <span className="stat-value mono">
-            {bondedCount === 0 ? 'No active adapters' : totalDownSpeed > 0
-              ? activeInterfaces.map((i) => `${downloadShare(i)}%`).join(' / ')
-              : 'No download traffic'}
-          </span>
-          <span className="stat-meta muted">
-            Share of current download traffic
-          </span>
-        </div>
-
-        <div>
-          <span className="stat-label">Session data transferred</span>
-          <span className="stat-value mono">
-            {formatBytes(totalDownloaded)}
-          </span>
+          <span className="stat-label">Session transferred</span>
+          <span className="stat-value mono">{formatBytes(totalDownloaded)}</span>
           <span className="stat-meta mono muted">
             {formatBytes(totalUploaded)} uploaded
           </span>
         </div>
       </div>
 
-      {/* Infographics Section */}
-      <div className="infographics-panel">
-        <div className="infographic-box">
-          <div className="infographic-head">
-            <span className="infographic-title">Download traffic distribution</span>
-            <span className="infographic-badge mono">
-              {bondedCount} active adapter{bondedCount !== 1 ? 's' : ''}
-            </span>
-          </div>
-
-          {/* Proportional Bandwidth Split Bar */}
-          <div className="distribution-bar" role="img" aria-label={bondedCount === 0 ? 'No active adapters' : totalDownSpeed > 0 ? 'Download traffic distribution across adapters; shares listed below' : 'No download traffic'}>
-            {connectedInterfaces.map((iface) => {
-              const color = TYPE_COLORS[iface.type] || TYPE_COLORS.other;
-              const pct = downloadShare(iface);
-
-              if (pct <= 0) return null;
-
-              return (
-                <div
-                  key={iface.id}
-                  className="distribution-segment"
-                  style={{
-                    width: `${pct}%`,
-                    backgroundColor: iface.enabled ? color : 'var(--border)',
-                  }}
-                  title={`${iface.name} (${iface.device}): ${pct}% share`}
-                />
-              );
-            })}
-          </div>
-          {(bondedCount === 0 || totalDownSpeed <= 0) && (
-            <p className="muted">{bondedCount === 0 ? 'No active adapters.' : 'No download traffic.'}</p>
-          )}
-
-          {/* Distribution Legend */}
-          <div className="distribution-legend">
-            {connectedInterfaces.map((iface) => {
-              const color = TYPE_COLORS[iface.type] || TYPE_COLORS.other;
-              const pct = downloadShare(iface);
-
-              return (
-                <div key={iface.id} className={`legend-item ${iface.enabled ? '' : 'is-disabled'}`}>
-                  <span className="legend-swatch" style={{ backgroundColor: iface.enabled ? color : 'var(--border)' }} />
-                  <span className="legend-name">{iface.name}</span>
-                  <span className="legend-device mono muted">({iface.device})</span>
-                  <span className="legend-share mono">{iface.enabled ? `${pct}%` : 'disabled'}</span>
-                  <span className="legend-speed mono muted">{formatSpeed(iface.downSpeed)}</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* Live Bandwidth Sparkline Chart */}
-        <div className="infographic-box chart-box">
-          <BandwidthAreaChart data={aggregateHistory} peakSpeed={peakSpeed} />
-        </div>
-      </div>
-
       {/* Adapters Management Table */}
       <div className="adapters-section">
-        <div className="section-head">
-          <h2 className="section-title">Network adapters</h2>
-          <span className="section-sub muted">
-            Enable or disable adapters for peer connections. Disconnected adapters cannot route traffic.
+        <div className="section-bar">
+          <h2 className="section-heading">Interfaces</h2>
+          <span className="section-caption muted">
+            Toggle routing per interface. Disconnected interfaces cannot route peer traffic.
           </span>
         </div>
 
@@ -440,16 +326,16 @@ export function NetworksPage({ notify, isActive = true }) {
           <div className="empty">{error ? 'Network adapters are unavailable.' : 'No network adapters detected.'}</div>
         ) : (
           <div className="table-wrap">
-            <table className="table table-compact adapters-table">
+            <table className="table adapters-table">
               <thead>
                 <tr>
-                  <th className="col-status">Status</th>
                   <th className="col-iface">Interface</th>
                   <th className="col-type">Type</th>
-                  <th className="col-ip">IPv4 address</th>
+                  <th className="col-ip">IPv4</th>
                   <th className="col-num col-download">Download</th>
                   <th className="col-num col-upload">Upload</th>
-                  <th className="col-num col-data">Data</th>
+                  <th className="col-num col-share">Share</th>
+                  <th className="col-num col-data">Session</th>
                   <th className="col-num col-peers">Peers</th>
                   <th className="col-actions">Routing</th>
                 </tr>
@@ -457,42 +343,40 @@ export function NetworksPage({ notify, isActive = true }) {
               <tbody>
                 {interfaces.map((iface) => {
                   const color = TYPE_COLORS[iface.type] || TYPE_COLORS.other;
+                  const typeLabel = TYPE_LABELS[iface.type] || iface.type;
                   const isOnline = iface.connected && iface.enabled;
+                  const share = downloadShare(iface);
+
                   return (
                     <tr key={iface.id} className={iface.enabled ? '' : 'row-disabled'}>
-                      <td className="col-status">
-                        <span
-                          className={`status-dot ${isOnline ? 'is-online' : 'is-offline'}`}
-                          style={{ backgroundColor: isOnline ? color : undefined }}
-                          title={iface.statusReason === 'link-local' ? 'Needs DHCP; turn off "Disable unless needed" in System Settings' : !iface.connected ? 'Disconnected' : iface.enabled ? 'Routing enabled' : 'Routing disabled'}
-                        />
-                      </td>
                       <td className="col-iface">
                         <div className="iface-cell">
+                          <span
+                            className={`status-dot ${isOnline ? 'is-online' : 'is-offline'}`}
+                            style={{ backgroundColor: isOnline ? color : undefined }}
+                            title={iface.statusReason === 'link-local' ? 'Needs DHCP; turn off "Disable unless needed" in System Settings' : !iface.connected ? 'Disconnected' : iface.enabled ? 'Routing enabled' : 'Routing disabled'}
+                          />
                           <span className="iface-name">{iface.name}</span>
+                          <span className="mono muted iface-device">{iface.device}</span>
+                          {iface.statusReason === 'link-local' && (
+                            <span className="tag-inline-warn">Needs DHCP</span>
+                          )}
                         </div>
-                        <span className="mono muted iface-device">{iface.device}</span>
-                        {iface.statusReason === 'link-local' && (
-                          <span className="mono muted iface-device">
-                            Needs DHCP
-                          </span>
-                        )}
                       </td>
-                      <td className="col-type">
-                        <span className={`tag tag-iface tag-${iface.type}`}>
-                          {iface.type.toUpperCase()}
-                        </span>
-                      </td>
-                      <td className="col-ip mono">{iface.ip}</td>
+                      <td className="col-type muted">{typeLabel}</td>
+                      <td className="col-ip mono muted">{iface.ip || '—'}</td>
                       <td className="col-num col-download">
                         <div className="speed-with-sparkline">
                           <span className="mono">{formatSpeed(iface.downSpeed)}</span>
-                          <MiniSparkline data={iface.history} color={color} width={64} height={18} />
+                          <MiniSparkline data={iface.history} color={isOnline ? color : '#3a3b40'} width={52} height={16} />
                         </div>
                       </td>
                       <td className="col-num col-upload mono muted">{formatSpeed(iface.upSpeed)}</td>
-                      <td className="col-num col-data mono">{formatBytes(iface.downloaded)}</td>
-                      <td className="col-num col-peers mono">{iface.peers ?? 0}</td>
+                      <td className="col-num col-share mono muted">
+                        {!iface.enabled ? 'Off' : totalDownSpeed > 0 ? `${share}%` : '—'}
+                      </td>
+                      <td className="col-num col-data mono muted">{formatBytes(iface.downloaded)}</td>
+                      <td className="col-num col-peers mono muted">{iface.peers ?? 0}</td>
                       <td className="col-actions">
                         <button
                           className={`btn-toggle ${iface.enabled ? 'is-active' : ''}`}
@@ -514,72 +398,57 @@ export function NetworksPage({ notify, isActive = true }) {
         )}
       </div>
 
-      {/* Software Updates Section */}
+      {/* Minimalist Application Version & Update Row */}
       <div className="updates-section">
-        <div className="section-head">
-          <h2 className="section-title">Software updates</h2>
-          <span className="section-sub muted">
-            Automatic background updates keep Svorrent fast, secure, and compatible.
-          </span>
+        <div className="section-bar">
+          <h2 className="section-heading">Application</h2>
         </div>
 
-        <div className={`updates-card ${updater?.updateAvailable || updater?.readyToInstall ? 'has-update' : ''}`}>
-          <div className="updates-info">
-            <div className="updates-icon-wrap">
-              <Icon name={updater?.updateAvailable || updater?.readyToInstall ? 'download' : 'check'} size={18} />
-            </div>
-            <div className="updates-details">
-              <div className="updates-headline">
-                <span className="updates-version mono">Svorrent v{updater?.currentVersion || '1.0.4'}</span>
-                {updater?.readyToInstall ? (
-                  <span className="tag-update-available">READY TO INSTALL</span>
-                ) : updater?.updateAvailable ? (
-                  <span className="tag-update-available">UPDATE AVAILABLE</span>
-                ) : updater?.status === 'error' ? (
-                  <span className="tag-up-to-date">CHECK FAILED</span>
-                ) : (
-                  <span className="tag-up-to-date">UP TO DATE</span>
-                )}
-              </div>
-              <p className="updates-desc">
-                {updater?.readyToInstall
-                  ? `Svorrent ${updater.latestVersion} has been downloaded and verified. Downloads and settings are stored outside the app.`
-                  : updater?.status === 'downloading'
-                  ? `Downloading update ${updater.latestVersion} (${updater.downloadProgress || 0}%)…`
-                  : updater?.status === 'error'
-                  ? `Update check failed: ${updater.error || 'Unknown error'}`
-                  : updater?.updateAvailable
-                  ? `Version ${updater.latestVersion} is available.`
-                  : 'You are running the latest version of Svorrent.'}
-              </p>
-              {updater?.lastChecked && (
+        <div className={`updates-bar ${updater?.updateAvailable || updater?.readyToInstall ? 'has-update' : ''}`}>
+          <div className="updates-meta">
+            <span className="updates-version mono">Svorrent v{updater?.currentVersion || '1.0.4'}</span>
+            <span className="dot-sep" />
+            <span className="updates-status-text">
+              {updater?.readyToInstall
+                ? `Update ${updater.latestVersion} verified and ready to install`
+                : updater?.status === 'downloading'
+                ? `Downloading ${updater.latestVersion} (${updater.downloadProgress || 0}%)…`
+                : updater?.status === 'error'
+                ? `Update check failed: ${updater.error || 'Unknown error'}`
+                : updater?.updateAvailable
+                ? `Update ${updater.latestVersion} available`
+                : 'Up to date'}
+            </span>
+            {updater?.lastChecked && (
+              <>
+                <span className="dot-sep" />
                 <span className="updates-timestamp mono muted">
-                  Last checked: {new Date(updater.lastChecked).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  Checked {new Date(updater.lastChecked).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                 </span>
-              )}
-            </div>
+              </>
+            )}
           </div>
 
           <div className="updates-actions">
             {updater?.readyToInstall ? (
               <button
                 id="btn-restart-update"
-                className="btn btn-primary"
+                className="btn btn-primary btn-sm"
                 onClick={handleRestartUpdate}
                 disabled={isRestartingUpdate}
               >
-                <Icon name="refresh" size={14} className={isRestartingUpdate ? 'spin' : ''} />
+                <Icon name="refresh" size={13} className={isRestartingUpdate ? 'spin' : ''} />
                 <span>{isRestartingUpdate ? 'Restarting…' : `Restart to update (${updater.latestVersion})`}</span>
               </button>
             ) : (
               <button
                 id="btn-check-update"
-                className="btn-check-update"
+                className="btn btn-outline btn-sm"
                 onClick={handleCheckUpdate}
                 disabled={isCheckingUpdate}
-                title="Check GitHub for the latest release"
+                title="Check GitHub Releases for a newer version"
               >
-                <Icon name="refresh" size={14} className={isCheckingUpdate ? 'spin' : ''} />
+                <Icon name="refresh" size={13} className={isCheckingUpdate ? 'spin' : ''} />
                 <span>{isCheckingUpdate ? 'Checking…' : 'Check for update'}</span>
               </button>
             )}

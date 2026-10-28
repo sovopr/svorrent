@@ -5,13 +5,12 @@ import { countryFlag, countryName } from './countryUtils';
 import { Icon } from './Icon';
 import { apiGet, formatSpeed, formatBytes, formatPeerAddress } from './lib';
 
-// Color map for network interface badges
 const INTERFACE_COLORS = {
-  wifi: '#38bdf8',       // Cyan
-  cellular: '#10b981',   // Emerald
+  wifi: '#5b8dee',
+  cellular: '#57ab72',
   ethernet: '#c9a24a',
-  bridge: '#f59e0b',     // Amber
-  other: '#94a3b8',      // Slate
+  bridge: '#a3a4a8',
+  other: '#a3a4a8',
 };
 
 function getIfaceColor(type) {
@@ -49,29 +48,13 @@ function formatPeerIface(p, allInterfaces = []) {
   return name.length > 12 ? `${name.slice(0, 10)}…` : (name || 'Default');
 }
 
-function getPeerIfaceBadgeClass(p) {
-  const type = p.networkType || (p.networkDevice === 'feth0' ? 'cellular' : 'wifi');
-  switch (type) {
-    case 'wifi':
-      return 'badge-wifi';
-    case 'cellular':
-      return 'badge-tether';
-    case 'ethernet':
-      return 'badge-ethernet';
-    case 'bridge':
-      return 'badge-bridge';
-    default:
-      return 'badge-other';
-  }
-}
-
 export function SwarmModal({ torrent, onClose }) {
   const [data, setData] = useState({
     peers: [],
     summary: { totalPeers: 0, countriesCount: 0, countries: [], interfaces: [] },
     pieceTelemetry: null,
   });
-  const [viewMode, setViewMode] = useState('matrix'); // 'matrix' (default primary view) or 'map'
+  const [viewMode, setViewMode] = useState('matrix');
   const [selectedCountry, setSelectedCountry] = useState(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('downSpeed');
@@ -112,7 +95,6 @@ export function SwarmModal({ torrent, onClose }) {
   const summary = data.summary || { totalPeers: 0, countriesCount: 0, countries: [], interfaces: [] };
   const pieceTelemetry = data.pieceTelemetry;
 
-  // Filter peers based on country and search query
   const filteredPeers = useMemo(() => {
     return peers.filter((p) => {
       if (selectedCountry) {
@@ -138,7 +120,6 @@ export function SwarmModal({ torrent, onClose }) {
     });
   }, [peers, selectedCountry, searchQuery]);
 
-  // Sort peers
   const sortedPeers = useMemo(() => {
     const list = [...filteredPeers];
     list.sort((a, b) => {
@@ -156,7 +137,6 @@ export function SwarmModal({ torrent, onClose }) {
     return list;
   }, [filteredPeers, sortBy]);
 
-  // Per-interface breakdown metrics
   const interfaceBreakdown = useMemo(() => {
     const ifaces = summary.interfaces || [];
     return ifaces.map((iface) => {
@@ -186,100 +166,71 @@ export function SwarmModal({ torrent, onClose }) {
   return (
     <div className="modal-backdrop swarm-modal-backdrop" onClick={(e) => e.target === e.currentTarget && onClose()}>
       <div ref={dialog} tabIndex={-1} className="modal swarm-modal-dialog" role="dialog" aria-modal="true" aria-labelledby="swarm-modal-title">
-        {/* Modal Header */}
         <div className="swarm-modal-head">
           <div className="swarm-modal-title-wrap">
             <div>
               <h2 id="swarm-modal-title" className="swarm-modal-title ellipsis" title={torrent?.name || torrent?.fileName}>
-                Peers · {torrent?.name || torrent?.fileName || torrentId}
+                {torrent?.name || torrent?.fileName || torrentId}
               </h2>
-              <div className="swarm-modal-sub mono text-xs muted">
+              <div className="swarm-modal-sub mono muted">
                 <span>{formatBytes(torrent?.length || 0)}</span>
-                <span className="dot-sep">•</span>
-                <span>{((torrent?.progress || 0) * 100).toFixed(1)}% complete</span>
-                <span className="dot-sep">•</span>
-                <span className="active-down">↓ {formatSpeed(torrent?.downloadSpeed || 0)}</span>
-                <span className="dot-sep">•</span>
-                <span>{peers.length} peer{peers.length !== 1 ? 's' : ''} across {summary.countriesCount || 0} countr{summary.countriesCount === 1 ? 'y' : 'ies'}</span>
+                <span className="dot-sep" />
+                <span>{((torrent?.progress || 0) * 100).toFixed(1)}%</span>
+                <span className="dot-sep" />
+                <span>↓ {formatSpeed(torrent?.downloadSpeed || 0)}</span>
+                <span className="dot-sep" />
+                <span>{peers.length} peer{peers.length !== 1 ? 's' : ''} · {summary.countriesCount || 0} countr{summary.countriesCount === 1 ? 'y' : 'ies'}</span>
               </div>
             </div>
           </div>
 
           <div className="swarm-head-actions">
-            {/* Primary Engineering View Switcher */}
-            <div className="swarm-view-switcher" role="group" aria-label="View mode">
+            <div className="segmented" role="group" aria-label="View mode">
               <button
-                className={`view-toggle-btn ${viewMode === 'matrix' ? 'is-active' : ''}`}
+                className={`segment ${viewMode === 'matrix' ? 'is-active' : ''}`}
                 onClick={() => setViewMode('matrix')}
                 aria-pressed={viewMode === 'matrix'}
-                title="Piece Bitfield & Interface Telemetry Matrix"
               >
-                <Icon name="grid" size={13} />
-                <span>Pieces</span>
+                Pieces
               </button>
               <button
-                className={`view-toggle-btn ${viewMode === 'map' ? 'is-active' : ''}`}
+                className={`segment ${viewMode === 'map' ? 'is-active' : ''}`}
                 onClick={() => setViewMode('map')}
                 aria-pressed={viewMode === 'map'}
-                title="Global Peer Geolocation Map"
               >
-                <Icon name="globe" size={13} />
-                <span>Map</span>
+                Map
               </button>
             </div>
 
             <button className="icon-btn" onClick={onClose} aria-label="Close dialog">
-              <Icon name="x" size={16} />
+              <Icon name="x" size={15} />
             </button>
           </div>
         </div>
 
-        {/* Modal Scrollable Body */}
         <div className="swarm-modal-body">
           {error && <p className="notice notice-error" role="status">{error} Peer data may be out of date.</p>}
-          {/* Active Network Channels Throughput Legend */}
-          {(summary.interfaces || []).length > 0 && (
-            <div className="swarm-modal-toolbar">
-              <div className="map-legend">
-                {(summary.interfaces || []).map((iface) => {
-                  const color = getIfaceColor(iface.type);
-                  return (
-                    <span key={iface.device} className="legend-entry">
-                      <span className="legend-dot" style={{ backgroundColor: color }} />
-                      <span>{iface.name} ({formatSpeed(iface.downSpeed)})</span>
-                    </span>
-                  );
-                })}
-              </div>
-            </div>
-          )}
 
-          {/* VIEW MODE 1: TELEMETRY MATRIX (DEFAULT PRIMARY ENGINEERING VIEW) */}
           {viewMode === 'matrix' ? (
             <div className="swarm-telemetry-container">
-              {/* Piece Verification & Sequential Buffer Frontier Bar */}
-              <div className="telemetry-card piece-frontier-card">
+              <div className="telemetry-card">
                 <div className="card-top-bar">
-                  <div className="card-heading">
-                    <Icon name="layers" size={15} />
-                    <span className="card-title">Download progress</span>
-                  </div>
+                  <span className="card-title">Piece map</span>
                   {pieceTelemetry && (
-                    <div className="frontier-metrics mono text-xs muted">
-                      <span>{pieceTelemetry.verifiedPieces} / {pieceTelemetry.totalPieces} pieces verified</span>
-                      <span className="dot-sep">•</span>
-                      <span className="highlight-text">{pieceTelemetry.progressPercent}% to disk</span>
+                    <div className="frontier-metrics mono muted">
+                      <span>{pieceTelemetry.verifiedPieces} / {pieceTelemetry.totalPieces} verified</span>
+                      <span className="dot-sep" />
+                      <span>{pieceTelemetry.progressPercent}%</span>
                       {pieceTelemetry.pieceLength > 0 && (
                         <>
-                          <span className="dot-sep">•</span>
-                          <span>{formatBytes(pieceTelemetry.pieceLength)} / piece</span>
+                          <span className="dot-sep" />
+                          <span>{formatBytes(pieceTelemetry.pieceLength)} each</span>
                         </>
                       )}
                     </div>
                   )}
                 </div>
 
-                {/* High Density Piece Completion Grid */}
                 <div className="piece-grid-wrapper">
                   {pieceTelemetry?.piecesGrid ? (
                     <div className="piece-grid-row">
@@ -291,128 +242,99 @@ export function SwarmModal({ torrent, onClose }) {
                           <div
                             key={idx}
                             className={`piece-block ${isDone ? 'is-verified' : isDownloading ? 'is-downloading' : 'is-missing'} ${isCursor ? 'is-streaming-cursor' : ''}`}
-                            title={`Piece chunk #${idx + 1} (${isDone ? 'Verified' : isDownloading ? 'Downloading' : 'Missing'})`}
+                            title={`Piece #${idx + 1}: ${isDone ? 'Verified' : isDownloading ? 'Downloading' : 'Missing'}`}
                           />
                         );
                       })}
                     </div>
                   ) : (
-                    <div className="empty-sub">Analyzing piece bitfield…</div>
+                    <div className="empty-sub muted">Reading piece bitfield…</div>
                   )}
                 </div>
 
-                {/* Piece Availability Heatmap (Swarm Rarity) */}
                 {pieceTelemetry?.availability && pieceTelemetry.availability.length > 0 && (
                   <div className="swarm-rarity-row">
                     <div className="rarity-label-bar">
-                      <span className="text-xs muted">Piece availability across peers</span>
-                      <div className="rarity-legend text-xs mono muted">
-                        <span className="rarity-legend-box is-rare" /> &lt;25% swarm
-                        <span className="rarity-legend-box is-medium" /> 50%
-                        <span className="rarity-legend-box is-abundant" /> 100% swarm
-                      </div>
+                      <span className="muted">Swarm availability</span>
+                      <span className="mono muted">0–100%</span>
                     </div>
                     <div className="rarity-track">
-                      {pieceTelemetry.availability.map((avail, idx) => {
-                        const hue = Math.round((avail / 100) * 120); // 0 (red/rare) to 120 (green/abundant)
-                        return (
-                          <div
-                            key={idx}
-                            className="rarity-bar"
-                            style={{
-                              backgroundColor: avail === 0 ? '#1e293b' : `hsl(${hue}, 80%, 48%)`,
-                              opacity: Math.max(0.25, avail / 100),
-                            }}
-                            title={`Piece #${idx + 1}: ${avail}% swarm availability`}
-                          />
-                        );
-                      })}
+                      {pieceTelemetry.availability.map((avail, idx) => (
+                        <div
+                          key={idx}
+                          className="rarity-bar"
+                          style={{
+                            backgroundColor: avail === 0 ? 'var(--surface-2)' : 'var(--accent)',
+                            opacity: avail === 0 ? 1 : Math.max(0.2, avail / 100),
+                          }}
+                          title={`Piece #${idx + 1}: ${avail}% swarm availability`}
+                        />
+                      ))}
                     </div>
                   </div>
                 )}
 
-                {/* Grid Legend */}
-                <div className="grid-legend text-xs muted">
-                  <span className="legend-item"><span className="legend-box verified" /> Verified to Disk</span>
-                  <span className="legend-item"><span className="legend-box downloading" /> Actively Downloading</span>
-                  <span className="legend-item"><span className="legend-box missing" /> Missing Chunk</span>
-                  <span className="legend-item"><span className="cursor-indicator" /> Sequential Playback Cursor</span>
+                <div className="grid-legend muted">
+                  <span className="legend-item"><span className="legend-box verified" /> Verified</span>
+                  <span className="legend-item"><span className="legend-box downloading" /> Active</span>
+                  <span className="legend-item"><span className="legend-box missing" /> Missing</span>
+                  <span className="legend-item"><span className="cursor-indicator" /> Playback cursor</span>
                 </div>
               </div>
 
-              {/* Per-Interface Hardware Telemetry Breakdown */}
-              <div className="telemetry-card interface-matrix-card">
-                <div className="card-top-bar">
-                  <div className="card-heading">
-                    <Icon name="network" size={15} />
-                    <span className="card-title">Peers by interface</span>
+              {interfaceBreakdown.length > 0 && (
+                <div className="telemetry-card">
+                  <div className="card-top-bar">
+                    <span className="card-title">Interfaces</span>
+                    <span className="muted">{interfaceBreakdown.length} active</span>
                   </div>
-                  <span className="text-xs muted">Dynamic socket distribution</span>
-                </div>
 
-                <div className="interface-cards-grid">
-                  {interfaceBreakdown.length === 0 ? (
-                    <p className="empty-sub">Waiting for peer socket handshakes…</p>
-                  ) : (
-                    interfaceBreakdown.map((iface) => {
+                  <div className="interface-cards-grid">
+                    {interfaceBreakdown.map((iface) => {
                       const color = getIfaceColor(iface.type);
                       return (
-                        <div key={iface.device} className="iface-stat-card" style={{ borderTopColor: color }}>
+                        <div key={iface.device} className="iface-stat-card">
                           <div className="iface-stat-head">
                             <div className="iface-name-badge">
-                              <span className="chan-dot" style={{ backgroundColor: color }} />
-                              <span className="iface-display-name">{iface.name}</span>
-                              <span className="mono text-xs muted">({iface.device})</span>
+                              <span className="status-dot" style={{ backgroundColor: color }} />
+                              <span>{iface.name}</span>
+                              <span className="mono muted">{iface.device}</span>
                             </div>
-                            <span className="iface-peers-pill mono">{iface.peerCount} peers</span>
+                            <span className="mono muted">{iface.peerCount} peers</span>
                           </div>
 
                           <div className="iface-speeds-row mono">
-                            <div className="speed-stat">
-                              <span className="speed-label muted text-xs">Down:</span>
-                              <span className="active-down font-medium">{formatSpeed(iface.downSpeed)}</span>
-                            </div>
-                            <div className="speed-stat">
-                              <span className="speed-label muted text-xs">Up:</span>
-                              <span className="font-medium">{formatSpeed(iface.upSpeed)}</span>
-                            </div>
+                            <span>↓ {formatSpeed(iface.downSpeed)}</span>
+                            <span className="muted">↑ {formatSpeed(iface.upSpeed)}</span>
                           </div>
 
-                          <div className="iface-protocols-row text-xs mono">
-                            <div className="proto-stat">
-                              <span className="proto-pill proto-tcp">TCP: {iface.tcpCount}</span>
-                              <span className="proto-pill proto-utp">uTP: {iface.utpCount}</span>
-                            </div>
-                            <div className="choke-stat muted">
-                              <span>{iface.unchokedCount} unchoked</span>
-                              {iface.chokedCount > 0 && <span> · {iface.chokedCount} choked</span>}
-                            </div>
+                          <div className="iface-protocols-row mono muted">
+                            <span>TCP {iface.tcpCount} · uTP {iface.utpCount}</span>
+                            <span>{iface.unchokedCount} unchoked</span>
                           </div>
                         </div>
                       );
-                    })
-                  )}
+                    })}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           ) : (
-            /* VIEW MODE 2: GEOGRAPHIC WORLD MAP */
             <div className="swarm-main-grid">
-              {/* World Map */}
               <div className="swarm-map-card">
                 <div className="card-top-bar">
                   <div className="card-heading">
-                    <span className="card-title">Peer locations</span>
+                    <span className="card-title">Geographic distribution</span>
                     {selectedCountry && (
                       <span className="selected-filter-badge">
-                        Filtered: {countryFlag(selectedCountry)} {countryName(selectedCountry)}
+                        {countryFlag(selectedCountry)} {countryName(selectedCountry)}
                         <button className="clear-filter-btn" onClick={() => setSelectedCountry(null)} title="Clear country filter">
-                          <Icon name="x" size={12} />
+                          <Icon name="x" size={11} />
                         </button>
                       </span>
                     )}
                   </div>
-                  <span className="text-xs muted">Click a country to filter</span>
+                  <span className="muted">Select a country to filter peers</span>
                 </div>
 
                 <SwarmWorldMap
@@ -422,16 +344,15 @@ export function SwarmModal({ torrent, onClose }) {
                 />
               </div>
 
-              {/* Countries Ranked List */}
               <div className="swarm-countries-card">
                 <div className="card-top-bar">
                   <span className="card-title">Countries</span>
-                  <span className="mono muted text-xs">{summary.countries?.length || 0} total</span>
+                  <span className="mono muted">{summary.countries?.length || 0}</span>
                 </div>
 
                 <div className="countries-list">
                   {(!summary.countries || summary.countries.length === 0) ? (
-                    <p className="empty-sub">Discovering peers…</p>
+                    <p className="empty-sub muted">Discovering peers…</p>
                   ) : (
                     summary.countries.map((c) => {
                       const isSelected = selectedCountry === c.code.toLowerCase();
@@ -447,7 +368,7 @@ export function SwarmModal({ torrent, onClose }) {
                           <div className="country-row-main">
                             <span className="country-flag">{countryFlag(c.code)}</span>
                             <span className="country-name ellipsis">{countryName(c.code)}</span>
-                            <span className="country-peers mono">{c.count}</span>
+                            <span className="country-peers mono muted">{c.count}</span>
                           </div>
 
                           <div className="country-row-sub">
@@ -469,16 +390,16 @@ export function SwarmModal({ torrent, onClose }) {
           <div className="swarm-peers-section">
             <div className="section-head">
               <div className="section-title-wrap">
-                <h3 className="section-title">Connected peers</h3>
-                <span className="section-count mono muted">({sortedPeers.length} matching)</span>
+                <h3 className="card-title">Peers</h3>
+                <span className="mono muted">{sortedPeers.length}</span>
               </div>
 
               <div className="table-filter-bar">
                 <div className="input-with-icon">
-                  <Icon name="search" size={14} />
+                  <Icon name="search" size={13} />
                   <input
                     type="text"
-                    placeholder="Filter by IP, client, protocol, or country…"
+                    placeholder="Filter IP, client, country…"
                     aria-label="Filter peers"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
@@ -491,21 +412,20 @@ export function SwarmModal({ torrent, onClose }) {
                   )}
                 </div>
 
-                <div className="sort-select-wrap">
-                  <span className="sort-label text-xs muted">Sort:</span>
+                <label className="select-wrap">
+                  <span className="sr-only">Sort peers</span>
                   <select
                     aria-label="Sort peers"
                     value={sortBy}
                     onChange={(e) => setSortBy(e.target.value)}
-                    className="sort-dropdown"
                   >
-                    <option value="downSpeed">Speed (Fastest)</option>
-                    <option value="protocol">Transport Protocol</option>
-                    <option value="country">Country</option>
-                    <option value="client">Client</option>
-                    <option value="progress">Swarm Progress</option>
+                    <option value="downSpeed">Sort: Download speed</option>
+                    <option value="progress">Sort: Progress</option>
+                    <option value="country">Sort: Country</option>
+                    <option value="client">Sort: Client</option>
+                    <option value="protocol">Sort: Protocol</option>
                   </select>
-                </div>
+                </label>
               </div>
             </div>
 
@@ -514,21 +434,21 @@ export function SwarmModal({ torrent, onClose }) {
                 <thead>
                   <tr>
                     <th className="col-country">Country</th>
-                    <th className="col-peer-ip">IP Address : Port</th>
-                    <th className="col-client">Client Software</th>
-                    <th className="col-proto">Protocol</th>
+                    <th className="col-peer-ip">Address</th>
+                    <th className="col-client">Client</th>
+                    <th className="col-proto">Proto</th>
                     <th className="col-iface">Interface</th>
-                    <th className="col-down col-num">Down Speed</th>
-                    <th className="col-up col-num">Up Speed</th>
-                    <th className="col-progress col-num">Swarm Progress</th>
-                    <th className="col-flags col-num" title="C = Choking us, U = Unchoked, I = Interested">Flags</th>
+                    <th className="col-down col-num">Down</th>
+                    <th className="col-up col-num">Up</th>
+                    <th className="col-progress col-num">Have</th>
+                    <th className="col-flags col-num" title="C = Choked, U = Unchoked, I = Interested">Flags</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedPeers.length === 0 ? (
                     <tr>
                       <td colSpan={9} className="empty-table-cell">
-                        {peers.length === 0 ? 'Connecting to swarm…' : 'No peers match the current filter.'}
+                        {peers.length === 0 ? 'Connecting to peers…' : 'No peers match the current filter.'}
                       </td>
                     </tr>
                   ) : (
@@ -545,7 +465,6 @@ export function SwarmModal({ torrent, onClose }) {
                             <div className="country-cell" title={`${cName}${p.geo?.city ? ` (${p.geo.city})` : ''}`}>
                               <span className="table-flag">{countryFlag(cCode)}</span>
                               <span className="table-country-name ellipsis">{cName}</span>
-                              {p.geo?.city && <span className="table-city muted ellipsis">({p.geo.city})</span>}
                             </div>
                           </td>
 
@@ -553,51 +472,33 @@ export function SwarmModal({ torrent, onClose }) {
                             <span className="peer-ip-text">{addrText}</span>
                           </td>
 
-                          <td className="col-client" title={p.client || 'Unknown'}>
+                          <td className="col-client muted" title={p.client || 'Unknown'}>
                             <span className="ellipsis">{p.client || 'Unknown'}</span>
                           </td>
 
-                          <td className="col-proto">
-                            <span className={`protocol-badge ${proto === 'uTP' ? 'badge-utp' : 'badge-tcp'}`}>
-                              {proto}
-                            </span>
-                          </td>
+                          <td className="col-proto mono muted">{proto}</td>
 
-                          <td className="col-iface">
-                            <span
-                              className={`channel-badge ${getPeerIfaceBadgeClass(p)}`}
-                              title={ifaceTooltip}
-                            >
-                              {ifaceLabel}
-                            </span>
+                          <td className="col-iface muted" title={ifaceTooltip}>
+                            {ifaceLabel}
                           </td>
 
                           <td className="col-down col-num mono">
-                            {p.downloadSpeed > 0 ? (
-                              <span className="active-down">{formatSpeed(p.downloadSpeed)}</span>
-                            ) : (
-                              <span className="muted">{formatSpeed(0)}</span>
-                            )}
+                            {p.downloadSpeed > 0 ? formatSpeed(p.downloadSpeed) : <span className="muted">—</span>}
                           </td>
 
                           <td className="col-up col-num mono muted">
                             {formatSpeed(p.uploadSpeed)}
                           </td>
 
-                          <td className="col-progress col-num mono">
-                            <div className="table-progress-wrap">
-                              <div className="table-progress-bar">
-                                <div className="table-progress-fill" style={{ width: `${p.progress || 0}%` }} />
-                              </div>
-                              <span>{p.progress || 0}%</span>
-                            </div>
+                          <td className="col-progress col-num mono muted">
+                            {p.progress || 0}%
                           </td>
 
-                          <td className="col-flags col-num mono text-xs muted">
-                            <span className={p.choked ? 'flag-choked' : 'flag-unchoked'} title={p.choked ? 'Peer is choking us' : 'Peer is unchoked'}>
+                          <td className="col-flags col-num mono muted">
+                            <span title={p.choked ? 'Peer is choking us' : 'Peer is unchoked'}>
                               {p.choked ? 'C' : 'U'}
                             </span>
-                            {p.interested && <span title="Peer is interested"> · I</span>}
+                            {p.interested && <span title="Peer is interested">·I</span>}
                           </td>
                         </tr>
                       );

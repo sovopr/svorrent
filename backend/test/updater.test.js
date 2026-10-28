@@ -146,3 +146,46 @@ test('Updater rejects a downloaded build with the wrong SHA-256 digest', async (
     fs.rmSync(cacheDir, { recursive: true, force: true });
   }
 });
+
+test('Updater checks main branch commits when currentCommit is present and triggers repo integration', async () => {
+  const oldSha = '1111111111111111111111111111111111111111';
+  const newSha = '2222222222222222222222222222222222222222';
+  const updater = new AutoUpdater({
+    platform: 'darwin',
+    currentVersion: '1.0.4',
+    currentCommit: oldSha,
+  });
+
+  let integratedSha = null;
+  updater.integrateRepoCommit = async (sha) => {
+    integratedSha = sha;
+  };
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    assert.ok(url.endsWith('/commits/main'));
+    return Response.json({
+      sha: newSha,
+      html_url: `https://github.com/sovopr/svorrent/commit/${newSha}`,
+      commit: { message: 'perf(engine): boost per-wire block pipeline\n\nDetails here' },
+    });
+  };
+
+  try {
+    const status = await updater.checkForUpdates();
+    assert.equal(status.channel, 'main');
+    assert.equal(status.updateAvailable, true);
+    assert.equal(status.latestCommit, newSha);
+    assert.equal(status.commitMessage, 'perf(engine): boost per-wire block pipeline');
+    assert.equal(integratedSha, newSha);
+
+    // When already on the latest commit, status is idle and updateAvailable is false
+    updater.currentCommit = newSha;
+    updater.state.status = 'idle';
+    const upToDate = await updater.checkForUpdates();
+    assert.equal(upToDate.updateAvailable, false);
+    assert.equal(upToDate.status, 'idle');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

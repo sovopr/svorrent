@@ -3,7 +3,7 @@ import { SearchPage } from './SearchPage';
 import { DownloadsManager } from './DownloadsManager';
 import { NetworksPage } from './NetworksPage';
 import { Icon } from './Icon';
-import { apiGet, formatSpeed } from './lib';
+import { apiGet, apiPost, formatSpeed } from './lib';
 
 const routeFromPath = () => {
   const p = window.location.pathname.replace(/\/+$/, '') || '/';
@@ -122,11 +122,55 @@ function App() {
   const up = downloads.reduce((sum, t) => sum + speed(t.uploadSpeed), 0);
 
   const [searchTerm, setSearchTerm] = useState('');
+  const [repoUpdate, setRepoUpdate] = useState(null);
+  const [dismissedCommit, setDismissedCommit] = useState(null);
+  const [applyingRepoUpdate, setApplyingRepoUpdate] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const pollUpdater = async () => {
+      try {
+        const status = await apiGet('/updater/status');
+        if (active && status && typeof status === 'object') {
+          setRepoUpdate(status);
+        }
+      } catch {}
+    };
+    pollUpdater();
+    const isBusy = repoUpdate?.status === 'checking' || repoUpdate?.status === 'available' || repoUpdate?.status === 'downloading' || applyingRepoUpdate;
+    const timer = setInterval(pollUpdater, isBusy ? 1500 : 15000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [repoUpdate?.status, applyingRepoUpdate]);
+
+  const handleApplyRepoUpdate = async () => {
+    if (applyingRepoUpdate) return;
+    setApplyingRepoUpdate(true);
+    notify('Integrating verified repository code and restarting…');
+    try {
+      await apiPost('/updater/restart');
+      setTimeout(() => {
+        setApplyingRepoUpdate(false);
+        apiGet('/updater/status').then(setRepoUpdate).catch(() => {});
+      }, 3000);
+    } catch (err) {
+      notify(err.message || 'Failed to apply update', 'error');
+      setApplyingRepoUpdate(false);
+    }
+  };
 
   const handleGoSearch = (term) => {
     if (typeof term === 'string') setSearchTerm(term);
     navigate('search');
   };
+
+  const showUpdatePrompt = !!(
+    repoUpdate &&
+    (repoUpdate.updateAvailable || repoUpdate.readyToInstall) &&
+    (repoUpdate.latestCommit || repoUpdate.latestVersion) !== dismissedCommit
+  );
 
   return (
     <div className="app">
@@ -193,6 +237,51 @@ function App() {
           </div>
         </div>
       </header>
+
+      {showUpdatePrompt && (
+        <div className="repo-update-banner" role="region" aria-label="Repository code update">
+          <div className="repo-update-inner">
+            <div className="repo-update-info">
+              <span className="repo-update-badge">
+                {repoUpdate.readyToInstall ? 'NEW CODE VERIFIED' : 'INTEGRATING REPO CODE'}
+              </span>
+              <span className="repo-update-text">
+                {repoUpdate.readyToInstall
+                  ? `Commit ${repoUpdate.latestCommit ? repoUpdate.latestCommit.slice(0, 7) : repoUpdate.latestVersion} passed self-tests and is ready to integrate`
+                  : repoUpdate.step || `Integrating ${repoUpdate.latestVersion} (${repoUpdate.downloadProgress || 0}%)…`}
+              </span>
+              {repoUpdate.commitMessage && (
+                <span className="repo-update-commit muted">
+                  — “{repoUpdate.commitMessage}”
+                </span>
+              )}
+            </div>
+            <div className="repo-update-actions">
+              {repoUpdate.readyToInstall ? (
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={handleApplyRepoUpdate}
+                  disabled={applyingRepoUpdate}
+                >
+                  <Icon name="refresh" size={12} className={applyingRepoUpdate ? 'spin' : ''} />
+                  <span>{applyingRepoUpdate ? 'Applying…' : 'Integrate & Restart'}</span>
+                </button>
+              ) : (
+                <span className="repo-update-progress mono">
+                  {repoUpdate.downloadProgress || 0}%
+                </span>
+              )}
+              <button
+                className="btn btn-ghost btn-sm"
+                onClick={() => setDismissedCommit(repoUpdate.latestCommit || repoUpdate.latestVersion)}
+                aria-label="Dismiss update prompt"
+              >
+                Later
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <main
         className="page"

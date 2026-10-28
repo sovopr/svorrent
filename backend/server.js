@@ -388,15 +388,24 @@ const currentVersion = pkg.version || '1.0.4';
 let currentCommit = null;
 try {
   currentCommit = JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8')).commit;
-  if (!/^[0-9a-f]{40}$/.test(currentCommit)) currentCommit = null;
+  if (!/^[0-9a-f]{40}$/i.test(currentCommit)) currentCommit = null;
 } catch {}
+if (!currentCommit) {
+  try {
+    const { execFileSync } = require('node:child_process');
+    const gitSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: __dirname, encoding: 'utf8', timeout: 2000 }).trim();
+    if (/^[0-9a-f]{40}$/i.test(gitSha)) currentCommit = gitSha.toLowerCase();
+  } catch {}
+}
 
 const autoUpdater = new AutoUpdater({
   currentVersion,
   currentCommit,
   repo: 'sovopr/svorrent',
 });
-autoUpdater.start();
+if (!disablePublicDiscovery) {
+  autoUpdater.start();
+}
 
 app.get('/api/updater/status', (_req, res) => {
   res.json(autoUpdater.getStatus());

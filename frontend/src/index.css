@@ -230,6 +230,77 @@ main:focus-visible,
   font-variant-numeric: tabular-nums;
 }
 
+.repo-update-banner {
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.repo-update-inner {
+  max-width: var(--max-w);
+  margin: 0 auto;
+  padding: 9px 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.repo-update-info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.repo-update-badge {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px solid rgba(91, 141, 238, 0.28);
+  white-space: nowrap;
+}
+
+.repo-update-text {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+
+.repo-update-commit {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 380px;
+}
+
+.repo-update-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.repo-update-progress {
+  font-size: 12px;
+  color: var(--accent);
+  padding: 0 6px;
+}
+
+.updates-commit-msg {
+  font-size: 12px;
+  max-width: 320px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .rate {
   display: inline-flex;
   align-items: center;

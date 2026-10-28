@@ -79,9 +79,10 @@ export function NetworksPage({ notify, isActive = true }) {
   useEffect(() => {
     if (!isActive) return;
     fetchUpdater();
-    const interval = setInterval(fetchUpdater, 20000);
+    const isBusy = updater?.status === 'checking' || updater?.status === 'available' || updater?.status === 'downloading' || isRestartingUpdate;
+    const interval = setInterval(fetchUpdater, isBusy ? 1500 : 20000);
     return () => clearInterval(interval);
-  }, [isActive]);
+  }, [isActive, updater?.status, isRestartingUpdate]);
 
   const handleCheckUpdate = async () => {
     if (isCheckingUpdate) return;
@@ -93,9 +94,11 @@ export function NetworksPage({ notify, isActive = true }) {
         if (res.status === 'error') {
           notifyRef.current?.(res.error || 'Update check failed', 'error');
         } else if (res.updateAvailable) {
-          notifyRef.current?.(`Update available: ${res.latestVersion}`);
+          const shortSha = res.latestCommit ? res.latestCommit.slice(0, 7) : res.latestVersion;
+          notifyRef.current?.(`New repo code found (${shortSha}) — integrating & testing…`);
         } else {
-          notifyRef.current?.(`Up to date (v${res.currentVersion || '1.0.4'})`);
+          const shortSha = res.currentCommit ? ` (${res.currentCommit.slice(0, 7)})` : '';
+          notifyRef.current?.(`Up to date with repo: v${res.currentVersion || '1.0.4'}${shortSha}`);
         }
       }
     } catch (err) {
@@ -108,11 +111,15 @@ export function NetworksPage({ notify, isActive = true }) {
   const handleRestartUpdate = async () => {
     if (isRestartingUpdate) return;
     setIsRestartingUpdate(true);
-    notifyRef.current?.('Restarting Svorrent to apply update…');
+    notifyRef.current?.('Integrating verified code and restarting Svorrent…');
     try {
       await apiPost('/updater/restart');
+      setTimeout(() => {
+        setIsRestartingUpdate(false);
+        fetchUpdater();
+      }, 3000);
     } catch (err) {
-      notifyRef.current?.(err.message || 'Failed to restart', 'error');
+      notifyRef.current?.(err.message || 'Failed to apply update', 'error');
       setIsRestartingUpdate(false);
     }
   };
@@ -402,23 +409,37 @@ export function NetworksPage({ notify, isActive = true }) {
       <div className="updates-section">
         <div className="section-bar">
           <h2 className="section-heading">Application</h2>
+          <span className="section-caption muted">
+            Tracks recent commits on main, verifies new code automatically, and integrates updates in place.
+          </span>
         </div>
 
         <div className={`updates-bar ${updater?.updateAvailable || updater?.readyToInstall ? 'has-update' : ''}`}>
           <div className="updates-meta">
-            <span className="updates-version mono">Svorrent v{updater?.currentVersion || '1.0.4'}</span>
+            <span className="updates-version mono">
+              Svorrent v{updater?.currentVersion || '1.0.4'}
+              {updater?.currentCommit ? ` (${updater.currentCommit.slice(0, 7)})` : ''}
+            </span>
             <span className="dot-sep" />
             <span className="updates-status-text">
               {updater?.readyToInstall
-                ? `Update ${updater.latestVersion} verified and ready to install`
-                : updater?.status === 'downloading'
-                ? `Downloading ${updater.latestVersion} (${updater.downloadProgress || 0}%)…`
+                ? updater.step || `New code ${updater.latestVersion} verified and ready to integrate`
+                : updater?.status === 'downloading' || updater?.status === 'available'
+                ? `${updater.step || `Integrating ${updater.latestVersion}…`} (${updater.downloadProgress || 0}%)`
                 : updater?.status === 'error'
                 ? `Update check failed: ${updater.error || 'Unknown error'}`
                 : updater?.updateAvailable
-                ? `Update ${updater.latestVersion} available`
-                : 'Up to date'}
+                ? `New repo code ${updater.latestVersion} available`
+                : 'Up to date with repository'}
             </span>
+            {updater?.commitMessage && (updater?.updateAvailable || updater?.readyToInstall) && (
+              <>
+                <span className="dot-sep" />
+                <span className="updates-commit-msg muted" title={updater.commitMessage}>
+                  “{updater.commitMessage}”
+                </span>
+              </>
+            )}
             {updater?.lastChecked && (
               <>
                 <span className="dot-sep" />
@@ -438,18 +459,24 @@ export function NetworksPage({ notify, isActive = true }) {
                 disabled={isRestartingUpdate}
               >
                 <Icon name="refresh" size={13} className={isRestartingUpdate ? 'spin' : ''} />
-                <span>{isRestartingUpdate ? 'Restarting…' : `Restart to update (${updater.latestVersion})`}</span>
+                <span>{isRestartingUpdate ? 'Integrating & restarting…' : `Integrate & Restart (${updater.latestCommit ? updater.latestCommit.slice(0, 7) : updater.latestVersion})`}</span>
               </button>
             ) : (
               <button
                 id="btn-check-update"
                 className="btn btn-outline btn-sm"
                 onClick={handleCheckUpdate}
-                disabled={isCheckingUpdate}
-                title="Check GitHub Releases for a newer version"
+                disabled={isCheckingUpdate || updater?.status === 'downloading'}
+                title="Check repository for recent code changes and verify them"
               >
-                <Icon name="refresh" size={13} className={isCheckingUpdate ? 'spin' : ''} />
-                <span>{isCheckingUpdate ? 'Checking…' : 'Check for update'}</span>
+                <Icon name="refresh" size={13} className={isCheckingUpdate || updater?.status === 'downloading' ? 'spin' : ''} />
+                <span>
+                  {isCheckingUpdate
+                    ? 'Checking repo…'
+                    : updater?.status === 'downloading'
+                    ? `Verifying (${updater.downloadProgress || 0}%)…`
+                    : 'Check for update'}
+                </span>
               </button>
             )}
           </div>

@@ -615,6 +615,7 @@ except Exception as e:
     if (client.torrents && availableActiveIds.length > 0) {
       for (const t of client.torrents) {
         if (!t.wires) continue;
+        let torrentWireDown = 0;
         let torrentWireUp = 0;
         const torrentIfaceWires = new Map();
 
@@ -650,6 +651,7 @@ except Exception as e:
 
           const downSpeed = typeof wire.downloadSpeed === 'function' ? wire.downloadSpeed() : 0;
           const upSpeed = typeof wire.uploadSpeed === 'function' ? wire.uploadSpeed() : 0;
+          torrentWireDown += downSpeed;
           torrentWireUp += upSpeed;
 
           if (speedMap.has(ifaceId)) {
@@ -660,10 +662,19 @@ except Exception as e:
           }
         }
 
-        // Harmonize upload speeds: wire.uploadSpeed() only counts payload pieces sent when peers request them.
-        // During active downloading, WebTorrent emits outgoing piece requests, HAVE notifications, DHT pings,
-        // and keepalives (tracked by t.uploadSpeed). If t.uploadSpeed exceeds raw piece upload, allocate
-        // the remaining outgoing socket throughput across this torrent's active interfaces.
+        // Harmonize download and upload speeds: if t.downloadSpeed or t.uploadSpeed exceeds raw wire sum
+        // (e.g. protocol overhead, recently closed wires, or webSeed/DHT traffic), allocate the remaining
+        // throughput proportionally across this torrent's active interfaces.
+        const totalTorrentDown = typeof t.downloadSpeed === 'number' ? t.downloadSpeed : 0;
+        const unallocatedDown = Math.max(0, totalTorrentDown - torrentWireDown);
+        if (unallocatedDown > 0 && torrentIfaceWires.size > 0) {
+          const totalWiresInTorrent = Array.from(torrentIfaceWires.values()).reduce((a, b) => a + b, 0);
+          for (const [ifaceId, count] of torrentIfaceWires.entries()) {
+            const share = Math.round(unallocatedDown * (count / totalWiresInTorrent));
+            speedMap.set(ifaceId, (speedMap.get(ifaceId) || 0) + share);
+          }
+        }
+
         const totalTorrentUp = typeof t.uploadSpeed === 'number' ? t.uploadSpeed : 0;
         const unallocatedUp = Math.max(0, totalTorrentUp - torrentWireUp);
         if (unallocatedUp > 0 && torrentIfaceWires.size > 0) {

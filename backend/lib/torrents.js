@@ -62,7 +62,10 @@ export function ensureWireSpeedHook(wire) {
   const realFn = wire.downloadSpeed.bind(wire);
   wire._realDownloadSpeed = realFn;
   wire._pipelineBoostCalls = 0;
-  wire.downloadSpeed = function () {
+  wire.downloadSpeed = function (...args) {
+    if (args.length > 0) {
+      return realFn(...args);
+    }
     const raw = realFn() || 0;
     if (wire._pipelineBoostCalls > 0) {
       wire._pipelineBoostCalls--;

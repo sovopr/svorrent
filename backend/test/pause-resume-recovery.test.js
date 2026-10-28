@@ -96,6 +96,20 @@ test('installSwarmPipelineAccelerator boosts pipeline speed lookups while preser
 
   // Outside _updateWire, telemetry always sees real 20 KB/s
   assert.equal(wire.downloadSpeed(), 20 * 1024);
+
+  // Calling wire.downloadSpeed(bytes) forwards incoming block byte recording to the underlying throughput() function
+  let recordedBytes = 0;
+  const recordingWire = {
+    type: 'tcp',
+    downloadSpeed(bytes) {
+      if (typeof bytes === 'number') recordedBytes += bytes;
+      return recordedBytes;
+    },
+  };
+  mockTorrent._updateWire(recordingWire);
+  recordingWire.downloadSpeed(16384);
+  assert.equal(recordedBytes, 16384);
+  assert.equal(recordingWire.downloadSpeed(), 16384);
 });
 
 test('updateCriticalFrontier marks rolling window of unverified sequential pieces as critical', () => {

@@ -94,11 +94,9 @@ export function NetworksPage({ notify, isActive = true }) {
         if (res.status === 'error') {
           notifyRef.current?.(res.error || 'Update check failed', 'error');
         } else if (res.updateAvailable) {
-          const shortSha = res.latestCommit ? res.latestCommit.slice(0, 7) : res.latestVersion;
-          notifyRef.current?.(`New repo code found (${shortSha}) — integrating & testing…`);
+          notifyRef.current?.('New update found — integrating…');
         } else {
-          const shortSha = res.currentCommit ? ` (${res.currentCommit.slice(0, 7)})` : '';
-          notifyRef.current?.(`Up to date with repo: v${res.currentVersion || '1.0.4'}${shortSha}`);
+          notifyRef.current?.(`Up to date (v${res.currentVersion || '1.0.4'})`);
         }
       }
     } catch (err) {
@@ -111,7 +109,7 @@ export function NetworksPage({ notify, isActive = true }) {
   const handleRestartUpdate = async () => {
     if (isRestartingUpdate) return;
     setIsRestartingUpdate(true);
-    notifyRef.current?.('Integrating verified code and restarting Svorrent…');
+    notifyRef.current?.('Integrating update and restarting Svorrent…');
     try {
       await apiPost('/updater/restart');
       setTimeout(() => {
@@ -409,37 +407,25 @@ export function NetworksPage({ notify, isActive = true }) {
       <div className="updates-section">
         <div className="section-bar">
           <h2 className="section-heading">Application</h2>
-          <span className="section-caption muted">
-            Tracks recent commits on main, verifies new code automatically, and integrates updates in place.
-          </span>
         </div>
 
         <div className={`updates-bar ${updater?.updateAvailable || updater?.readyToInstall ? 'has-update' : ''}`}>
           <div className="updates-meta">
             <span className="updates-version mono">
               Svorrent v{updater?.currentVersion || '1.0.4'}
-              {updater?.currentCommit ? ` (${updater.currentCommit.slice(0, 7)})` : ''}
             </span>
             <span className="dot-sep" />
             <span className="updates-status-text">
               {updater?.readyToInstall
-                ? updater.step || `New code ${updater.latestVersion} verified and ready to integrate`
+                ? 'New update ready to integrate'
                 : updater?.status === 'downloading' || updater?.status === 'available'
-                ? `${updater.step || `Integrating ${updater.latestVersion}…`} (${updater.downloadProgress || 0}%)`
+                ? `New update found · Integrating (${updater.downloadProgress || 0}%)…`
                 : updater?.status === 'error'
                 ? `Update check failed: ${updater.error || 'Unknown error'}`
                 : updater?.updateAvailable
-                ? `New repo code ${updater.latestVersion} available`
-                : 'Up to date with repository'}
+                ? 'New update available'
+                : 'Up to date'}
             </span>
-            {updater?.commitMessage && (updater?.updateAvailable || updater?.readyToInstall) && (
-              <>
-                <span className="dot-sep" />
-                <span className="updates-commit-msg muted" title={updater.commitMessage}>
-                  “{updater.commitMessage}”
-                </span>
-              </>
-            )}
             {updater?.lastChecked && (
               <>
                 <span className="dot-sep" />
@@ -459,7 +445,7 @@ export function NetworksPage({ notify, isActive = true }) {
                 disabled={isRestartingUpdate}
               >
                 <Icon name="refresh" size={13} className={isRestartingUpdate ? 'spin' : ''} />
-                <span>{isRestartingUpdate ? 'Integrating & restarting…' : `Integrate & Restart (${updater.latestCommit ? updater.latestCommit.slice(0, 7) : updater.latestVersion})`}</span>
+                <span>{isRestartingUpdate ? 'Restarting…' : 'Restart & Integrate'}</span>
               </button>
             ) : (
               <button
@@ -467,14 +453,14 @@ export function NetworksPage({ notify, isActive = true }) {
                 className="btn btn-outline btn-sm"
                 onClick={handleCheckUpdate}
                 disabled={isCheckingUpdate || updater?.status === 'downloading'}
-                title="Check repository for recent code changes and verify them"
+                title="Check for updates"
               >
                 <Icon name="refresh" size={13} className={isCheckingUpdate || updater?.status === 'downloading' ? 'spin' : ''} />
                 <span>
                   {isCheckingUpdate
-                    ? 'Checking repo…'
+                    ? 'Checking…'
                     : updater?.status === 'downloading'
-                    ? `Verifying (${updater.downloadProgress || 0}%)…`
+                    ? `Integrating (${updater.downloadProgress || 0}%)…`
                     : 'Check for update'}
                 </span>
               </button>

@@ -148,7 +148,7 @@ function App() {
   const handleApplyRepoUpdate = async () => {
     if (applyingRepoUpdate) return;
     setApplyingRepoUpdate(true);
-    notify('Integrating verified repository code and restarting…');
+    notify('Integrating update and restarting Svorrent…');
     try {
       await apiPost('/updater/restart');
       setTimeout(() => {
@@ -239,22 +239,17 @@ function App() {
       </header>
 
       {showUpdatePrompt && (
-        <div className="repo-update-banner" role="region" aria-label="Repository code update">
+        <div className="repo-update-banner" role="region" aria-label="Software update">
           <div className="repo-update-inner">
             <div className="repo-update-info">
               <span className="repo-update-badge">
-                {repoUpdate.readyToInstall ? 'NEW CODE VERIFIED' : 'INTEGRATING REPO CODE'}
+                {repoUpdate.readyToInstall ? 'UPDATE READY' : 'UPDATING'}
               </span>
               <span className="repo-update-text">
                 {repoUpdate.readyToInstall
-                  ? `Commit ${repoUpdate.latestCommit ? repoUpdate.latestCommit.slice(0, 7) : repoUpdate.latestVersion} passed self-tests and is ready to integrate`
-                  : repoUpdate.step || `Integrating ${repoUpdate.latestVersion} (${repoUpdate.downloadProgress || 0}%)…`}
+                  ? 'A new update has been verified and is ready to integrate.'
+                  : `New update found · Integrating update (${repoUpdate.downloadProgress || 0}%)…`}
               </span>
-              {repoUpdate.commitMessage && (
-                <span className="repo-update-commit muted">
-                  — “{repoUpdate.commitMessage}”
-                </span>
-              )}
             </div>
             <div className="repo-update-actions">
               {repoUpdate.readyToInstall ? (
@@ -264,7 +259,7 @@ function App() {
                   disabled={applyingRepoUpdate}
                 >
                   <Icon name="refresh" size={12} className={applyingRepoUpdate ? 'spin' : ''} />
-                  <span>{applyingRepoUpdate ? 'Applying…' : 'Integrate & Restart'}</span>
+                  <span>{applyingRepoUpdate ? 'Restarting…' : 'Restart & Integrate'}</span>
                 </button>
               ) : (
                 <span className="repo-update-progress mono">

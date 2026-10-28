@@ -32,7 +32,7 @@ jobs:
     name: Dependency vulnerability inventory (non-gating)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
         with:
           node-version: 22.x
@@ -66,7 +66,7 @@ jobs:
 
     steps:
       - name: 1. Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 2. Setup Node.js 22.x
         uses: actions/setup-node@v4
@@ -194,7 +194,7 @@ jobs:
 
     steps:
       - name: 1. Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 2. Setup Node.js 22.x
         uses: actions/setup-node@v4
@@ -237,7 +237,7 @@ jobs:
     needs: core-suite
     steps:
       - name: 1. Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: 2. Compile Cocoa Dock Launcher
         run: |

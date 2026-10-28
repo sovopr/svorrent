@@ -145,6 +145,12 @@ jobs:
         with:
           name: windows-packages
           path: release
+      - name: Fetch latest Svorrent.apk if available
+        working-directory: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download --repo "$GITHUB_REPOSITORY" --pattern "Svorrent.apk" --clobber || true
       - name: Check package set and create checksums
         working-directory: release
         run: |
@@ -152,7 +158,7 @@ jobs:
           for asset in Svorrent.dmg Svorrent-Setup.exe Svorrent-Windows-x64-Portable.zip; do
             test -s "$asset"
           done
-          sha256sum Svorrent.dmg Svorrent-Setup.exe Svorrent-Windows-x64-Portable.zip > SHA256SUMS.txt
+          sha256sum Svorrent.dmg Svorrent-Setup.exe Svorrent-Windows-x64-Portable.zip $(test -f Svorrent.apk && echo Svorrent.apk || true) > SHA256SUMS.txt
       - name: Publish a new release only
         env:
           GH_TOKEN: ${{ github.token }}
@@ -162,4 +168,4 @@ jobs:
             echo "::error::Release $GITHUB_REF_NAME already exists; refusing to replace published assets"
             exit 1
           fi
-          gh release create --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" release/Svorrent.dmg release/Svorrent-Setup.exe release/Svorrent-Windows-x64-Portable.zip release/SHA256SUMS.txt --verify-tag --title "$GITHUB_REF_NAME" --notes "Verified macOS and Windows packages for $GITHUB_REF_NAME with SHA-256 checksums."
+          gh release create --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" release/* --verify-tag --title "$GITHUB_REF_NAME" --notes "Verified macOS, Windows, and Android packages for $GITHUB_REF_NAME with SHA-256 checksums."

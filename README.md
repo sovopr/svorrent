@@ -11,7 +11,7 @@
 <p align="center">
   <a href="https://github.com/sovopr/svorrent/actions/workflows/ci.yml"><img src="https://github.com/sovopr/svorrent/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
   <a href="https://github.com/sovopr/svorrent/releases/latest"><img src="https://img.shields.io/github/v/release/sovopr/svorrent?style=flat-square&color=0284c7" alt="Latest Release" /></a>
-  <a href="https://github.com/sovopr/svorrent/releases"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows-0284c7?style=flat-square" alt="Platform" /></a>
+  <a href="https://github.com/sovopr/svorrent/releases"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Android-0284c7?style=flat-square" alt="Platform" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0284c7?style=flat-square" alt="MIT License" /></a>
 </p>
 
@@ -23,10 +23,12 @@ Svorrent uses a local web interface. Desktop launchers start the backend and ope
 
 | Platform | Package | Size | Description |
 | :--- | :--- | :--- | :--- |
+| **Android (ARM64 / ARMv7 / x86_64)** | [**`Svorrent.apk`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.apk) | 47.3 MB | Native Android app with simultaneous Wi-Fi + Mobile Data (5G/LTE) bonding and background downloads. |
 | **Windows (x64)** | [**`Svorrent-Setup.exe`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent-Setup.exe) | 23.3 MB | Installer with Desktop & Start Menu shortcuts. |
 | **macOS (Apple Silicon)** | [**`Svorrent.dmg`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.dmg) | 19.0 MB | Native Apple Silicon disk image. Drag `Svorrent.app` into `/Applications`. |
 
 The macOS package is arm64-only; an Intel Mac build is not currently available.
+The Android package is a standalone native app (Jetpack Compose + libtorrent C++ engine) featuring simultaneous multi-network bonding across Wi-Fi and Mobile Data (5G/LTE), background foreground service downloading, and direct in-app updates.
 Releases include `SHA256SUMS.txt` and support SHA-256-verified in-app updates from GitHub Releases as well as continuous repository code integration from `main` (staged self-testing via `node --check` and the unit test suite before prompting **Restart & Integrate** on macOS and Windows).
 
 ---
@@ -267,11 +269,11 @@ flowchart TD
 
 | Component | Implementation |
 | :--- | :--- |
-| Core Protocol & Swarm | WebTorrent, P2P Wire Protocol, DHT, 2.5× dynamic block pipeline accelerator, rolling critical frontier |
-| Desktop Architecture | Native Win32 / macOS browser-client launchers (~19–23 MB packages, zero Electron overhead) |
-| In-App Updater | SHA-256 release verification + continuous `main` branch code integration with staged self-testing |
+| Core Protocol & Swarm | WebTorrent, libtorrent4j (Android C++), P2P Wire Protocol, DHT, 2.5× dynamic block pipeline accelerator, rolling critical frontier |
+| Desktop & Mobile Architecture | Native Win32 / macOS browser-client launchers (~19–23 MB packages, zero Electron overhead) & Native Jetpack Compose Android client (~47 MB) |
+| In-App Updater | SHA-256 release verification + continuous `main` branch code integration with staged self-testing (Desktop) & in-app APK installer (Android) |
 | Search Engine | Multi-provider aggregation with bounded timeouts & DoH anti-censorship shield |
-| Network Routing & Bonding | Throughput-weighted multi-interface OS socket binding, iOS hotspot UDP keepalive, and harmonized adapter download/upload telemetry |
+| Network Routing & Bonding | Throughput-weighted multi-interface OS socket binding (macOS/Win) & Android ConnectivityManager multi-network socket bonding (Wi-Fi + 5G/LTE) |
 | Streaming Readiness Engine | ffprobe metadata extraction + MP4 `moov` atom inspection + dynamic buffer equation with EMA smoothing |
 | Swarm Telemetry | Piece bitfield availability heatmap, per-interface breakdown, and interactive vector SVG map |
 | Security & Sandboxing | Host loopback origin firewall, path traversal containment, and safe directory sandboxing |

@@ -7,6 +7,12 @@ $root = Split-Path -Parent $PSScriptRoot
 $appVersion = (Get-Content -LiteralPath (Join-Path $root 'backend/package.json') -Raw | ConvertFrom-Json).version
 $build = Join-Path $root 'dist-win'
 $staging = Join-Path $build 'staging'
+if (-not $SourceCommit) {
+    $SourceCommit = $env:SVORRENT_SOURCE_COMMIT
+}
+if (-not $SourceCommit) {
+    try { $SourceCommit = (git -C $root rev-parse HEAD 2>$null).Trim() } catch {}
+}
 if ($SourceCommit -and $SourceCommit -cnotmatch '^[0-9a-f]{40}$') { throw 'Invalid source commit' }
 
 Remove-Item -LiteralPath $build -Recurse -Force -ErrorAction SilentlyContinue

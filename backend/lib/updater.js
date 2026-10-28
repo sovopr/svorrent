@@ -214,9 +214,17 @@ export class AutoUpdater {
 
     const tarballPath = path.join(this.cacheDir, `repo-${shortSha}.tar.gz`);
     const stageDir = path.join(this.cacheDir, `stage-${shortSha}`);
+    const isWin = this.platform === 'win32';
+    const npmBin = isWin ? 'npm.cmd' : 'npm';
+    const symlinkType = isWin ? 'junction' : 'dir';
+    const extraPaths = isWin
+      ? [path.dirname(process.execPath)]
+      : ['/opt/homebrew/bin', '/usr/local/bin', path.dirname(process.execPath)];
     const buildEnv = {
       ...process.env,
-      PATH: `/opt/homebrew/bin:/usr/local/bin:${path.dirname(process.execPath)}:${process.env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin'}`,
+      PATH: [...extraPaths, process.env.PATH || (isWin ? '' : '/usr/bin:/bin:/usr/sbin:/sbin')]
+        .filter(Boolean)
+        .join(path.delimiter),
     };
 
     this.abortController = new AbortController();
@@ -254,7 +262,7 @@ export class AutoUpdater {
       const currentBackendModules = path.join(currentBackendDir, 'node_modules');
       const stagedBackendModules = path.join(stagedBackendDir, 'node_modules');
       if (fs.existsSync(currentBackendModules) && !fs.existsSync(stagedBackendModules)) {
-        fs.symlinkSync(currentBackendModules, stagedBackendModules, 'dir');
+        fs.symlinkSync(currentBackendModules, stagedBackendModules, symlinkType);
       }
 
       // Build frontend bundle
@@ -267,26 +275,28 @@ export class AutoUpdater {
       const stagedFrontendModules = path.join(stagedFrontendDir, 'node_modules');
 
       if (fs.existsSync(localRepoFrontendModules) && !fs.existsSync(stagedFrontendModules)) {
-        fs.symlinkSync(localRepoFrontendModules, stagedFrontendModules, 'dir');
+        fs.symlinkSync(localRepoFrontendModules, stagedFrontendModules, symlinkType);
       } else if (fs.existsSync(cachedFrontendModules) && !fs.existsSync(stagedFrontendModules)) {
-        fs.symlinkSync(cachedFrontendModules, stagedFrontendModules, 'dir');
+        fs.symlinkSync(cachedFrontendModules, stagedFrontendModules, symlinkType);
       } else if (!fs.existsSync(stagedFrontendModules)) {
         fs.mkdirSync(frontendDepsCache, { recursive: true });
         fs.copyFileSync(path.join(stagedFrontendDir, 'package.json'), path.join(frontendDepsCache, 'package.json'));
         if (fs.existsSync(path.join(stagedFrontendDir, 'package-lock.json'))) {
           fs.copyFileSync(path.join(stagedFrontendDir, 'package-lock.json'), path.join(frontendDepsCache, 'package-lock.json'));
         }
-        await execFileAsync('npm', ['install', '--no-audit', '--no-fund'], {
+        await execFileAsync(npmBin, ['install', '--no-audit', '--no-fund'], {
           cwd: frontendDepsCache,
           env: buildEnv,
+          shell: isWin,
           timeout: 120000,
         });
-        fs.symlinkSync(cachedFrontendModules, stagedFrontendModules, 'dir');
+        fs.symlinkSync(cachedFrontendModules, stagedFrontendModules, symlinkType);
       }
 
-      await execFileAsync('npm', ['run', 'build'], {
+      await execFileAsync(npmBin, ['run', 'build'], {
         cwd: stagedFrontendDir,
         env: buildEnv,
+        shell: isWin,
         timeout: 60000,
       });
 
@@ -583,6 +593,30 @@ export class AutoUpdater {
     const appliedCommit = this.state.latestCommit;
     if (appliedCommit) {
       this.currentCommit = appliedCommit;
+    }
+
+    // If running inside a Windows installation (with Svorrent.exe), relaunch Svorrent.exe after exit
+    const winLauncher = path.join(currentAppRoot, 'Svorrent.exe');
+    if (this.platform === 'win32' && fs.existsSync(winLauncher)) {
+      const logDir = path.join(process.env.LOCALAPPDATA || os.tmpdir(), 'Svorrent', 'logs');
+      fs.mkdirSync(logDir, { recursive: true });
+      const logFd = fs.openSync(path.join(logDir, 'update.log'), 'a');
+      const psScript = `Start-Sleep -Milliseconds 900; Start-Process -FilePath '${winLauncher.replace(/'/g, "''")}' -WorkingDirectory '${currentAppRoot.replace(/'/g, "''")}'`;
+      const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psScript], {
+        detached: true,
+        stdio: ['ignore', logFd, logFd],
+      });
+      fs.closeSync(logFd);
+      child.unref();
+
+      setTimeout(() => {
+        process.exit(0);
+      }, 600);
+
+      return {
+        success: true,
+        message: 'Integrated update and restarting Svorrent...',
+      };
     }
 
     // If running inside /Applications/Svorrent.app on macOS, re-seal ad-hoc signature and relaunch

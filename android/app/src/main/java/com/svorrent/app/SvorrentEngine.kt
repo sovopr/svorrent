@@ -10,7 +10,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.libtorrent4j.AddTorrentParams
 import org.libtorrent4j.AlertListener
+import org.libtorrent4j.PeerInfo
 import org.libtorrent4j.Priority
 import org.libtorrent4j.SessionManager
 import org.libtorrent4j.SessionParams
@@ -20,8 +22,6 @@ import org.libtorrent4j.TorrentFlags
 import org.libtorrent4j.TorrentHandle
 import org.libtorrent4j.alerts.Alert
 import org.libtorrent4j.alerts.AlertType
-import org.libtorrent4j.swig.add_torrent_params
-import org.libtorrent4j.swig.error_code
 import org.libtorrent4j.swig.session_handle
 import org.libtorrent4j.swig.settings_pack
 import java.io.File
@@ -174,16 +174,12 @@ object SvorrentEngine {
                 else -> return Result.failure(IllegalArgumentException("Enter a valid magnet link or 40-character info hash"))
             }
 
-            val ec = error_code()
-            val params = add_torrent_params.parse_magnet_uri(magnetUri, ec)
-            if (ec.value() != 0) {
-                return Result.failure(IllegalArgumentException("Invalid magnet link: ${ec.message()}"))
-            }
-            params.save_path = downloadDir.absolutePath
+            val params = AddTorrentParams.parseMagnetUri(magnetUri)
+            params.savePath = downloadDir.absolutePath
             params.flags = params.flags.or_(TorrentFlags.SEQUENTIAL_DOWNLOAD)
-            val hashHex = params.info_hashes.v1.to_hex().lowercase(Locale.US)
+            val hashHex = params.infoHashes.best.toHex().lowercase(Locale.US)
             pausedByUser.remove(hashHex)
-            sessionManager.swig().async_add_torrent(params)
+            sessionManager.swig().async_add_torrent(params.swig())
             SvorrentEngineService.ensureRunning(appContext)
             Result.success(hashHex)
         } catch (e: Exception) {
@@ -233,7 +229,7 @@ object SvorrentEngine {
     private fun findHandle(infoHash: String): TorrentHandle? {
         if (!initialized || !sessionManager.isRunning) return null
         return try {
-            val hash = Sha1Hash(infoHash.lowercase(Locale.US))
+            val hash = Sha1Hash.parseHex(infoHash.lowercase(Locale.US))
             val h = sessionManager.find(hash)
             if (h != null && h.isValid) h else null
         } catch (_: Exception) {
@@ -272,7 +268,7 @@ object SvorrentEngine {
     private fun tickOnce() {
         if (!initialized || !sessionManager.isRunning) return
         val swigSession = sessionManager.swig()
-        val handlesVec = swigSession.torrents
+        val handlesVec = swigSession.get_torrents()
         val count = handlesVec.size().toInt()
 
         val activeAdapters = bondingManager.discoverAdapters()
@@ -354,8 +350,8 @@ object SvorrentEngine {
             }
 
             // Collect peer list & assign across active Wi-Fi + Cellular adapters
-            val rawPeers = try {
-                handle.peers()
+            val rawPeers: List<PeerInfo> = try {
+                handle.peerInfo()
             } catch (_: Exception) {
                 emptyList()
             }
@@ -490,3 +486,4 @@ object SvorrentEngine {
         _networkSnapshot.value = bondingManager.sampleTelemetry(totalDown, totalUp, allPeers)
     }
 }
+

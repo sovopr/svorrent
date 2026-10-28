@@ -90,3 +90,4 @@ dependencies {
     implementation("org.libtorrent4j:libtorrent4j-android-arm:2.1.0-31")
     implementation("org.libtorrent4j:libtorrent4j-android-x86_64:2.1.0-31")
 }
+

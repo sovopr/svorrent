@@ -360,7 +360,7 @@ private fun TopNavTab(
             .clickable(onClick = onClick)
             .padding(horizontal = 10.dp),
         verticalArrangement = Arrangement.SpaceBetween,
-        horizontalAlignment = Alignment.CenterVertically
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Spacer(modifier = Modifier.height(2.dp))
         Row(
@@ -1679,3 +1679,4 @@ private fun launchVideoPlayer(context: Context, file: File) {
         Toast.makeText(context, "No video player found (install VLC for Android)", Toast.LENGTH_LONG).show()
     }
 }
+

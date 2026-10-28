@@ -150,6 +150,7 @@ test('Updater rejects a downloaded build with the wrong SHA-256 digest', async (
 test('Updater checks main branch commits when currentCommit is present and triggers repo integration', async () => {
   const oldSha = '1111111111111111111111111111111111111111';
   const newSha = '2222222222222222222222222222222222222222';
+  const docsSha = '3333333333333333333333333333333333333333';
   const updater = new AutoUpdater({
     platform: 'darwin',
     currentVersion: '1.0.4',
@@ -160,15 +161,24 @@ test('Updater checks main branch commits when currentCommit is present and trigg
   updater.integrateRepoCommit = async (sha) => {
     integratedSha = sha;
   };
+  updater.persistCurrentCommit = (sha) => {
+    updater.currentCommit = sha;
+  };
+
+  let latestCommitResponse = {
+    sha: newSha,
+    html_url: `https://github.com/sovopr/svorrent/commit/${newSha}`,
+    commit: { message: 'perf(engine): boost per-wire block pipeline\n\nDetails here' },
+    files: [{ filename: 'backend/lib/torrents.js' }],
+  };
 
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url) => {
+    if (String(url).includes('/compare/')) {
+      return Response.json({ files: latestCommitResponse.files });
+    }
     assert.ok(url.endsWith('/commits/main'));
-    return Response.json({
-      sha: newSha,
-      html_url: `https://github.com/sovopr/svorrent/commit/${newSha}`,
-      commit: { message: 'perf(engine): boost per-wire block pipeline\n\nDetails here' },
-    });
+    return Response.json(latestCommitResponse);
   };
 
   try {
@@ -179,12 +189,22 @@ test('Updater checks main branch commits when currentCommit is present and trigg
     assert.equal(status.commitMessage, 'perf(engine): boost per-wire block pipeline');
     assert.equal(integratedSha, newSha);
 
-    // When already on the latest commit, status is idle and updateAvailable is false
+    // Docs-only commit (README.md / docs/**) should fast-forward currentCommit without prompting or integrating
     updater.currentCommit = newSha;
     updater.state.status = 'idle';
-    const upToDate = await updater.checkForUpdates();
-    assert.equal(upToDate.updateAvailable, false);
-    assert.equal(upToDate.status, 'idle');
+    integratedSha = null;
+    latestCommitResponse = {
+      sha: docsSha,
+      html_url: `https://github.com/sovopr/svorrent/commit/${docsSha}`,
+      commit: { message: 'docs(readme): refresh screenshots' },
+      files: [{ filename: 'README.md' }, { filename: 'docs/screenshots/search.webp' }],
+    };
+
+    const docsOnlyStatus = await updater.checkForUpdates();
+    assert.equal(docsOnlyStatus.updateAvailable, false);
+    assert.equal(docsOnlyStatus.status, 'idle');
+    assert.equal(updater.currentCommit, docsSha);
+    assert.equal(integratedSha, null);
   } finally {
     globalThis.fetch = originalFetch;
   }

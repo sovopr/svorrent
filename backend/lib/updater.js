@@ -145,6 +145,57 @@ export class AutoUpdater {
     };
   }
 
+  isNonRuntimeFile(filePath) {
+    const normalized = String(filePath || '').trim().replace(/\\/g, '/');
+    if (!normalized) return true;
+    return /^(README(\.md)?|LICENSE(\.md|\.txt)?|\.gitignore|docs\/.*|\.github\/.*)$/i.test(normalized);
+  }
+
+  async hasRuntimeCodeChanges(fromSha, toSha, latestFiles = null) {
+    if (fromSha && toSha && /^[0-9a-f]{40}$/i.test(fromSha) && /^[0-9a-f]{40}$/i.test(toSha)) {
+      try {
+        const res = await fetch(`https://api.github.com/repos/${this.repo}/compare/${fromSha}...${toSha}`, {
+          headers: {
+            'User-Agent': `Svorrent/${this.currentVersion}`,
+            'Accept': 'application/vnd.github+json',
+          },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (Array.isArray(data?.files) && data.files.length > 0) {
+            return data.files.some((f) => !this.isNonRuntimeFile(f?.filename));
+          }
+        }
+      } catch {
+        // Fall through to commit file list or default true
+      }
+    }
+
+    if (Array.isArray(latestFiles) && latestFiles.length > 0) {
+      return latestFiles.some((filename) => !this.isNonRuntimeFile(filename));
+    }
+
+    return true;
+  }
+
+  persistCurrentCommit(sha) {
+    this.currentCommit = sha;
+    try {
+      const currentBackendDir = path.resolve(__dirname, '..');
+      const currentAppRoot = path.resolve(currentBackendDir, '..');
+      const buildInfoPath = path.join(currentAppRoot, 'build-info.json');
+      if (fs.existsSync(buildInfoPath)) {
+        const existing = JSON.parse(fs.readFileSync(buildInfoPath, 'utf8'));
+        existing.commit = sha;
+        existing.updatedAt = new Date().toISOString();
+        fs.writeFileSync(buildInfoPath, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+      }
+    } catch {
+      // Ignore if read-only
+    }
+  }
+
   async fetchLatestMainCommit() {
     const res = await fetch(`https://api.github.com/repos/${this.repo}/commits/main`, {
       headers: {
@@ -165,10 +216,14 @@ export class AutoUpdater {
     const firstLine = String(data.commit?.message || '')
       .split(/\r?\n/)[0]
       .trim();
+    const files = Array.isArray(data.files)
+      ? data.files.map((f) => f?.filename).filter(Boolean)
+      : null;
     return {
       sha,
       message: firstLine || 'New commit on main',
       url: data.html_url || `https://github.com/${this.repo}/commit/${sha}`,
+      files,
     };
   }
 
@@ -182,6 +237,17 @@ export class AutoUpdater {
     const shortSha = sha.slice(0, 7);
 
     if (sha === this.currentCommit.toLowerCase()) {
+      this.state.status = 'idle';
+      this.state.latestCommit = sha;
+      this.state.commitMessage = latest.message || '';
+      this.state.latestVersion = `${this.currentVersion} (${shortSha})`;
+      this.state.step = null;
+      return this.getStatus();
+    }
+
+    const hasCodeChanges = await this.hasRuntimeCodeChanges(this.currentCommit.toLowerCase(), sha, latest.files);
+    if (!hasCodeChanges) {
+      this.persistCurrentCommit(sha);
       this.state.status = 'idle';
       this.state.latestCommit = sha;
       this.state.commitMessage = latest.message || '';

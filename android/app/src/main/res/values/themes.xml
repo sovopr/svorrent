@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Svorrent" parent="android:Theme.Material.NoActionBar">
+        <item name="android:statusBarColor">#FF121314</item>
+        <item name="android:navigationBarColor">#FF121314</item>
+        <item name="android:windowBackground">#FF121314</item>
+    </style>
+</resources>

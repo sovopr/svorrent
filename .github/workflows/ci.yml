@@ -50,7 +50,7 @@ jobs:
           echo "$CHANGED"
           if [ -z "$CHANGED" ]; then
             echo "code=false" >> "$GITHUB_OUTPUT"
-          elif echo "$CHANGED" | grep -qvE '^(README(\.md)?|LICENSE(\.md|\.txt)?|docs/|\.github/workflows/)'; then
+          elif echo "$CHANGED" | grep -qvE '^(README(\.md)?|LICENSE(\.md|\.txt)?|\.gitignore|docs/|\.github/workflows/|android/)'; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"

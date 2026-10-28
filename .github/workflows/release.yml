@@ -80,7 +80,7 @@ jobs:
           codesign --verify --deep --strict --verbose=2 dist-app/Svorrent.app
           identity="$(codesign -dv --verbose=4 dist-app/Svorrent.app 2>&1 | sed -n 's/^Signature=//p')"
           test "$identity" = adhoc
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-dmg
           path: dist-app/Svorrent.dmg
@@ -122,7 +122,7 @@ jobs:
             throw "Expected an unsigned installer, got $($signature.Status)"
           }
           Compress-Archive -Path 'dist-win/staging/*' -DestinationPath 'dist-win/Svorrent-Windows-x64-Portable.zip'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-packages
           path: |

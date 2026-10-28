@@ -27,29 +27,30 @@ Svorrent uses a local web interface. Desktop launchers start the backend and ope
 | **macOS (Apple Silicon)** | [**`Svorrent.dmg`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.dmg) | Varies | Native Apple Silicon disk image. Drag `Svorrent.app` into `/Applications`. |
 
 The macOS package is arm64-only; an Intel Mac build is not currently available.
-Releases include `SHA256SUMS.txt` and support SHA-256-verified in-app updates from GitHub Releases.
+Releases include `SHA256SUMS.txt` and support SHA-256-verified in-app updates from GitHub Releases as well as continuous repository code integration from `main` (staged self-testing via `node --check` and the unit test suite before prompting **Restart & Integrate** on macOS and Windows).
 
 ---
 
 ## Features & Interface Workflow
 
 ### 1. Torrent Search
-The search interface currently uses The Pirate Bay provider with a bounded request timeout.
+The search interface queries The Pirate Bay with a bounded request timeout and DNS-over-HTTPS (DoH) fallback.
 - Queries are deduplicated, normalized, and sortable by seeds, leechers, file size, or indexer source.
 - Magnets launch directly into the download pipeline with a single click.
 
 ![Search Interface](docs/screenshots/search.webp)
 
 ### 2. Downloads Manager & Streaming Controls
-The downloads dashboard manages active transfers and can open a playable local video in an installed media player.
+The downloads dashboard manages active and completed transfers, supports an **Auto-stop seeding** toggle directly in the header, and can open a playable local video in VLC or your system's default media player.
 
 ![Downloads Manager](docs/screenshots/downloads.webp)
 
-#### 2.1 Sequential Piece Scheduling & Crash Recovery
-- Forces sequential piece acquisition (from piece 0 to piece N) to enable immediate streaming instead of random piece distribution.
-- Prioritizes container headers and initial chapters (first 25 MB and initial 20 pieces) with critical queue weighting.
-- Atomic session snapshots store torrent metadata and verified-piece bitfields in `~/.svorrent/session.json` to accelerate resumption. Saves are batched; a crash can lose recent progress, and missing or changed files may require verification or re-downloading.
-- Scans `~/Downloads/Svorrent` to detect orphaned files and halfway downloads, matching them to magnet hashes for one-click resumption.
+#### 2.1 Sequential Piece Scheduling, Swarm Pipeline Acceleration & Crash Recovery
+- **Rolling Critical Frontier**: Forces sequential piece acquisition (from piece 0 to piece N) and continuously keeps a rolling window of the next 16 unverified pieces after the sequential playback frontier marked critical so immediate streaming never stalls.
+- **Swarm Pipeline Accelerator**: Dynamically scales the per-wire block request pipeline (`reqq`) 2.5× with live peer throughput (with a 256 KB/s floor up to 8 MB/s equivalent) so high-RTT internet and cellular peers never stall waiting for block request ACKs.
+- **Fast MP4 Head/Tail Inspection**: Inspects MP4 `ftyp`/`moov` atoms (`hasMoovAtBeginning`) so non-faststart MP4 containers automatically verify tail pieces before enabling playback.
+- **Instant Pause / Resume Swarm Recovery**: Preserves known peer addresses (`remoteAddress:remotePort`) across manual pauses, clears stale pending queues, and immediately redials known peers and re-announces to trackers on resume.
+- **Atomic Session Checkpointing & Orphan Scanner**: Stores torrent metadata and verified-piece bitfields in `~/.svorrent/session.json` and scans `~/Downloads/Svorrent` to detect halfway downloads for one-click resumption.
 
 #### 2.2 In-App Storage & File Deletion
 - Custom in-app confirmation modal prevents accidental deletions.
@@ -66,28 +67,27 @@ $$\text{SafeDownloadedTarget} = \text{TotalLength} - \frac{\text{EffectiveSpeed}
 - **Media Player Integration**: Once the buffer threshold passes, one-click launches the growing file in VLC or your system's default media player.
 
 #### 2.4 Swarm Telemetry Matrix & Peer Inspector
-Every download row includes an isolated Swarm button opening a per-torrent inspector with a dual-view switcher:
+Every download row includes a Swarm button opening a per-torrent inspector with a `Pieces` / `Map` view switcher:
 
 ![Swarm Telemetry Matrix and Peer Inspector](docs/screenshots/swarm_modal.webp)
 
-- **Piece Bitfield & Sequential Streaming Frontier**: Renders verified chunk blocks on disk alongside real-time download blocks and the sequential playback frontier cursor.
-- **Swarm Piece Availability Heatmap**: Visualizes piece availability rarity across all connected peers from rare (<25%) to abundant (100%).
-- **Multi-Interface Breakdown & Protocol Badging**: Inspects remote peer connections broken down by local physical adapter (Wi-Fi, USB Tether, Ethernet) with clear TCP vs. uTP (Micro Transport Protocol) and WebRTC badges.
-- **Dynamic Interface Filtering**: Automatically collapses interface filter tabs to the active connection when only 1 adapter exists, surfacing multi-interface tabs only when $\ge 2$ physical interfaces are bonded.
-- **Structured Peer Table with Clean Formatting**: IPv6 addresses are properly truncated with tooltips, preventing column collisions, while independent modal scrolling allows fluid inspection of large swarms.
-- **Global GeoIP Topology (Secondary View)**: Toggle over to the interactive vector SVG world map plotting remote peer coordinates and country contributions via offline `geoip-lite`.
+- **Piece Map & Sequential Streaming Frontier**: Renders verified chunk blocks on disk alongside active download blocks and the sequential playback frontier cursor.
+- **Swarm Availability Bar**: Visualizes piece availability across connected peers from 0% to 100%.
+- **Multi-Interface Breakdown & Protocol Metrics**: Inspects remote peer connections broken down by local physical adapter (`Wi-Fi en0`, `Android USB Tethering feth0`, `Ethernet`) with live download/upload speeds, TCP vs. uTP counts, and unchoked peer counts.
+- **Connected Peers Table**: Filterable and sortable peer list displaying GeoIP country flags, IPv4/IPv6 addresses, client software, protocol badges, bound interface tags, and live transfer rates.
+- **Geographic Distribution (Map View)**: Toggle to the interactive vector SVG world map plotting remote peer coordinates and country contributions via offline `geoip-lite`.
 
-### 3. Multi-Network Pooling & Bandwidth Bonding
-Svorrent can distribute outgoing peer connections across multiple local interfaces. Additional throughput depends on routing, independent uplinks, peer availability, and network conditions.
+### 3. Multi-Network Pooling, Bandwidth Bonding & In-App Updates
+Svorrent distributes outgoing peer connections across multiple local network interfaces and manages application updates from the **Networks** page.
 
 ![Network Bonding Interface](docs/screenshots/networks.webp)
 
-- **Combined Speed Pooling**: Wi-Fi, cellular tethering, Ethernet, and secondary USB adapters can contribute separate peer connections. Their nominal speeds describe potential capacity; actual torrent speed is not guaranteed to equal their sum.
-- **Per-Connection Routing**: Svorrent binds outgoing TCP peer sockets to enabled adapters' local IP addresses. This spreads peer traffic across available interfaces to maximize aggregate throughput.
-- **Harmonized Upload Telemetry**: Outgoing BitTorrent protocol messages (piece requests, HAVE notifications, keepalives) are attributed across active interfaces, keeping upload speeds and session counters synchronized with physical adapter egress.
+- **Throughput-Weighted Multi-Interface Bonding**: Once each active adapter establishes a baseline of 4 peers, new peer connections are weighted proportionally to each adapter's live download speed (`downSpeed`) rather than blind 50/50 round-robin, preventing a slower cellular link from bottlenecking a faster Wi-Fi/Ethernet link.
+- **Harmonized Download & Upload Telemetry**: Both incoming and outgoing BitTorrent protocol traffic (piece payloads, piece requests, HAVE notifications, keepalives) are harmonized across active interfaces, keeping per-adapter download/upload speeds, traffic share percentages, and session counters accurate.
 - **iOS Hotspot UDP Keepalive**: Proactive background UDP heartbeats prevent iOS cellular hotspots from dropping during active peer connections.
 - **Android USB Tethering (macOS)**: Native `svorrent-tetherd` service automatically manages RNDIS virtual interface binding and DHCP configuration.
-- **Per-Adapter Controls & Live Telemetry**: Any interface in the pool can be enabled or disabled on the fly from the Networks dashboard, which displays real-time bandwidth balancing percentages, per-adapter sparklines, and session data counters.
+- **Per-Adapter Controls & Live Telemetry**: Toggle routing per interface on the fly with live download sparklines, peak speed tracking, traffic share percentages, and session data counters.
+- **In-App Updates & Continuous Code Integration**: The **Application** section checks for both tagged GitHub Releases and recent commits on `main`, verifies new code in a background staging directory (`node --check` + automated test suite), and prompts **Restart & Integrate** when verified.
 
 #### iPhone USB tethering on macOS
 
@@ -109,28 +109,30 @@ svorrent/
 │   │   └── libusb-1.0.0.dylib  # USB dependency
 │   ├── tether/                  # C++ tether daemon source (RNDIS / libusb)
 │   ├── lib/
-│   │   ├── networks.js          # Multi-interface socket routing & upload attribution
-│   │   ├── playability.js       # Buffer-free streaming math, EMA smoothing & ffprobe extraction
+│   │   ├── networks.js          # Throughput-weighted socket bonding & adapter telemetry
+│   │   ├── torrents.js          # Swarm pipeline accelerator, rolling frontier & pause recovery
+│   │   ├── updater.js           # In-app release & continuous repo code updater with self-tests
+│   │   ├── playability.js       # Buffer-free streaming math, MP4 atom checks & EMA smoothing
 │   │   ├── session.js           # Atomic bitfield checkpointing and recovery
+│   │   ├── settings.js          # Persistent user preferences (e.g. auto-stop seeding)
 │   │   ├── scanner.js           # Directory scanner for orphaned and halfway files
 │   │   ├── local-access.js      # Host firewall & loopback origin protection
 │   │   ├── safe-path.js         # Directory traversal containment & path validation
 │   │   ├── doh.js               # DNS-over-HTTPS anti-censorship lookup
 │   │   ├── trackers.js          # Dynamic public tracker fallback lists
-│   │   ├── archive.js           # Torrent metadata storage
-│   │   └── torrents.js          # Shared lifecycle synchronization and magnet parsing
+│   │   └── archive.js           # Torrent metadata storage
 │   └── scripts/
 │       ├── install-tetherd.sh   # Launchd service installer for macOS
 │       ├── uninstall-tetherd.sh # Service uninstaller
 │       └── e2e-local.js         # Loopback synthetic end-to-end integration test
 ├── frontend/
 │   ├── src/
-│   │   ├── App.jsx              # Navigation and global polling loop
+│   │   ├── App.jsx              # Navigation, update readiness prompt, and global polling loop
 │   │   ├── SearchPage.jsx       # Multi-tracker search query interface
-│   │   ├── DownloadsManager.jsx # Download queue, action controls, and VLC triggers
-│   │   ├── SwarmModal.jsx       # Swarm inspector, country charts, and peer table
+│   │   ├── DownloadsManager.jsx # Download queue, auto-stop seeding toggle, and VLC triggers
+│   │   ├── SwarmModal.jsx       # Piece map, interface breakdown, and peer inspector
 │   │   ├── SwarmWorldMap.jsx    # SVG vector map with centroid peer plotting
-│   │   ├── NetworksPage.jsx     # Network adapter status and traffic telemetry
+│   │   ├── NetworksPage.jsx     # Network adapter routing, telemetry, and application updater
 │   │   ├── TorrentDetails.jsx   # Inspector for trackers, files, and bitfield pieces
 │   │   ├── Icon.jsx             # Accessible vector icon rendering component
 │   │   ├── countryUtils.js      # GeoIP country codes, names, and flag emojis
@@ -138,12 +140,14 @@ svorrent/
 │   │   └── lib.js               # API client, units formatting, and speed calculations
 │   └── package.json
 └── scripts/
-    ├── build-dmg.sh             # macOS .app bundle and compressed DMG builder
-    ├── build-windows.sh         # Windows Win32 launcher, NSIS installer, and portable ZIP builder
-    ├── launcher.c               # Native Win32 background daemon launcher (C/MinGW)
-    ├── launcher.rc              # Windows icon resource & manifest definition
-    ├── manifest.xml             # Windows DPI awareness and security application manifest
-    └── installer.nsi            # Nullsoft NSIS installer configuration (LZMA solid compression)
+    ├── build-dmg.sh                 # macOS .app bundle and compressed DMG builder
+    ├── build-windows.sh             # Windows Win32 launcher, NSIS installer, and portable ZIP builder
+    ├── build-windows-snapshot.ps1   # PowerShell snapshot builder with commit stamping
+    ├── launcher_mac.m               # Native macOS Cocoa/Objective-C app launcher
+    ├── launcher.c                   # Native Win32 background daemon launcher (C/MinGW)
+    ├── launcher.rc                  # Windows icon resource & manifest definition
+    ├── manifest.xml                 # Windows DPI awareness and security application manifest
+    └── installer.nsi                # Nullsoft NSIS installer configuration (LZMA solid compression)
 ```
 
 ---
@@ -218,9 +222,10 @@ flowchart TD
     end
 
     subgraph Core["3. Core Engine Subsystems"]
-        WT["<b>BitTorrent Engine</b><br/>• Sequential piece assembly<br/>• 8-bit popcount bitfield analysis<br/>• Atomic fast-resume checkpoints"]
-        Play["<b>Buffer-Free Playability Engine</b><br/>• ffprobe runtime & bitrate extraction<br/>• Throughput EMA playback safety gate<br/>• Native VLC player launch controller"]
-        Bond["<b>Multi-Network Bonding Layer</b><br/>• Interface discovery & traffic telemetry<br/>• net.connect round-robin localAddress striping<br/>• Proactive cellular UDP keepalive"]
+        WT["<b>BitTorrent Engine</b><br/>• Rolling critical frontier & sequential assembly<br/>• 2.5× dynamic block pipeline accelerator<br/>• Atomic fast-resume checkpoints"]
+        Play["<b>Buffer-Free Playability Engine</b><br/>• ffprobe & MP4 moov atom inspection<br/>• Throughput EMA playback safety gate<br/>• Native VLC player launch controller"]
+        Bond["<b>Multi-Network Bonding Layer</b><br/>• Throughput-weighted localAddress routing<br/>• Harmonized download & upload attribution<br/>• Proactive cellular UDP keepalive"]
+        Updater["<b>In-App Updater Engine</b><br/>• GitHub Releases & main commit tracking<br/>• Staged self-test verification<br/>• One-click Restart & Integrate"]
     end
 
     subgraph OS["4. Operating System & Local Resources"]
@@ -262,15 +267,16 @@ flowchart TD
 
 | Component | Implementation |
 | :--- | :--- |
-| Core Protocol & Swarm | WebTorrent, P2P Wire Protocol, DHT |
+| Core Protocol & Swarm | WebTorrent, P2P Wire Protocol, DHT, 2.5× dynamic block pipeline accelerator, rolling critical frontier |
 | Desktop Architecture | Native Win32 / macOS browser-client launchers (~10–20 MB packages, zero Electron overhead) |
+| In-App Updater | SHA-256 release verification + continuous `main` branch code integration with staged self-testing |
 | Search Engine | Multi-provider aggregation with bounded timeouts & DoH anti-censorship shield |
-| Network Routing & Bonding | Multi-interface OS socket binding, iOS hotspot UDP keepalive, and harmonized adapter upload attribution |
-| Streaming Readiness Engine | ffprobe metadata extraction + dynamic buffer equation with EMA smoothing and hover ETA |
-| Swarm Telemetry | Piece bitfield availability heatmap, interface breakdown, and interactive vector SVG map |
+| Network Routing & Bonding | Throughput-weighted multi-interface OS socket binding, iOS hotspot UDP keepalive, and harmonized adapter download/upload telemetry |
+| Streaming Readiness Engine | ffprobe metadata extraction + MP4 `moov` atom inspection + dynamic buffer equation with EMA smoothing |
+| Swarm Telemetry | Piece bitfield availability heatmap, per-interface breakdown, and interactive vector SVG map |
 | Security & Sandboxing | Host loopback origin firewall, path traversal containment, and safe directory sandboxing |
 | GeoIP Resolution | Offline MaxMind GeoLite database via geoip-lite |
-| UI Framework | React 19, Vite, Vanilla CSS |
+| UI Framework | React 19, Vite, Vanilla CSS with responsive viewport scaling |
 
 ---
 

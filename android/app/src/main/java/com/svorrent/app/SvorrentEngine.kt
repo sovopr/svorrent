@@ -269,7 +269,7 @@ object SvorrentEngine {
         if (!initialized || !sessionManager.isRunning) return
         val swigSession = sessionManager.swig()
         val handlesVec = swigSession.get_torrents()
-        val count = handlesVec.size().toInt()
+        val count = handlesVec.size
 
         val activeAdapters = bondingManager.discoverAdapters()
             .filter { it.connected && bondingManager.isAdapterEnabled(it.id) }

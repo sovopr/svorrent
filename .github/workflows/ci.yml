@@ -50,11 +50,31 @@ jobs:
           echo "$CHANGED"
           if [ -z "$CHANGED" ]; then
             echo "code=false" >> "$GITHUB_OUTPUT"
-          elif echo "$CHANGED" | grep -qvE '^(README(\.md)?|LICENSE(\.md|\.txt)?|docs/)'; then
+          elif echo "$CHANGED" | grep -qvE '^(README(\.md)?|LICENSE(\.md|\.txt)?|docs/|\.github/workflows/)'; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
+
+  docs-fast-pass:
+    name: ${{ matrix.check_name }}
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.code != 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        check_name:
+          - "Core Suite (ubuntu-latest)"
+          - "Core Suite (macos-latest)"
+          - "Core Suite (windows-latest)"
+          - "Browser E2E UI (ubuntu-latest, chromium)"
+          - "Browser E2E UI (windows-latest, chromium)"
+          - "Browser E2E UI (macos-latest, webkit)"
+          - "Build Native macOS Cocoa Launcher"
+    steps:
+      - name: Docs-only fast pass
+        run: echo "Docs-only change — skipping code suite for ${{ matrix.check_name }}"
 
   dependency-audit:
     name: Dependency vulnerability inventory (non-gating)

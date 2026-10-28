@@ -377,7 +377,7 @@ app.post('/api/torrents/stop-all-seeding', (_req, res) => {
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const pkg = require('./package.json');
-const currentVersion = pkg.version || '1.0.3';
+const currentVersion = pkg.version || '1.0.4';
 let currentCommit = null;
 try {
   currentCommit = JSON.parse(fs.readFileSync(path.join(__dirname, 'build-info.json'), 'utf8')).commit;

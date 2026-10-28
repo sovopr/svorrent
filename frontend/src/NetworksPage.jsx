@@ -150,7 +150,7 @@ export function NetworksPage({ notify, isActive = true }) {
         } else {
           notifyRef.current?.(res.channel === 'main'
             ? `Svorrent matches upstream main (${res.currentCommit?.slice(0, 7) || 'unknown build'})`
-            : `Svorrent is up to date (v${res.currentVersion || '1.0.3'})`, 'ok');
+            : `Svorrent is up to date (v${res.currentVersion || '1.0.4'})`, 'ok');
         }
       }
     } catch (err) {
@@ -540,7 +540,7 @@ export function NetworksPage({ notify, isActive = true }) {
             </div>
             <div className="updates-details">
               <div className="updates-headline">
-                <span className="updates-version mono">Svorrent v{updater?.currentVersion || '1.0.3'}{updater?.channel === 'main' && updater.currentCommit ? ` (${updater.currentCommit.slice(0, 7)})` : ''}</span>
+                <span className="updates-version mono">Svorrent v{updater?.currentVersion || '1.0.4'}{updater?.channel === 'main' && updater.currentCommit ? ` (${updater.currentCommit.slice(0, 7)})` : ''}</span>
                 {updater?.readyToInstall ? (
                   <span className="tag-update-available">READY TO INSTALL</span>
                 ) : updater?.updateAvailable ? (

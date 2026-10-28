@@ -17,16 +17,17 @@
 
 ---
 
-## Downloads (v1.0.3)
+## Downloads (v1.0.4)
 
 Svorrent uses a local web interface. Desktop launchers start the backend and open the interface in your default browser. Node.js 22.12 or newer is required; the current packages do not bundle it.
 
 | Platform | Package | Size | Description |
 | :--- | :--- | :--- | :--- |
-| **Windows (x64)** | [**`Svorrent-Setup.exe`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent-Setup.exe) | **9.9 MB** | Installer with Desktop & Start Menu shortcuts. |
-| **macOS (Apple Silicon)** | [**`Svorrent.dmg`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.dmg) | **20.0 MB** | Native Apple Silicon disk image. Drag `Svorrent.app` into `/Applications`. |
+| **Windows (x64)** | [**`Svorrent-Setup.exe`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent-Setup.exe) | Varies | Installer with Desktop & Start Menu shortcuts. |
+| **macOS (Apple Silicon)** | [**`Svorrent.dmg`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.dmg) | Varies | Native Apple Silicon disk image. Drag `Svorrent.app` into `/Applications`. |
 
 The macOS package is arm64-only; an Intel Mac build is not currently available.
+These packages are free but not Developer ID notarized or Authenticode signed. macOS or Windows may warn or block them. Check the release's SHA256SUMS.txt before installing; automatic in-app updates are not available for unsigned builds.
 
 ---
 

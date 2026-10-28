@@ -57,6 +57,83 @@ export function waitForInfoHash(torrent) {
   });
 }
 
+export function ensureWireSpeedHook(wire) {
+  if (!wire || wire._realDownloadSpeed || typeof wire.downloadSpeed !== 'function') return;
+  const realFn = wire.downloadSpeed.bind(wire);
+  wire._realDownloadSpeed = realFn;
+  wire._pipelineBoostCalls = 0;
+  wire.downloadSpeed = function () {
+    const raw = realFn() || 0;
+    if (wire._pipelineBoostCalls > 0) {
+      wire._pipelineBoostCalls--;
+      // Guarantee at least 256 KB/s equivalent request pipeline (~18 blocks in flight)
+      // and scale 2.5x with live peer throughput (up to 8 MB/s equivalent / peer reqq)
+      // so high-RTT internet and cellular peers never stall waiting for block request ACKs.
+      return Math.min(8 * 1024 * 1024, Math.max(raw * 2.5, 256 * 1024));
+    }
+    return raw;
+  };
+}
+
+export function installSwarmPipelineAccelerator(torrent) {
+  if (!torrent || torrent._pipelineAccelerated) return;
+  torrent._pipelineAccelerated = true;
+
+  if (typeof torrent._updateWire === 'function') {
+    const origUpdateWire = torrent._updateWire;
+    torrent._updateWire = function (wire) {
+      if (wire && wire.type !== 'webSeed') {
+        ensureWireSpeedHook(wire);
+        wire._pipelineBoostCalls = 2;
+      }
+      try {
+        return origUpdateWire.call(this, wire);
+      } finally {
+        if (wire) wire._pipelineBoostCalls = 0;
+      }
+    };
+  }
+
+  if (typeof torrent._request === 'function') {
+    const origRequest = torrent._request;
+    torrent._request = function (wire, index, hotswap) {
+      const prev = wire ? (wire._pipelineBoostCalls || 0) : 0;
+      if (wire && wire.type !== 'webSeed') {
+        ensureWireSpeedHook(wire);
+        wire._pipelineBoostCalls = 1;
+      }
+      try {
+        return origRequest.call(this, wire, index, hotswap);
+      } finally {
+        if (wire) wire._pipelineBoostCalls = prev;
+      }
+    };
+  }
+}
+
+export function updateCriticalFrontier(torrent, windowSize = 12) {
+  if (!torrent || torrent.destroyed || !torrent.ready || !torrent.bitfield || !torrent.pieces?.length) return;
+  if (!Array.isArray(torrent._critical)) return;
+
+  const total = torrent.pieces.length;
+  const startPiece = typeof torrent._primaryStartPiece === 'number' ? torrent._primaryStartPiece : 0;
+  const endPiece = typeof torrent._primaryEndPiece === 'number' ? torrent._primaryEndPiece : (total - 1);
+
+  let cursor = typeof torrent._frontierCursor === 'number' ? Math.max(startPiece, torrent._frontierCursor) : startPiece;
+  while (cursor <= endPiece && torrent.bitfield.get(cursor)) {
+    cursor++;
+  }
+  torrent._frontierCursor = cursor;
+
+  let marked = 0;
+  for (let p = cursor; p <= endPiece && marked < windowSize; p++) {
+    if (!torrent.bitfield.get(p)) {
+      torrent._critical[p] = true;
+      marked++;
+    }
+  }
+}
+
 export function setTorrentPaused(torrent, paused) {
   torrent._pausedManually = paused;
   if (!torrent._knownPeers) torrent._knownPeers = new Set();
@@ -80,6 +157,9 @@ export function setTorrentPaused(torrent, paused) {
     torrent.pause();
     if (torrent.ready && torrent.pieces?.length) {
       torrent.deselect(0, torrent.pieces.length - 1);
+      if (torrent._selections && typeof torrent._selections.clear === 'function') {
+        torrent._selections.clear();
+      }
     }
 
     // Cleanly tear down all peers and connecting sockets to prevent socket queue deadlock
@@ -100,7 +180,9 @@ export function setTorrentPaused(torrent, paused) {
     torrent._numPending = 0;
   } else {
     torrent.resume();
-    if (torrent.ready && torrent.pieces?.length) {
+    if (typeof torrent._applyPriorities === 'function') {
+      torrent._applyPriorities();
+    } else if (torrent.ready && torrent.pieces?.length) {
       torrent.select(0, torrent.pieces.length - 1);
     }
 

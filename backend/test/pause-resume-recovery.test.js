@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { setTorrentPaused } from '../lib/torrents.js';
+import { setTorrentPaused, installSwarmPipelineAccelerator, updateCriticalFrontier } from '../lib/torrents.js';
 
 test('setTorrentPaused preserves known peers and resets queue on pause, then redials on resume', () => {
   const redialedPeers = [];
@@ -56,4 +56,61 @@ test('setTorrentPaused preserves known peers and resets queue on pause, then red
   assert.ok(redialedPeers.includes('2.2.2.2:6881'));
   assert.ok(redialedPeers.includes('3.3.3.3:8000'));
   assert.equal(announceStarted, true);
+});
+
+test('installSwarmPipelineAccelerator boosts pipeline speed lookups while preserving real downloadSpeed for ranker/telemetry', () => {
+  const wire = {
+    type: 'tcp',
+    downloadSpeed: () => 20 * 1024, // 20 KB/s real speed
+  };
+
+  const observedUpdateSpeeds = [];
+  const observedRequestSpeeds = [];
+
+  const mockTorrent = {
+    _updateWire(w) {
+      // Simulate getBlockPipelineLength min & max (first 2 calls), then speedRanker (3rd call)
+      observedUpdateSpeeds.push(w.downloadSpeed());
+      observedUpdateSpeeds.push(w.downloadSpeed());
+      observedUpdateSpeeds.push(w.downloadSpeed());
+      this._request(w, 0, false);
+    },
+    _request(w) {
+      // Simulate getBlockPipelineLength max (1st call), then _hotswap (2nd call)
+      observedRequestSpeeds.push(w.downloadSpeed());
+      observedRequestSpeeds.push(w.downloadSpeed());
+    },
+  };
+
+  installSwarmPipelineAccelerator(mockTorrent);
+  mockTorrent._updateWire(wire);
+
+  // First 2 calls in _updateWire are boosted to >= 256 KB/s; 3rd call (speedRanker) sees real 20 KB/s
+  assert.equal(observedUpdateSpeeds[0], 256 * 1024);
+  assert.equal(observedUpdateSpeeds[1], 256 * 1024);
+  assert.equal(observedUpdateSpeeds[2], 20 * 1024);
+
+  // First call in _request is boosted to >= 256 KB/s; 2nd call (_hotswap) sees real 20 KB/s
+  assert.equal(observedRequestSpeeds[0], 256 * 1024);
+  assert.equal(observedRequestSpeeds[1], 20 * 1024);
+
+  // Outside _updateWire, telemetry always sees real 20 KB/s
+  assert.equal(wire.downloadSpeed(), 20 * 1024);
+});
+
+test('updateCriticalFrontier marks rolling window of unverified sequential pieces as critical', () => {
+  const verified = new Set([0, 1, 2]);
+  const mockTorrent = {
+    destroyed: false,
+    ready: true,
+    pieces: new Array(20).fill({}),
+    _critical: new Array(20).fill(false),
+    bitfield: {
+      get: (i) => verified.has(i),
+    },
+  };
+
+  updateCriticalFrontier(mockTorrent, 4);
+  assert.equal(mockTorrent._frontierCursor, 3);
+  assert.deepEqual(mockTorrent._critical.slice(0, 8), [false, false, false, true, true, true, true, false]);
 });

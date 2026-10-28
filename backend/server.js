@@ -19,7 +19,14 @@ import { NetworkManager } from './lib/networks.js';
 import { TorrentArchive } from './lib/archive.js';
 import { FolderScanner } from './lib/scanner.js';
 import { resolveDoH } from './lib/doh.js';
-import { cleanMagnet, extractInfoHash, waitForInfoHash, setTorrentPaused } from './lib/torrents.js';
+import {
+  cleanMagnet,
+  extractInfoHash,
+  waitForInfoHash,
+  setTorrentPaused,
+  installSwarmPipelineAccelerator,
+  updateCriticalFrontier,
+} from './lib/torrents.js';
 import { createSettingsManager } from './lib/settings.js';
 import { localAccess } from './lib/local-access.js';
 import { childPath, hasSafeParent } from './lib/safe-path.js';
@@ -438,6 +445,8 @@ function setupTorrentHooks(torrent) {
   if (!torrent || torrent._hooksConfigured) return;
   torrent._hooksConfigured = true;
 
+  installSwarmPipelineAccelerator(torrent);
+
   torrent.on('error', (err) => {
     console.error(`[torrent error] [${torrent.name || torrent.infoHash}]:`, err.message);
   });
@@ -476,6 +485,42 @@ function setupTorrentHooks(torrent) {
   if (torrent.discovery) recordDiscoveredPeers();
   else torrent.once('infoHash', recordDiscoveredPeers);
 
+  const applyPriorities = () => {
+    if (!torrent.pieces || torrent.pieces.length === 0) return;
+    const lastPiece = torrent.pieces.length - 1;
+    const primary = findPrimaryVideoInTorrent(torrent, torrent.path || DOWNLOAD_DIR);
+
+    // 1. Full torrent sequential download baseline
+    torrent.select(0, lastPiece, 0);
+
+    let fileStart = 0;
+    let fileEnd = lastPiece;
+    if (primary?.file && typeof primary.file._startPiece === 'number') {
+      fileStart = primary.file._startPiece;
+      fileEnd = primary.file._endPiece;
+    }
+    torrent._primaryStartPiece = fileStart;
+    torrent._primaryEndPiece = fileEnd;
+
+    const headCount = Math.min(20, fileEnd - fileStart);
+    const tailCount = Math.min(15, fileEnd - fileStart);
+    const tailStart = Math.max(fileStart, fileEnd - tailCount);
+
+    // 2. High-priority stream selections: bypass sequential order so MP4 moov atom downloads immediately
+    if (typeof torrent._select === 'function') {
+      torrent._select(tailStart, fileEnd, 5, null, true);
+      torrent._select(fileStart, fileStart + headCount, 4, null, true);
+    }
+
+    if (typeof torrent.critical === 'function') {
+      torrent.critical(tailStart, fileEnd);
+      torrent.critical(fileStart, fileStart + headCount);
+    }
+
+    updateCriticalFrontier(torrent);
+  };
+  torrent._applyPriorities = applyPriorities;
+
   const onReady = () => {
     // Sequential Strategy: commits pieces to disk and bitfield in order so restarts/failures resume seamlessly
     torrent.strategy = 'sequential';
@@ -487,35 +532,7 @@ function setupTorrentHooks(torrent) {
       saveSession();
       return;
     }
-    if (torrent.pieces && torrent.pieces.length > 0) {
-      const lastPiece = torrent.pieces.length - 1;
-      const primary = findPrimaryVideoInTorrent(torrent, torrent.path || DOWNLOAD_DIR);
-
-      // 1. Full torrent sequential download baseline
-      torrent.select(0, lastPiece, 0);
-
-      let fileStart = 0;
-      let fileEnd = lastPiece;
-      if (primary?.file && typeof primary.file._startPiece === 'number') {
-        fileStart = primary.file._startPiece;
-        fileEnd = primary.file._endPiece;
-      }
-
-      const headCount = Math.min(20, fileEnd - fileStart);
-      const tailCount = Math.min(15, fileEnd - fileStart);
-      const tailStart = Math.max(fileStart, fileEnd - tailCount);
-
-      // 2. High-priority stream selections: bypass sequential order so MP4 moov atom downloads immediately
-      if (typeof torrent._select === 'function') {
-        torrent._select(tailStart, fileEnd, 5, null, true);
-        torrent._select(fileStart, fileStart + headCount, 4, null, true);
-      }
-
-      if (typeof torrent.critical === 'function') {
-        torrent.critical(tailStart, fileEnd);
-        torrent.critical(fileStart, fileStart + headCount);
-      }
-    }
+    applyPriorities();
     if (torrent.wires) {
       torrent.wires.forEach((w) => {
         try {
@@ -535,6 +552,7 @@ function setupTorrentHooks(torrent) {
   }
 
   torrent.on('verified', () => {
+    updateCriticalFrontier(torrent);
     scheduleSaveSession();
   });
 

@@ -435,9 +435,11 @@ except Exception as e:
     const client = typeof this.getClient === 'function' ? this.getClient() : null;
     const ifaceDownPeers = new Map();
     const ifaceTotalPeers = new Map();
+    let totalMeasuredDown = 0;
     for (const iface of available) {
       ifaceDownPeers.set(iface.id, 0);
       ifaceTotalPeers.set(iface.id, this.stats?.get(iface.id)?.peers ?? 0);
+      totalMeasuredDown += this.stats?.get(iface.id)?.currentDown ?? 0;
     }
 
     let hasActiveDownloads = false;
@@ -459,6 +461,14 @@ except Exception as e:
       }
     }
 
+    let minDownPeersOnAny = Infinity;
+    for (const iface of available) {
+      const dp = ifaceDownPeers.get(iface.id) || 0;
+      if (dp < minDownPeersOnAny) minDownPeersOnAny = dp;
+    }
+    const useThroughputWeighting = hasActiveDownloads && minDownPeersOnAny >= 4 && totalMeasuredDown > 64 * 1024;
+    const avgDown = available.length > 0 ? totalMeasuredDown / available.length : 0;
+
     let best = null;
     let minScore = Infinity;
 
@@ -467,10 +477,18 @@ except Exception as e:
       const downPeers = ifaceDownPeers.get(iface.id) || 0;
       const totalPeers = ifaceTotalPeers.get(iface.id) || 0;
 
-      // When downloading, prioritize distributing download connections equally across adapters.
-      // Seeding peers on finished torrents do not penalize a network adapter from receiving download peers.
+      // Once every bonded adapter has at least 4 active download peers, weight peer capacity
+      // by live download throughput so faster adapters (e.g. Wi-Fi / Ethernet) receive proportionally
+      // more peer slots instead of being bottlenecked 50/50 by a slower cellular tether.
+      let effectiveDownPeers = downPeers;
+      if (useThroughputWeighting) {
+        const currentDown = this.stats?.get(iface.id)?.currentDown ?? 0;
+        const speedWeight = Math.max(0.4, Math.min(2.5, (currentDown + 65536) / (avgDown + 65536)));
+        effectiveDownPeers = downPeers / speedWeight;
+      }
+
       const score = hasActiveDownloads
-        ? (downPeers * 100) + totalPeers
+        ? (effectiveDownPeers * 100) + totalPeers
         : totalPeers;
 
       if (score < minScore) {

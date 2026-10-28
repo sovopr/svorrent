@@ -107,3 +107,43 @@ test('seeding peers on one adapter do not starve download peers on another adapt
   }
 });
 
+test('throughput-weighted bonding assigns more peers to faster adapter once baseline peers are established', () => {
+  const originalNetworkInterfaces = os.networkInterfaces;
+  os.networkInterfaces = () => ({
+    en0: [{ family: 'IPv4', internal: false, address: '192.168.1.100' }], // Fast Wi-Fi
+    feth0: [{ family: 'IPv4', internal: false, address: '10.79.220.230' }], // Slower USB Tether
+  });
+
+  try {
+    const manager = Object.create(NetworkManager.prototype);
+    manager.hardwarePorts = new Map([['en0', 'Wi-Fi'], ['feth0', 'Samsung USB']]);
+    manager.disabledIds = new Set();
+    // Both have 6 peers, but en0 is downloading at 2 MB/s while feth0 is at 200 KB/s
+    manager.stats = new Map([
+      ['en0', { peers: 6, currentDown: 2 * 1024 * 1024 }],
+      ['feth0', { peers: 6, currentDown: 200 * 1024 }],
+    ]);
+    manager.roundRobinIndex = 0;
+
+    const wires = [];
+    const wireMap = new WeakMap();
+    for (let i = 0; i < 6; i++) {
+      const w1 = {};
+      const w2 = {};
+      wires.push(w1, w2);
+      wireMap.set(w1, 'en0');
+      wireMap.set(w2, 'feth0');
+    }
+    manager.wireToInterface = wireMap;
+    manager.getClient = () => ({
+      torrents: [{ done: false, paused: false, destroyed: false, wires }],
+    });
+
+    // Even when both have 6 download peers, the next peer should route to the faster adapter (en0)
+    const pick = manager.pickInterface();
+    assert.equal(pick.id, 'en0');
+  } finally {
+    os.networkInterfaces = originalNetworkInterfaces;
+  }
+});
+

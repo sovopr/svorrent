@@ -22,6 +22,9 @@ scratch/
 backend/bin/svorrent-tetherd
 test-results/
 android/.gradle/
+android/build/
+android/app/build/
 android/local.properties
+dist-android/
 *.keystore
 *.apk

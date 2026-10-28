@@ -23,8 +23,8 @@ Svorrent uses a local web interface. Desktop launchers start the backend and ope
 
 | Platform | Package | Size | Description |
 | :--- | :--- | :--- | :--- |
-| **Windows (x64)** | [**`Svorrent-Setup.exe`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent-Setup.exe) | Varies | Installer with Desktop & Start Menu shortcuts. |
-| **macOS (Apple Silicon)** | [**`Svorrent.dmg`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.dmg) | Varies | Native Apple Silicon disk image. Drag `Svorrent.app` into `/Applications`. |
+| **Windows (x64)** | [**`Svorrent-Setup.exe`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent-Setup.exe) | 23.3 MB | Installer with Desktop & Start Menu shortcuts. |
+| **macOS (Apple Silicon)** | [**`Svorrent.dmg`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.dmg) | 19.0 MB | Native Apple Silicon disk image. Drag `Svorrent.app` into `/Applications`. |
 
 The macOS package is arm64-only; an Intel Mac build is not currently available.
 Releases include `SHA256SUMS.txt` and support SHA-256-verified in-app updates from GitHub Releases as well as continuous repository code integration from `main` (staged self-testing via `node --check` and the unit test suite before prompting **Restart & Integrate** on macOS and Windows).
@@ -184,7 +184,7 @@ The interface runs on `http://localhost:5173`.
 
 ### 3. Packaging Releases
 
-To build the production desktop distributions (approximately 10–21 MB):
+To build the production desktop distributions (~19–23 MB):
 
 ```bash
 # Build macOS .dmg (outputs to dist-app/Svorrent.dmg)
@@ -268,7 +268,7 @@ flowchart TD
 | Component | Implementation |
 | :--- | :--- |
 | Core Protocol & Swarm | WebTorrent, P2P Wire Protocol, DHT, 2.5× dynamic block pipeline accelerator, rolling critical frontier |
-| Desktop Architecture | Native Win32 / macOS browser-client launchers (~10–20 MB packages, zero Electron overhead) |
+| Desktop Architecture | Native Win32 / macOS browser-client launchers (~19–23 MB packages, zero Electron overhead) |
 | In-App Updater | SHA-256 release verification + continuous `main` branch code integration with staged self-testing |
 | Search Engine | Multi-provider aggregation with bounded timeouts & DoH anti-censorship shield |
 | Network Routing & Bonding | Throughput-weighted multi-interface OS socket binding, iOS hotspot UDP keepalive, and harmonized adapter download/upload telemetry |

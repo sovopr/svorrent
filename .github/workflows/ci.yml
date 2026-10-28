@@ -171,6 +171,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
           & ./scripts/build-windows-snapshot.ps1
           if (-not (Test-Path 'dist-win/Svorrent-Setup.exe')) { throw 'Installer output is missing' }
+          $signature = Get-AuthenticodeSignature -LiteralPath 'dist-win/Svorrent-Setup.exe'
+          if ($signature.Status -ne 'NotSigned') { throw 'Expected unsigned installer in the free build path' }
           if (-not (Test-Path 'dist-win/staging/backend/scripts/apply-windows-update.ps1')) {
             throw 'Update helper is missing from the installer staging directory'
           }
@@ -242,3 +244,17 @@ jobs:
           clang -O2 -fobjc-arc -framework Cocoa scripts/launcher_mac.m -o scripts/Svorrent
           file scripts/Svorrent
           codesign --verify scripts/Svorrent || true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: 3. Verify free macOS DMG build
+        run: |
+          brew install librsvg
+          (cd frontend && npm ci)
+          (cd backend && npm ci)
+          ./scripts/build-dmg.sh
+          test -s dist-app/Svorrent.dmg
+          codesign --verify --deep --strict dist-app/Svorrent.app
+          codesign -dv --verbose=4 dist-app/Svorrent.app 2>&1 | grep -Fx 'Signature=adhoc'

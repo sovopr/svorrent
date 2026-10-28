@@ -140,9 +140,9 @@ export function NetworksPage({ notify, isActive = true }) {
         if (res.status === 'error') {
           notifyRef.current?.(res.error || 'Update check failed', 'danger');
         } else if (res.status === 'unavailable') {
-          notifyRef.current?.('No signed main build for this platform has been published yet', 'info');
+          notifyRef.current?.('Automatic updates need signed builds. Install unsigned releases manually from GitHub.', 'info');
         } else if (res.status === 'building') {
-          notifyRef.current?.(`Latest main commit ${res.latestCommit?.slice(0, 7)} is still being built`, 'info');
+          notifyRef.current?.(`No signed updater build for main commit ${res.latestCommit?.slice(0, 7)}. Check GitHub Releases for a manual installer.`, 'info');
         } else if (res.updateAvailable) {
           notifyRef.current?.(res.channel === 'main'
             ? `New main build available: ${res.latestCommit?.slice(0, 7)}`
@@ -546,9 +546,9 @@ export function NetworksPage({ notify, isActive = true }) {
                 ) : updater?.updateAvailable ? (
                   <span className="tag-update-available">UPDATE AVAILABLE</span>
                 ) : updater?.status === 'building' ? (
-                  <span className="tag-up-to-date">BUILDING</span>
+                  <span className="tag-up-to-date">NO SIGNED BUILD</span>
                 ) : updater?.status === 'unavailable' ? (
-                  <span className="tag-up-to-date">NOT PUBLISHED</span>
+                  <span className="tag-up-to-date">MANUAL INSTALL</span>
                 ) : updater?.status === 'error' ? (
                   <span className="tag-up-to-date">CHECK FAILED</span>
                 ) : (
@@ -563,9 +563,9 @@ export function NetworksPage({ notify, isActive = true }) {
                   : updater?.status === 'downloading'
                   ? `Downloading ${updater.channel === 'main' ? `main build ${updater.latestCommit?.slice(0, 7)}` : `update ${updater.latestVersion}`} (${updater.downloadProgress || 0}%)…`
                   : updater?.status === 'building'
-                  ? `A signed app for main commit ${updater.latestCommit?.slice(0, 7)} is still being built. Check again shortly.`
+                  ? `No signed updater build for main commit ${updater.latestCommit?.slice(0, 7)}. Unsigned releases can be installed manually from GitHub.`
                   : updater?.status === 'unavailable'
-                  ? 'No signed main build is available for this platform. The repository maintainer needs to configure signing.'
+                  ? 'Automatic updates require signed builds. Unsigned releases can be installed manually from GitHub.'
                   : updater?.status === 'error'
                   ? `Update check failed: ${updater.error || 'Unknown error'}`
                   : updater?.updateAvailable

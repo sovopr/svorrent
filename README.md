@@ -191,7 +191,7 @@ cd backend
 npm run build:win
 ```
 
-Local unsigned packages are for development. Public releases require signed Mac and Windows builds from the same version tag; see [macOS signing](docs/releases/macos-signing.md), [Windows signing](docs/releases/windows-signing.md), and [dependency security](docs/dependency-security.md).
+Tagged public releases now publish free, clearly labelled unsigned packages after cross-platform tests. The macOS app has only an ad-hoc signature (no Developer ID notarization); the Windows installer has no Authenticode signature. Both may trigger platform security warnings, and in-app automatic updates remain unavailable without signed main builds. Verify the release checksums before installing. See [macOS signing](docs/releases/macos-signing.md), [Windows signing](docs/releases/windows-signing.md), and [dependency security](docs/dependency-security.md) if trusted distribution is added later.
 
 ---
 

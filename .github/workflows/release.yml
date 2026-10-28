@@ -1,4 +1,4 @@
-name: Verified release
+name: Verified unsigned release
 
 on:
   push:
@@ -58,7 +58,7 @@ jobs:
         run: npm run test:e2e
 
   macos:
-    name: Build signed, notarized Mac DMG
+    name: Build ad-hoc signed Mac DMG (not notarized)
     runs-on: macos-latest
     needs: verify
     steps:
@@ -68,67 +68,25 @@ jobs:
           node-version: 22.x
       - name: Install dependencies
         run: |
+          brew install librsvg
           (cd frontend && npm ci)
           (cd backend && npm ci)
-      - name: Require signing credentials
-        env:
-          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-          KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-        run: |
-          set -euo pipefail
-          for required in MACOS_CERTIFICATE_P12_BASE64 MACOS_CERTIFICATE_PASSWORD MACOS_SIGNING_IDENTITY KEYCHAIN_PASSWORD APPLE_ID APPLE_TEAM_ID APPLE_APP_SPECIFIC_PASSWORD; do
-            if [ -z "${!required:-}" ]; then
-              echo "::error::Missing $required; refusing to publish an unsigned Mac release"
-              exit 1
-            fi
-          done
-      - name: Import Developer ID certificate
-        env:
-          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-          KEYCHAIN_PASSWORD: ${{ secrets.MACOS_KEYCHAIN_PASSWORD }}
-        run: |
-          set -euo pipefail
-          keychain="$RUNNER_TEMP/svorrent-signing.keychain-db"
-          certificate="$RUNNER_TEMP/svorrent-developer-id.p12"
-          printf '%s' "$MACOS_CERTIFICATE_P12_BASE64" | base64 -D > "$certificate"
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$keychain"
-          security set-keychain-settings -lut 21600 "$keychain"
-          security default-keychain -s "$keychain"
-          security import "$certificate" -k "$keychain" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
-          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$keychain"
-          security find-identity -v -p codesigning "$keychain"
-      - name: Build, notarize, and staple DMG
+      - name: Build and verify ad-hoc signed DMG
         env:
           SVORRENT_SOURCE_COMMIT: ${{ github.sha }}
-          SVORRENT_CODESIGN_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
           set -euo pipefail
           ./scripts/build-dmg.sh
           codesign --verify --deep --strict --verbose=2 dist-app/Svorrent.app
-          xcrun notarytool submit dist-app/Svorrent.dmg --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --wait
-          xcrun stapler staple dist-app/Svorrent.dmg
-          xcrun stapler validate dist-app/Svorrent.dmg
+          identity="$(codesign -dv --verbose=4 dist-app/Svorrent.app 2>&1 | sed -n 's/^Signature=//p')"
+          test "$identity" = adhoc
       - uses: actions/upload-artifact@v4
         with:
           name: macos-dmg
           path: dist-app/Svorrent.dmg
           if-no-files-found: error
-      - name: Remove temporary signing keychain
-        if: always()
-        run: security delete-keychain "$RUNNER_TEMP/svorrent-signing.keychain-db" 2>/dev/null || true
-
   windows:
-    name: Build signed Windows packages
+    name: Build unsigned Windows packages
     runs-on: windows-latest
     needs: verify
     steps:
@@ -149,43 +107,21 @@ jobs:
           npm ci
           if ($LASTEXITCODE -ne 0) { throw 'Backend install failed' }
           Pop-Location
-      - name: Require Windows signing credentials
-        shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
-          SVORRENT_WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
-        run: |
-          if (-not $env:WINDOWS_CERTIFICATE_PFX_BASE64 -or -not $env:SVORRENT_WINDOWS_PFX_PASSWORD) {
-            throw 'Windows signing credentials are missing; refusing to publish an unsigned installer'
-          }
       - name: Install NSIS
         shell: pwsh
         run: |
           choco install nsis --yes --no-progress
           if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed' }
-      - name: Build, sign, and verify installer
+      - name: Build and verify unsigned installer
         shell: pwsh
-        env:
-          WINDOWS_CERTIFICATE_PFX_BASE64: ${{ secrets.WINDOWS_CERTIFICATE_PFX_BASE64 }}
-          SVORRENT_WINDOWS_PFX_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: |
-          $env:SVORRENT_WINDOWS_PFX = Join-Path $env:RUNNER_TEMP 'svorrent-signing.pfx'
-          try {
-            [IO.File]::WriteAllBytes($env:SVORRENT_WINDOWS_PFX, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE_PFX_BASE64))
-            $certificate = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
-              $env:SVORRENT_WINDOWS_PFX, $env:SVORRENT_WINDOWS_PFX_PASSWORD)
-            $thumbprint = $certificate.Thumbprint.ToUpperInvariant()
-            & ./scripts/build-windows-snapshot.ps1 -SourceCommit $env:GITHUB_SHA -SignerThumbprint $thumbprint
-            if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
-            $installer = 'dist-win/Svorrent-Setup.exe'
-            $signature = Get-AuthenticodeSignature -LiteralPath $installer
-            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -cne $thumbprint) {
-              throw 'Installer signature verification failed'
-            }
-            Compress-Archive -Path 'dist-win/staging/*' -DestinationPath 'dist-win/Svorrent-Windows-x64-Portable.zip'
-          } finally {
-            Remove-Item -LiteralPath $env:SVORRENT_WINDOWS_PFX -Force -ErrorAction SilentlyContinue
+          & ./scripts/build-windows-snapshot.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows build failed' }
+          $signature = Get-AuthenticodeSignature -LiteralPath 'dist-win/Svorrent-Setup.exe'
+          if ($signature.Status -ne 'NotSigned') {
+            throw "Expected an unsigned installer, got $($signature.Status)"
           }
+          Compress-Archive -Path 'dist-win/staging/*' -DestinationPath 'dist-win/Svorrent-Windows-x64-Portable.zip'
       - uses: actions/upload-artifact@v4
         with:
           name: windows-packages
@@ -195,7 +131,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    name: Publish verified packages
+    name: Publish verified unsigned packages
     runs-on: ubuntu-latest
     needs: [verify, macos, windows]
     permissions:
@@ -226,4 +162,4 @@ jobs:
             echo "::error::Release $GITHUB_REF_NAME already exists; refusing to replace published assets"
             exit 1
           fi
-          gh release create "$GITHUB_REF_NAME" release/Svorrent.dmg release/Svorrent-Setup.exe release/Svorrent-Windows-x64-Portable.zip release/SHA256SUMS.txt --verify-tag --generate-notes --title "$GITHUB_REF_NAME"
+          gh release create "$GITHUB_REF_NAME" release/Svorrent.dmg release/Svorrent-Setup.exe release/Svorrent-Windows-x64-Portable.zip release/SHA256SUMS.txt --verify-tag --title "$GITHUB_REF_NAME (unsigned)" --notes 'These free builds are NOT Developer ID signed/notarized on macOS or Authenticode signed on Windows. macOS Gatekeeper or Windows SmartScreen may warn or block installation. Verify SHA256SUMS.txt before installing. In-app automatic updates require signed main builds and are unavailable for these packages.'

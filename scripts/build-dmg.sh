@@ -56,11 +56,18 @@ mkdir -p "$APP_BUNDLE/Contents/Resources/app/frontend/dist"
 mkdir -p "$DMG_STAGING"
 
 echo "==> 3. Generating macOS AppIcon.icns..."
-ICON_TMP="/tmp/svorrent_icon_build"
-rm -rf "$ICON_TMP" && mkdir -p "$ICON_TMP/Svorrent.iconset"
-
-qlmanage -t -s 1024 -o "$ICON_TMP" "$ROOT_DIR/frontend/public/favicon.svg" >/dev/null 2>&1
-SRC_PNG="$ICON_TMP/favicon.svg.png"
+ICON_TMP="$(mktemp -d "${TMPDIR:-/tmp}/svorrent-icon.XXXXXX")"
+mkdir -p "$ICON_TMP/Svorrent.iconset"
+SRC_PNG="$ICON_TMP/favicon.png"
+if command -v rsvg-convert >/dev/null 2>&1; then
+    rsvg-convert -w 1024 -h 1024 "$ROOT_DIR/frontend/public/favicon.svg" -o "$SRC_PNG"
+elif qlmanage -t -s 1024 -o "$ICON_TMP" "$ROOT_DIR/frontend/public/favicon.svg" >/dev/null 2>&1 &&
+     [ -s "$ICON_TMP/favicon.svg.png" ]; then
+    mv "$ICON_TMP/favicon.svg.png" "$SRC_PNG"
+else
+    echo "SVG icon rendering requires librsvg or macOS Quick Look." >&2
+    exit 1
+fi
 
 sips -z 16 16     "$SRC_PNG" --out "$ICON_TMP/Svorrent.iconset/icon_16x16.png" >/dev/null
 sips -z 32 32     "$SRC_PNG" --out "$ICON_TMP/Svorrent.iconset/icon_16x16@2x.png" >/dev/null

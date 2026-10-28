@@ -1,8 +1,6 @@
 name: Signed Windows main build
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:

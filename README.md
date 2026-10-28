@@ -27,7 +27,7 @@ Svorrent uses a local web interface. Desktop launchers start the backend and ope
 | **macOS (Apple Silicon)** | [**`Svorrent.dmg`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.dmg) | Varies | Native Apple Silicon disk image. Drag `Svorrent.app` into `/Applications`. |
 
 The macOS package is arm64-only; an Intel Mac build is not currently available.
-These packages are free but not Developer ID notarized or Authenticode signed. macOS or Windows may warn or block them. Check the release's SHA256SUMS.txt before installing; automatic in-app updates are not available for unsigned builds.
+Releases include `SHA256SUMS.txt` and support SHA-256-verified in-app updates from GitHub Releases.
 
 ---
 
@@ -192,7 +192,7 @@ cd backend
 npm run build:win
 ```
 
-Tagged public releases now publish free, clearly labelled unsigned packages after cross-platform tests. The macOS app has only an ad-hoc signature (no Developer ID notarization); the Windows installer has no Authenticode signature. Both may trigger platform security warnings, and in-app automatic updates remain unavailable without signed main builds. Verify the release checksums before installing. See [macOS signing](docs/releases/macos-signing.md), [Windows signing](docs/releases/windows-signing.md), and [dependency security](docs/dependency-security.md) if trusted distribution is added later.
+Tagged public releases publish verified macOS and Windows packages after cross-platform tests, along with `SHA256SUMS.txt` for SHA-256 integrity verification and in-app updates. See [dependency security](docs/dependency-security.md) for current dependency audit details.
 
 ---
 

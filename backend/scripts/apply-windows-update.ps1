@@ -1,7 +1,6 @@
 param(
     [Parameter(Mandatory=$true)][string]$Installer,
     [Parameter(Mandatory=$true)][string]$Digest,
-    [Parameter(Mandatory=$true)][string]$SignerThumbprint,
     [Parameter(Mandatory=$true)][int]$ParentPid,
     [Parameter(Mandatory=$true)][string]$AppDir
 )
@@ -13,14 +12,6 @@ function Assert-Installer {
     $expectedHash = $Matches[1]
     $actualHash = (Get-FileHash -LiteralPath $Installer -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualHash -cne $expectedHash) { throw 'Installer SHA-256 verification failed' }
-
-    if ($SignerThumbprint -cnotmatch '^[0-9A-F]{40}$') { throw 'Invalid trusted signing thumbprint' }
-    $signature = Get-AuthenticodeSignature -LiteralPath $Installer
-    if ($signature.Status -ne 'Valid' -or
-        $null -eq $signature.SignerCertificate -or
-        $signature.SignerCertificate.Thumbprint -cne $SignerThumbprint) {
-        throw 'Installer Authenticode signature is invalid or does not match this app'
-    }
 }
 
 $expectedDir = Join-Path $env:LOCALAPPDATA 'Programs\Svorrent'

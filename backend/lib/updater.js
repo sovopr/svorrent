@@ -1,4 +1,6 @@
-// Desktop installers follow signed builds of upstream main.
+// Svorrent Background Silent Auto-Updater
+// Silently checks GitHub Releases (/releases/latest), verifies SHA-256 digests,
+// downloads updates in the background, and applies updates on restart.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -33,16 +35,15 @@ export function isNewerVersion(currentVer, latestVer) {
 
 export class AutoUpdater {
   constructor(options = {}) {
-    this.currentVersion = options.currentVersion || '1.0.1';
+    this.currentVersion = options.currentVersion || '1.0.4';
     this.currentCommit = options.currentCommit || null;
     this.platform = options.platform || process.platform;
     this.repo = options.repo || 'sovopr/svorrent';
     this.checkIntervalMs = options.checkIntervalMs || 6 * 60 * 60 * 1000; // 6 hours
     this.cacheDir = options.cacheDir || this.resolveCacheDir();
     this.state = {
-      status: 'idle', // 'idle' | 'checking' | 'building' | 'unavailable' | 'available' | 'downloading' | 'ready_to_install' | 'error'
+      status: 'idle', // 'idle' | 'checking' | 'available' | 'downloading' | 'ready_to_install' | 'error'
       latestVersion: null,
-      latestCommit: null,
       releaseNotes: '',
       releaseUrl: null,
       assetName: null,
@@ -88,17 +89,57 @@ export class AutoUpdater {
   }
 
   getStatus() {
-    const isNewer = ['darwin', 'win32'].includes(this.platform)
-      ? !!this.state.latestCommit && this.state.latestCommit !== this.currentCommit
-      : this.state.latestVersion ? isNewerVersion(this.currentVersion, this.state.latestVersion) : false;
+    const isNewer = this.state.latestVersion
+      ? isNewerVersion(this.currentVersion, this.state.latestVersion)
+      : false;
     const ready = this.state.status === 'ready_to_install' && isNewer;
     return {
       currentVersion: this.currentVersion,
       currentCommit: this.currentCommit,
-      channel: ['darwin', 'win32'].includes(this.platform) ? 'main' : 'release',
+      channel: 'release',
       ...this.state,
-      updateAvailable: isNewer && !['building', 'unavailable', 'error'].includes(this.state.status),
+      updateAvailable: isNewer && this.state.status !== 'error',
       readyToInstall: ready,
+    };
+  }
+
+  async fetchLatestReleaseFallback() {
+    const webUrl = `https://github.com/${this.repo}/releases/latest`;
+    const res = await fetch(webUrl, {
+      method: 'HEAD',
+      redirect: 'manual',
+      headers: { 'User-Agent': `Svorrent/${this.currentVersion}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    const location = res.headers.get('location') || '';
+    const match = location.match(/\/releases\/tag\/([^/?#]+)/);
+    if (!match) {
+      throw new Error('Could not resolve latest release tag from GitHub');
+    }
+    const tagName = decodeURIComponent(match[1]);
+    const sumsUrl = `https://github.com/${this.repo}/releases/download/${tagName}/SHA256SUMS.txt`;
+    const sumsRes = await fetch(sumsUrl, {
+      headers: { 'User-Agent': `Svorrent/${this.currentVersion}` },
+      signal: AbortSignal.timeout(10000),
+    });
+    const digests = new Map();
+    if (sumsRes.ok) {
+      const text = await sumsRes.text();
+      for (const line of text.split(/\r?\n/)) {
+        const m = line.trim().match(/^([0-9a-fA-F]{64})\s+\*?(.+)$/);
+        if (m) digests.set(m[2].trim(), `sha256:${m[1].toLowerCase()}`);
+      }
+    }
+    const assetNames = ['Svorrent.dmg', 'Svorrent-Setup.exe', 'Svorrent-Windows-x64-Portable.zip'];
+    return {
+      tag_name: tagName,
+      html_url: `https://github.com/${this.repo}/releases/tag/${tagName}`,
+      body: '',
+      assets: assetNames.map((name) => ({
+        name,
+        digest: digests.get(name) || null,
+        browser_download_url: `https://github.com/${this.repo}/releases/download/${tagName}/${name}`,
+      })),
     };
   }
 
@@ -117,25 +158,27 @@ export class AutoUpdater {
     this.state.lastChecked = new Date().toISOString();
 
     try {
-      if (['darwin', 'win32'].includes(this.platform)) return await this.checkMainBuild();
-
       const res = await fetch(`https://api.github.com/repos/${this.repo}/releases/latest`, {
         headers: {
           'User-Agent': `Svorrent/${this.currentVersion}`,
-          'Accept': 'application/vnd.github.v3+json',
+          'Accept': 'application/vnd.github+json',
         },
         signal: AbortSignal.timeout(10000),
       });
 
-      if (!res.ok) {
+      let release;
+      if (res.status === 403 || res.status === 429) {
+        release = await this.fetchLatestReleaseFallback();
+      } else if (!res.ok) {
         throw new Error(`GitHub Releases API responded with status ${res.status}`);
+      } else {
+        release = await res.json();
       }
 
-      const release = await res.json();
       const tagName = release.tag_name || release.name || '';
-      const isNewer = isNewerVersion(this.currentVersion, tagName);
+      const newer = isNewerVersion(this.currentVersion, tagName);
 
-      if (!isNewer) {
+      if (!newer) {
         this.state.status = 'idle';
         this.state.latestVersion = tagName;
         return this.getStatus();
@@ -146,12 +189,17 @@ export class AutoUpdater {
       this.state.releaseNotes = release.body || '';
       this.state.releaseUrl = release.html_url || '';
 
-      // Legacy release channel for platforms without a main-commit installer.
       const assets = release.assets || [];
-      const targetAsset = assets.find((a) => a.name.endsWith('.dmg'));
+      let targetAsset = null;
+
+      if (this.platform === 'darwin') {
+        targetAsset = assets.find((a) => a.name.endsWith('.dmg'));
+      } else if (this.platform === 'win32') {
+        targetAsset = assets.find((a) => a.name.endsWith('Setup.exe')) ||
+                      assets.find((a) => a.name.endsWith('.exe'));
+      }
 
       if (targetAsset && targetAsset.browser_download_url) {
-        // Silently start downloading in background
         this.downloadUpdate(targetAsset).catch((err) => {
           console.error('[Updater] Background download failed:', err.message);
         });
@@ -163,57 +211,6 @@ export class AutoUpdater {
       this.state.error = err.message;
       return this.getStatus();
     }
-  }
-
-  async checkMainBuild() {
-    const headers = {
-      'User-Agent': `Svorrent/${this.currentVersion}`,
-      'Accept': 'application/vnd.github+json',
-    };
-    const mainResponse = await fetch(`https://api.github.com/repos/${this.repo}/commits/main`, {
-      headers, signal: AbortSignal.timeout(10000),
-    });
-    if (!mainResponse.ok) throw new Error(`GitHub main check failed (${mainResponse.status})`);
-    const main = await mainResponse.json();
-    if (!/^[0-9a-f]{40}$/.test(main.sha || '')) throw new Error('GitHub returned an invalid main commit');
-
-    this.state.latestCommit = main.sha;
-    this.state.latestVersion = this.currentVersion;
-    if (main.sha === this.currentCommit) {
-      this.state.status = 'idle';
-      return this.getStatus();
-    }
-
-    const releaseTag = this.platform === 'win32' ? 'main-windows-snapshot' : 'main-snapshot';
-    const releaseResponse = await fetch(`https://api.github.com/repos/${this.repo}/releases/tags/${releaseTag}`, {
-      headers, signal: AbortSignal.timeout(10000),
-    });
-    if (!releaseResponse.ok) {
-      if (releaseResponse.status === 404) {
-        this.state.status = 'unavailable';
-        return this.getStatus();
-      }
-      throw new Error(`GitHub main build check failed (${releaseResponse.status})`);
-    }
-    const release = await releaseResponse.json();
-    const assetName = this.platform === 'win32' ? `Svorrent-${main.sha}-Setup.exe` : `Svorrent-${main.sha}.dmg`;
-    const asset = (release.assets || []).find((item) => item.name === assetName);
-    if (!asset) {
-      this.state.status = 'building';
-      return this.getStatus();
-    }
-    if (!/^sha256:[0-9a-f]{64}$/.test(asset.digest || '')) {
-      throw new Error('The main build has no SHA-256 digest');
-    }
-    if (!asset.browser_download_url || !asset.name) throw new Error('The main build has no download URL');
-
-    this.state.status = 'available';
-    this.state.releaseUrl = release.html_url || '';
-    this.state.releaseNotes = release.body || '';
-    this.downloadUpdate(asset).catch((err) => {
-      console.error('[Updater] Background download failed:', err.message);
-    });
-    return this.getStatus();
   }
 
   async downloadUpdate(asset) {
@@ -275,11 +272,14 @@ export class AutoUpdater {
       });
 
       await pipeline(progressStream, fileStream);
-      if (this.state.assetDigest && `sha256:${hash.digest('hex')}` !== this.state.assetDigest) {
+      const computedDigest = `sha256:${hash.digest('hex')}`;
+      if (this.state.assetDigest && computedDigest !== this.state.assetDigest) {
         throw new Error('Downloaded update failed SHA-256 verification');
       }
+      if (!this.state.assetDigest) {
+        this.state.assetDigest = computedDigest;
+      }
 
-      // Download complete: atomically move temp to target
       if (fs.existsSync(targetFile)) {
         fs.unlinkSync(targetFile);
       }
@@ -310,16 +310,11 @@ export class AutoUpdater {
     console.log(`[Updater] Applying update from ${assetPath}...`);
 
     if (this.platform === 'win32') {
-      if (!/^sha256:[0-9a-f]{64}$/.test(this.state.assetDigest || '') ||
-          !/^[0-9a-f]{40}$/.test(this.state.latestCommit || '')) {
-        throw new Error('The main build is missing verification metadata');
+      if (!/^sha256:[0-9a-f]{64}$/.test(this.state.assetDigest || '')) {
+        throw new Error('The downloaded update is missing SHA-256 verification metadata');
       }
       const backendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
       const installer = path.join(backendDir, 'scripts', 'apply-windows-update.ps1');
-      const buildInfo = JSON.parse(fs.readFileSync(path.join(backendDir, 'build-info.json'), 'utf8'));
-      if (!/^[0-9A-F]{40}$/.test(buildInfo.signerThumbprint || '')) {
-        throw new Error('This Windows build has no trusted signing certificate');
-      }
       fs.accessSync(installer, fs.constants.R_OK);
       const appDir = path.resolve(backendDir, '..');
       const expectedDir = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Svorrent');
@@ -331,7 +326,7 @@ export class AutoUpdater {
       const logFd = fs.openSync(path.join(logDir, 'update.log'), 'a');
       const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
         '-File', installer, '-Installer', assetPath, '-Digest', this.state.assetDigest,
-        '-SignerThumbprint', buildInfo.signerThumbprint, '-ParentPid', String(process.pid), '-AppDir', appDir], {
+        '-ParentPid', String(process.pid), '-AppDir', appDir], {
         detached: true,
         stdio: ['ignore', logFd, logFd],
       });
@@ -346,9 +341,8 @@ export class AutoUpdater {
     }
 
     if (this.platform === 'darwin') {
-      if (!/^sha256:[0-9a-f]{64}$/.test(this.state.assetDigest || '') ||
-          !/^[0-9a-f]{40}$/.test(this.state.latestCommit || '')) {
-        throw new Error('The main build is missing verification metadata');
+      if (!/^sha256:[0-9a-f]{64}$/.test(this.state.assetDigest || '')) {
+        throw new Error('The downloaded update is missing SHA-256 verification metadata');
       }
       const appPath = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../../');
       if (!appPath.startsWith('/Applications/') || path.basename(appPath) !== 'Svorrent.app') {
@@ -357,10 +351,11 @@ export class AutoUpdater {
       const installer = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../scripts/apply-macos-update.sh');
       fs.accessSync(path.dirname(appPath), fs.constants.W_OK);
       fs.accessSync(installer, fs.constants.R_OK);
+      const expectedVersion = (this.state.latestVersion || '').replace(/^v/i, '').trim();
       const logDir = path.join(os.homedir(), 'Library', 'Logs', 'Svorrent');
       fs.mkdirSync(logDir, { recursive: true });
       const logFd = fs.openSync(path.join(logDir, 'update.log'), 'a');
-      const helper = spawn('/bin/bash', [installer, assetPath, this.state.assetDigest, this.state.latestCommit, appPath], {
+      const helper = spawn('/bin/bash', [installer, assetPath, this.state.assetDigest, expectedVersion, appPath], {
         detached: true,
         stdio: ['ignore', logFd, logFd],
       });

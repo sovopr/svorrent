@@ -1,6 +1,5 @@
 param(
-    [string]$SourceCommit = '',
-    [string]$SignerThumbprint = ''
+    [string]$SourceCommit = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -9,7 +8,6 @@ $appVersion = (Get-Content -LiteralPath (Join-Path $root 'backend/package.json')
 $build = Join-Path $root 'dist-win'
 $staging = Join-Path $build 'staging'
 if ($SourceCommit -and $SourceCommit -cnotmatch '^[0-9a-f]{40}$') { throw 'Invalid source commit' }
-if ($SignerThumbprint -and $SignerThumbprint -cnotmatch '^[0-9A-F]{40}$') { throw 'Invalid signing thumbprint' }
 
 Remove-Item -LiteralPath $build -Recurse -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path (Join-Path $staging 'backend'), (Join-Path $staging 'frontend\dist') -Force | Out-Null
@@ -26,31 +24,11 @@ $command = 'call "' + $vcvars + '" >nul && cl /nologo /O2 "' + (Join-Path $root 
 cmd /c $command
 if ($LASTEXITCODE -ne 0) { throw 'Windows launcher compilation failed' }
 
-if ($SourceCommit) {
-    if (-not $env:SVORRENT_WINDOWS_PFX -or -not $env:SVORRENT_WINDOWS_PFX_PASSWORD -or -not $SignerThumbprint) {
-        throw 'Signed main builds require a certificate and its thumbprint'
-    }
-    $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin'
-    $signtool = Get-ChildItem -LiteralPath $kits -Filter signtool.exe -Recurse |
-        Where-Object { $_.FullName -match '\\x64\\signtool\.exe$' } |
-        Sort-Object FullName -Descending | Select-Object -First 1 -ExpandProperty FullName
-    if (-not $signtool) { throw 'Windows SDK SignTool is missing' }
-    function Sign-File([string]$file) {
-        & $signtool sign /f $env:SVORRENT_WINDOWS_PFX /p $env:SVORRENT_WINDOWS_PFX_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 $file
-        if ($LASTEXITCODE -ne 0) { throw "Signing failed: $file" }
-        $signature = Get-AuthenticodeSignature -LiteralPath $file
-        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Thumbprint -cne $SignerThumbprint) {
-            throw "Signed file verification failed: $file"
-        }
-    }
-    Sign-File $launcher
-}
-
 $backend = Join-Path $staging 'backend'
 Copy-Item (Join-Path $root 'backend\server.js'), (Join-Path $root 'backend\package.json') $backend
 Copy-Item (Join-Path $root 'backend\lib'), (Join-Path $root 'backend\scripts'), (Join-Path $root 'backend\node_modules') $backend -Recurse
 if ($SourceCommit) {
-    @{ commit = $SourceCommit; signerThumbprint = $SignerThumbprint } |
+    @{ commit = $SourceCommit } |
         ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $backend 'build-info.json') -Encoding UTF8
 }
 
@@ -65,5 +43,4 @@ try {
 } finally {
     Pop-Location
 }
-if ($SourceCommit) { Sign-File (Join-Path $build 'Svorrent-Setup.exe') }
 Write-Output (Join-Path $build 'Svorrent-Setup.exe')

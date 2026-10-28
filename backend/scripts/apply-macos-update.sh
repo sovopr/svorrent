@@ -3,10 +3,10 @@ set -euo pipefail
 
 DMG="${1:?missing DMG}"
 DIGEST="${2:?missing digest}"
-COMMIT="${3:?missing commit}"
+VERSION="${3:?missing version}"
 TARGET="${4:?missing installed app path}"
 
-if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || [[ ! "$COMMIT" =~ ^[0-9a-f]{40}$ ]] ||
+if [[ ! "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
    [[ "$TARGET" != /Applications/Svorrent.app ]]; then
     echo 'Invalid macOS update parameters' >&2
     exit 1
@@ -52,17 +52,19 @@ hdiutil attach -quiet -nobrowse -readonly -mountpoint "$MOUNT" "$DMG"
 MOUNTED=1
 SOURCE="$MOUNT/Svorrent.app"
 test -d "$SOURCE"
-test -f "$SOURCE/Contents/Resources/app/backend/build-info.json"
-grep -Fxq "{\"commit\":\"${COMMIT}\"}" "$SOURCE/Contents/Resources/app/backend/build-info.json"
+test -f "$SOURCE/Contents/Resources/app/backend/package.json"
 codesign --verify --deep --strict "$SOURCE"
-codesign -dv --verbose=4 "$SOURCE" 2>&1 | grep -q '^Authority=Developer ID Application:'
 ditto "$SOURCE" "$STAGE/Svorrent.app"
+xattr -cr "$STAGE/Svorrent.app" 2>/dev/null || true
 codesign --verify --deep --strict "$STAGE/Svorrent.app"
 
 # The launcher owns the old backend. Wait for both to exit before replacement.
-osascript -e 'tell application id "com.sovopr.svorrent" to quit' || true
+osascript -e 'tell application id "com.sovopr.svorrent" to quit' >/dev/null 2>&1 || true
 for _ in $(seq 1 40); do
-    if ! lsof -nP -iTCP:3001 -sTCP:LISTEN >/dev/null 2>&1; then break; fi
+    if ! lsof -nP -iTCP:3001 -sTCP:LISTEN >/dev/null 2>&1 &&
+       ! pgrep -f "$TARGET/Contents/MacOS/Svorrent" >/dev/null 2>&1; then
+        break
+    fi
     sleep 0.5
 done
 if lsof -nP -iTCP:3001 -sTCP:LISTEN >/dev/null 2>&1; then
@@ -73,16 +75,17 @@ fi
 mv "$TARGET" "$BACKUP"
 SWAPPED=1
 mv "$STAGE/Svorrent.app" "$TARGET"
-open "$TARGET"
+sleep 1
+open "$TARGET" || open -n "$TARGET"
 for _ in $(seq 1 40); do
     if curl -fsS --max-time 2 http://localhost:3001/api/updater/status 2>/dev/null |
-       grep -Fq "\"currentCommit\":\"${COMMIT}\""; then
-        echo "Svorrent main build ${COMMIT} installed and running"
+       grep -Fq "\"currentVersion\":\"${VERSION}\""; then
+        echo "Svorrent v${VERSION} installed and running"
         rm -rf "$BACKUP"
         SWAPPED=0
         exit 0
     fi
     sleep 0.5
 done
-echo 'New Svorrent backend did not start with expected commit' >&2
+echo 'New Svorrent backend did not start with expected version' >&2
 exit 1

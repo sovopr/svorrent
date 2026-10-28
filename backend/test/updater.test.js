@@ -23,100 +23,102 @@ test('isNewerVersion detects major, minor, and patch upgrades correctly', () => 
 });
 
 test('AutoUpdater initializes in idle state with correct version metadata', () => {
-  const updater = new AutoUpdater({ currentVersion: '1.0.1' });
+  const updater = new AutoUpdater({ currentVersion: '1.0.4' });
   const status = updater.getStatus();
-  assert.equal(status.currentVersion, '1.0.1');
+  assert.equal(status.currentVersion, '1.0.4');
+  assert.equal(status.channel, 'release');
   assert.equal(status.status, 'idle');
   assert.equal(status.readyToInstall, false);
 });
 
-test('macOS updater selects only the signed build matching upstream main', async () => {
-  const installed = 'a'.repeat(40);
-  const latest = 'b'.repeat(40);
+test('macOS updater selects the DMG asset from latest GitHub release', async () => {
   const asset = {
-    name: `Svorrent-${latest}.dmg`,
+    name: 'Svorrent.dmg',
     digest: `sha256:${'c'.repeat(64)}`,
-    browser_download_url: 'https://github.com/sovopr/svorrent/releases/download/main-snapshot/build.dmg',
+    browser_download_url: 'https://github.com/sovopr/svorrent/releases/download/v1.0.5/Svorrent.dmg',
   };
-  const updater = new AutoUpdater({ platform: 'darwin', currentCommit: installed });
+  const updater = new AutoUpdater({ platform: 'darwin', currentVersion: '1.0.4' });
   const originalFetch = globalThis.fetch;
   let selected = null;
-  updater.downloadUpdate = async (item) => { selected = item; };
-  globalThis.fetch = async (url) => Response.json(url.endsWith('/commits/main')
-    ? { sha: latest }
-    : { assets: [{ ...asset, name: `Svorrent-${installed}.dmg` }, asset] });
-  try {
-    const status = await updater.checkForUpdates();
-    assert.equal(status.channel, 'main');
-    assert.equal(status.latestCommit, latest);
-    assert.equal(status.updateAvailable, true);
-    assert.deepEqual(selected, asset);
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
-});
-
-test('Windows updater selects only the signed installer matching upstream main', async () => {
-  const installed = 'a'.repeat(40);
-  const latest = 'b'.repeat(40);
-  const asset = {
-    name: `Svorrent-${latest}-Setup.exe`,
-    digest: `sha256:${'c'.repeat(64)}`,
-    browser_download_url: 'https://github.com/sovopr/svorrent/releases/download/main-windows-snapshot/build.exe',
-  };
-  const updater = new AutoUpdater({ platform: 'win32', currentCommit: installed });
-  const originalFetch = globalThis.fetch;
-  let selected = null;
-  const requested = [];
   updater.downloadUpdate = async (item) => { selected = item; };
   globalThis.fetch = async (url) => {
-    requested.push(url);
-    return Response.json(url.endsWith('/commits/main')
-      ? { sha: latest }
-      : { assets: [{ ...asset, name: 'Svorrent-Setup.exe' }, asset] });
+    assert.ok(url.endsWith('/releases/latest'));
+    return Response.json({
+      tag_name: 'v1.0.5',
+      html_url: 'https://github.com/sovopr/svorrent/releases/tag/v1.0.5',
+      assets: [{ name: 'Svorrent-Setup.exe', browser_download_url: 'https://example.invalid/win.exe' }, asset],
+    });
   };
   try {
     const status = await updater.checkForUpdates();
-    assert.equal(status.channel, 'main');
-    assert.equal(status.latestCommit, latest);
+    assert.equal(status.channel, 'release');
+    assert.equal(status.latestVersion, 'v1.0.5');
     assert.equal(status.updateAvailable, true);
     assert.deepEqual(selected, asset);
-    assert.ok(requested.some((url) => url.endsWith('/releases/tags/main-windows-snapshot')));
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test('Windows updater waits for a matching signed installer', async () => {
-  const latest = 'b'.repeat(40);
-  const updater = new AutoUpdater({ platform: 'win32', currentCommit: 'a'.repeat(40) });
+test('Windows updater selects the Setup.exe asset from latest GitHub release', async () => {
+  const asset = {
+    name: 'Svorrent-Setup.exe',
+    digest: `sha256:${'c'.repeat(64)}`,
+    browser_download_url: 'https://github.com/sovopr/svorrent/releases/download/v1.0.5/Svorrent-Setup.exe',
+  };
+  const updater = new AutoUpdater({ platform: 'win32', currentVersion: '1.0.4' });
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => Response.json(url.endsWith('/commits/main')
-    ? { sha: latest } : { assets: [] });
+  let selected = null;
+  updater.downloadUpdate = async (item) => { selected = item; };
+  globalThis.fetch = async (url) => {
+    assert.ok(url.endsWith('/releases/latest'));
+    return Response.json({
+      tag_name: 'v1.0.5',
+      html_url: 'https://github.com/sovopr/svorrent/releases/tag/v1.0.5',
+      assets: [{ name: 'Svorrent.dmg', browser_download_url: 'https://example.invalid/mac.dmg' }, asset],
+    });
+  };
   try {
     const status = await updater.checkForUpdates();
-    assert.equal(status.status, 'building');
-    assert.equal(status.updateAvailable, false);
+    assert.equal(status.channel, 'release');
+    assert.equal(status.latestVersion, 'v1.0.5');
+    assert.equal(status.updateAvailable, true);
+    assert.deepEqual(selected, asset);
   } finally {
     globalThis.fetch = originalFetch;
   }
 });
 
-test('macOS updater waits for a matching build and reports GitHub failures', async () => {
-  const latest = 'b'.repeat(40);
-  const updater = new AutoUpdater({ platform: 'darwin', currentCommit: 'a'.repeat(40) });
+test('Updater stays idle when already on the latest release and reports HTTP errors', async () => {
+  const updater = new AutoUpdater({ platform: 'darwin', currentVersion: '1.0.4' });
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async (url) => Response.json(url.endsWith('/commits/main')
-    ? { sha: latest } : { assets: [] });
+  globalThis.fetch = async () => Response.json({ tag_name: 'v1.0.4', assets: [] });
   try {
-    const building = await updater.checkForUpdates();
-    assert.equal(building.status, 'building');
-    assert.equal(building.updateAvailable, false);
-    globalThis.fetch = async (url) => url.endsWith('/commits/main')
-      ? Response.json({ sha: latest }) : Response.json({}, { status: 404 });
-    const unavailable = await updater.checkForUpdates();
-    assert.equal(unavailable.status, 'unavailable');
-    assert.equal(unavailable.updateAvailable, false);
+    const upToDate = await updater.checkForUpdates();
+    assert.equal(upToDate.status, 'idle');
+    assert.equal(upToDate.updateAvailable, false);
+
+    globalThis.fetch = async (url) => {
+      if (url.startsWith('https://api.github.com/')) {
+        return Response.json({}, { status: 403 });
+      }
+      if (url.endsWith('/releases/latest')) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://github.com/sovopr/svorrent/releases/tag/v1.0.5' },
+        });
+      }
+      return new Response(`${'d'.repeat(64)}  Svorrent.dmg\n`, { status: 200 });
+    };
+    let fallbackAsset = null;
+    updater.downloadUpdate = async (item) => { fallbackAsset = item; };
+    const fallbackStatus = await updater.checkForUpdates();
+    assert.equal(fallbackStatus.status, 'available');
+    assert.equal(fallbackStatus.latestVersion, 'v1.0.5');
+    assert.equal(fallbackAsset.digest, `sha256:${'d'.repeat(64)}`);
+
+    updater.state.status = 'idle';
+    updater.state.latestVersion = null;
     globalThis.fetch = async () => Response.json({}, { status: 503 });
     const failed = await updater.checkForUpdates();
     assert.equal(failed.status, 'error');
@@ -127,7 +129,7 @@ test('macOS updater waits for a matching build and reports GitHub failures', asy
   }
 });
 
-test('macOS updater rejects a downloaded build with the wrong digest', async () => {
+test('Updater rejects a downloaded build with the wrong SHA-256 digest', async () => {
   const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'svorrent-updater-test-'));
   const updater = new AutoUpdater({ platform: 'darwin', cacheDir });
   const originalFetch = globalThis.fetch;

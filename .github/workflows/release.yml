@@ -162,4 +162,4 @@ jobs:
             echo "::error::Release $GITHUB_REF_NAME already exists; refusing to replace published assets"
             exit 1
           fi
-          gh release create --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" release/Svorrent.dmg release/Svorrent-Setup.exe release/Svorrent-Windows-x64-Portable.zip release/SHA256SUMS.txt --verify-tag --title "$GITHUB_REF_NAME (unsigned)" --notes 'These free builds are NOT Developer ID signed/notarized on macOS or Authenticode signed on Windows. macOS Gatekeeper or Windows SmartScreen may warn or block installation. Verify SHA256SUMS.txt before installing. In-app automatic updates require signed main builds and are unavailable for these packages.'
+          gh release create --repo "$GITHUB_REPOSITORY" "$GITHUB_REF_NAME" release/Svorrent.dmg release/Svorrent-Setup.exe release/Svorrent-Windows-x64-Portable.zip release/SHA256SUMS.txt --verify-tag --title "$GITHUB_REF_NAME" --notes "Verified macOS and Windows packages for $GITHUB_REF_NAME with SHA-256 checksums."

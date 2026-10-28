@@ -22,7 +22,7 @@
   "type": "module",
   "dependencies": {
     "bittorrent-peerid": "^2.0.2",
-    "express": "^5.2.1",
+    "express": "^5.3.0",
     "geoip-lite": "^2.0.3",
     "torrent-search-api": "^2.1.4",
     "webtorrent": "^3.0.21"

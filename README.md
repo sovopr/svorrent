@@ -105,13 +105,14 @@ With Personal Hotspot enabled on the unlocked iPhone, connect a data-capable USB
 ```
 svorrent/
 ├── backend/
-│   ├── server.js                # Express REST API and WebTorrent orchestration
+│   ├── server.js                # Express REST API and Torrent engine orchestration
 │   ├── bin/                     # Native compiled daemons and shared libraries
 │   │   ├── svorrent-tetherd     # Native background tethering daemon
 │   │   ├── libtetherkit*.dylib  # TetherKit C ABI library and symlinks
 │   │   └── libusb-1.0.0.dylib  # USB dependency
 │   ├── tether/                  # C++ tether daemon source (RNDIS / libusb)
 │   ├── lib/
+│   │   ├── search.js            # Multi-provider query expansion & result deduplication
 │   │   ├── networks.js          # Throughput-weighted socket bonding & adapter telemetry
 │   │   ├── torrents.js          # Swarm pipeline accelerator, rolling frontier & pause recovery
 │   │   ├── updater.js           # In-app release & continuous repo code updater with self-tests
@@ -142,6 +143,7 @@ svorrent/
 │   │   ├── useDialog.js         # Accessible modal dialog state hook
 │   │   └── lib.js               # API client, units formatting, and speed calculations
 │   └── package.json
+├── dist-android/                # Native Android client (Jetpack Compose + libtorrent4j)
 └── scripts/
     ├── build-dmg.sh                 # macOS .app bundle and compressed DMG builder
     ├── build-windows.sh             # Windows Win32 launcher, NSIS installer, and portable ZIP builder
@@ -249,6 +251,7 @@ flowchart TD
     API -->|Torrent lifecycle & magnets| WT
     API -->|Playability readiness & streaming| Play
     API -->|Interface telemetry & toggles| Bond
+    API -->|Release & git updates| Updater
 
     %% Engines interactions with local resources
     SafePath <-->|Guarded read / write| Disk

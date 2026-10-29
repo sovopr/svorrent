@@ -669,7 +669,7 @@ app.get('/api/search', async (req, res) => {
               const results = await Promise.race([searchPromise, timeoutPromise]);
               return Array.isArray(results) ? results : [];
             } catch (err) {
-              console.warn(`[search] Provider ${provider.name} query "${q}" timed out or failed:`, err.message);
+              console.warn('[search] Provider search timed out or failed:', provider.name, err.message);
               return [];
             }
           })()

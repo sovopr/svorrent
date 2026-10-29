@@ -23,7 +23,7 @@ Svorrent uses a local web interface. Desktop launchers start the backend and ope
 
 | Platform | Package | Size | Description |
 | :--- | :--- | :--- | :--- |
-| **Android (ARM64 / ARMv7 / x86_64)** | [**`Svorrent.apk`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.apk) | 47.3 MB | Native Android app with simultaneous Wi-Fi + Mobile Data (5G/LTE) bonding and background downloads. |
+| **Android** | [**`Svorrent.apk`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.apk) | 47.3 MB | Native Android app with simultaneous Wi-Fi + Mobile Data (5G/LTE) bonding and background downloads. |
 | **Windows (x64)** | [**`Svorrent-Setup.exe`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent-Setup.exe) | 23.3 MB | Installer with Desktop & Start Menu shortcuts. |
 | **macOS (Apple Silicon)** | [**`Svorrent.dmg`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.dmg) | 19.0 MB | Native Apple Silicon disk image. Drag `Svorrent.app` into `/Applications`. |
 

@@ -84,7 +84,7 @@ iconutil -c icns "$ICON_TMP/Svorrent.iconset" -o "$APP_BUNDLE/Contents/Resources
 rm -rf "$ICON_TMP"
 
 echo "==> 4. Writing Info.plist..."
-APP_VERSION="$(node -p "require('$ROOT_DIR/backend/package.json').version" 2>/dev/null || echo "1.0.4")"
+APP_VERSION="$(node -p "require('$ROOT_DIR/backend/package.json').version" 2>/dev/null || echo "1.0.5")"
 SOURCE_COMMIT="${SVORRENT_SOURCE_COMMIT:-$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || true)}"
 if [[ ! "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
     echo "A full source commit SHA is required for update checks." >&2

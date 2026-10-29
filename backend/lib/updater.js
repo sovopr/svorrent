@@ -38,7 +38,7 @@ export function isNewerVersion(currentVer, latestVer) {
 
 export class AutoUpdater {
   constructor(options = {}) {
-    this.currentVersion = options.currentVersion || '1.0.4';
+    this.currentVersion = options.currentVersion || '1.0.5';
     this.currentCommit = options.currentCommit || null;
     this.platform = options.platform || process.platform;
     this.repo = options.repo || 'sovopr/svorrent';

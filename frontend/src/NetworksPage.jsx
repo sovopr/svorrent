@@ -96,7 +96,7 @@ export function NetworksPage({ notify, isActive = true }) {
         } else if (res.updateAvailable) {
           notifyRef.current?.('New update found — integrating…');
         } else {
-          notifyRef.current?.(`Up to date (v${res.currentVersion || '1.0.4'})`);
+          notifyRef.current?.(`Up to date (v${res.currentVersion || '1.0.5'})`);
         }
       }
     } catch (err) {
@@ -412,7 +412,7 @@ export function NetworksPage({ notify, isActive = true }) {
         <div className={`updates-bar ${updater?.updateAvailable || updater?.readyToInstall ? 'has-update' : ''}`}>
           <div className="updates-meta">
             <span className="updates-version mono">
-              Svorrent v{updater?.currentVersion || '1.0.4'}
+              Svorrent v{updater?.currentVersion || '1.0.5'}
             </span>
             <span className="dot-sep" />
             <span className="updates-status-text">

@@ -10,6 +10,7 @@
 
 <p align="center">
   <a href="https://github.com/sovopr/svorrent/actions/workflows/ci.yml"><img src="https://github.com/sovopr/svorrent/actions/workflows/ci.yml/badge.svg" alt="CI Status" /></a>
+  <a href="https://github.com/sovopr/svorrent/actions/workflows/codeql.yml"><img src="https://github.com/sovopr/svorrent/actions/workflows/codeql.yml/badge.svg" alt="CodeQL Security Scan" /></a>
   <a href="https://github.com/sovopr/svorrent/releases/latest"><img src="https://img.shields.io/github/v/release/sovopr/svorrent?style=flat-square&color=0284c7" alt="Latest Release" /></a>
   <a href="https://github.com/sovopr/svorrent/releases"><img src="https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Android-0284c7?style=flat-square" alt="Platform" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0284c7?style=flat-square" alt="MIT License" /></a>

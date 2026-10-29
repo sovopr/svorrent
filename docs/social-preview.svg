@@ -1,70 +1,103 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" fill="none">
-  <!-- Solid webapp background (#121314) -->
-  <rect width="1280" height="640" fill="#121314" />
+  <defs>
+    <!-- Dark Neutral Background Gradient (Svorrent webapp palette, strictly no neon blue hue) -->
+    <radialGradient id="neutralDepth" cx="50%" cy="0%" r="80%">
+      <stop offset="0%" stop-color="#1c1d20" />
+      <stop offset="60%" stop-color="#131416" />
+      <stop offset="100%" stop-color="#0e0f10" />
+    </radialGradient>
 
-  <!-- Subtle outer frame -->
-  <rect x="24" y="24" width="1232" height="592" rx="10" fill="none" stroke="#2a2b2f" stroke-width="1" />
+    <!-- Subtle Technical Grid (Neutral dark slate lines, not blue) -->
+    <pattern id="cleanGrid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#25262b" stroke-width="0.75" stroke-opacity="0.45" />
+      <circle cx="0" cy="0" r="1" fill="#383a42" fill-opacity="0.4" />
+    </pattern>
 
-  <!-- Brand Section (Top Left) -->
-  <g transform="translate(80, 76)">
+    <!-- Card Background: Sleek elevated dark surface with subtle depth -->
+    <linearGradient id="cardSurface" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#1a1b1e" />
+      <stop offset="100%" stop-color="#141517" />
+    </linearGradient>
+
+    <!-- App Logo Gradient: Clean Svorrent cobalt (#4b7cd8 to #3b68c2) -->
+    <linearGradient id="brandLogoGrad" x1="0" y1="0" x2="88" y2="88" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#5b8dee" />
+      <stop offset="100%" stop-color="#406ec5" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background Layer -->
+  <rect width="1280" height="640" fill="url(#neutralDepth)" />
+  <rect width="1280" height="640" fill="url(#cleanGrid)" />
+
+  <!-- Subtle outer border frame -->
+  <rect x="24" y="24" width="1232" height="592" rx="12" fill="none" stroke="#2a2c30" stroke-width="1" />
+
+  <!-- Top Hero Header: Logo + Title + Open Source badge -->
+  <g transform="translate(80, 72)">
     <!-- App Logo Icon -->
-    <rect width="84" height="84" rx="14" fill="#5b8dee" />
-    <!-- Sigma Icon -->
-    <path d="M 59 25 L 25 25 L 45 42 L 25 59 L 59 59" fill="none" stroke="#121314" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+    <rect width="88" height="88" rx="18" fill="url(#brandLogoGrad)" />
+    <!-- Sigma Path -->
+    <path d="M 62 26 L 26 26 L 48 44 L 26 62 L 62 62" fill="none" stroke="#101113" stroke-width="9" stroke-linecap="round" stroke-linejoin="round" />
 
-    <!-- Project Title -->
-    <text x="108" y="58" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="52" font-weight="700" fill="#e7e7e5" letter-spacing="-1">Svorrent</text>
+    <!-- Title -->
+    <text x="112" y="62" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="58" font-weight="700" fill="#f3f4f6" letter-spacing="-1.5">Svorrent</text>
 
-    <!-- Subtitle -->
-    <text x="108" y="86" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="16" font-weight="400" fill="#a3a4a8">BitTorrent client with multi-network bonding and instant playback</text>
+    <!-- Open Source Tag -->
+    <rect x="390" y="26" width="118" height="28" rx="14" fill="#202227" stroke="#373940" stroke-width="1" />
+    <text x="449" y="45" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="11" font-weight="700" fill="#9ca3af" text-anchor="middle" letter-spacing="1">OPEN SOURCE</text>
   </g>
 
-  <!-- Divider Line -->
-  <line x1="80" y1="216" x2="1200" y2="216" stroke="#2a2b2f" stroke-width="1" />
+  <!-- Hero Taglines (Balanced hierarchy from previous layout) -->
+  <g transform="translate(80, 204)">
+    <text font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="30" font-weight="700" fill="#e5e7eb" letter-spacing="-0.5">
+      Desktop &amp; Mobile BitTorrent Engine
+    </text>
+    <text y="38" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="18" font-weight="400" fill="#9ca3af">
+      Multi-network bandwidth bonding · Sequential piece streaming · Swarm telemetry
+    </text>
+  </g>
 
-  <!-- 3 Feature Cards in exact requested order: Search -> Network Bonding -> Buffer-Free Streaming -->
-  <g transform="translate(80, 260)">
+  <!-- 3 Feature Cards (Wide, sleek proportions) -->
+  <g transform="translate(80, 314)">
     <!-- Card 1: Multi-Source Search -->
     <g transform="translate(0, 0)">
-      <rect width="346" height="186" rx="8" fill="#17181a" stroke="#2a2b2f" stroke-width="1" />
-      <text x="24" y="46" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="18" font-weight="600" fill="#e7e7e5">Multi-Source Search</text>
-      <text x="24" y="84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">Query public torrent indexers</text>
-      <text x="24" y="108" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">with bounded timeouts and DNS-</text>
-      <text x="24" y="132" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">over-HTTPS anti-censorship fallback.</text>
+      <rect width="346" height="136" rx="10" fill="url(#cardSurface)" stroke="#282a2e" stroke-width="1" />
+      <text x="24" y="42" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="17" font-weight="600" fill="#f3f4f6">Multi-Source Search</text>
+      <text x="24" y="74" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">Query public torrent indexers with bounded</text>
+      <text x="24" y="96" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">timeouts and DNS-over-HTTPS anti-censorship.</text>
     </g>
 
     <!-- Card 2: Network Bonding -->
     <g transform="translate(386, 0)">
-      <rect width="346" height="186" rx="8" fill="#17181a" stroke="#2a2b2f" stroke-width="1" />
-      <text x="24" y="46" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="18" font-weight="600" fill="#e7e7e5">Network Bonding</text>
-      <text x="24" y="84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">Route peer connections across</text>
-      <text x="24" y="108" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">Wi-Fi and Mobile Data (5G/LTE)</text>
-      <text x="24" y="132" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">simultaneously for pooled speed.</text>
+      <rect width="346" height="136" rx="10" fill="url(#cardSurface)" stroke="#282a2e" stroke-width="1" />
+      <text x="24" y="42" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="17" font-weight="600" fill="#f3f4f6">Network Bonding</text>
+      <text x="24" y="74" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">Pool Wi-Fi and Mobile Data (5G/LTE) adapters</text>
+      <text x="24" y="96" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">simultaneously for multiplied transfer speed.</text>
     </g>
 
     <!-- Card 3: Buffer-Free Streaming -->
     <g transform="translate(772, 0)">
-      <rect width="348" height="186" rx="8" fill="#17181a" stroke="#2a2b2f" stroke-width="1" />
-      <text x="24" y="46" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="18" font-weight="600" fill="#e7e7e5">Buffer-Free Streaming</text>
-      <text x="24" y="84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">Sequential piece scheduler and</text>
-      <text x="24" y="108" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">playback readiness checks allow</text>
-      <text x="24" y="132" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">instant video playback in VLC.</text>
+      <rect width="348" height="136" rx="10" fill="url(#cardSurface)" stroke="#282a2e" stroke-width="1" />
+      <text x="24" y="42" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="17" font-weight="600" fill="#f3f4f6">Buffer-Free Streaming</text>
+      <text x="24" y="74" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">Sequential piece scheduling and container checks</text>
+      <text x="24" y="96" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">enable instant video playback in VLC.</text>
     </g>
   </g>
 
-  <!-- Bottom Platform Bar (macOS, Windows, Android) -->
-  <g transform="translate(80, 510)">
-    <!-- Platform Pills -->
-    <rect x="0" y="0" width="86" height="34" rx="6" fill="#1d1e21" stroke="#2a2b2f" stroke-width="1" />
-    <text x="43" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e7e7e5" text-anchor="middle">macOS</text>
+  <!-- Bottom Platform Bar -->
+  <g transform="translate(80, 516)">
+    <!-- Platform Pills (Neutral dark slate) -->
+    <rect x="0" y="0" width="84" height="34" rx="6" fill="#18191c" stroke="#2c2d32" stroke-width="1" />
+    <text x="42" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e5e7eb" text-anchor="middle">macOS</text>
 
-    <rect x="98" y="0" width="94" height="34" rx="6" fill="#1d1e21" stroke="#2a2b2f" stroke-width="1" />
-    <text x="145" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e7e7e5" text-anchor="middle">Windows</text>
+    <rect x="96" y="0" width="94" height="34" rx="6" fill="#18191c" stroke="#2c2d32" stroke-width="1" />
+    <text x="143" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e5e7eb" text-anchor="middle">Windows</text>
 
-    <rect x="204" y="0" width="88" height="34" rx="6" fill="#1d1e21" stroke="#2a2b2f" stroke-width="1" />
-    <text x="248" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e7e7e5" text-anchor="middle">Android</text>
+    <rect x="202" y="0" width="88" height="34" rx="6" fill="#18191c" stroke="#2c2d32" stroke-width="1" />
+    <text x="246" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e5e7eb" text-anchor="middle">Android</text>
 
     <!-- Clean Repo Link on right -->
-    <text x="1120" y="22" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="14" font-weight="400" fill="#92949b" text-anchor="end">github.com/sovopr/svorrent</text>
+    <text x="1120" y="22" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="14" font-weight="400" fill="#6b7280" text-anchor="end">github.com/sovopr/svorrent</text>
   </g>
 </svg>

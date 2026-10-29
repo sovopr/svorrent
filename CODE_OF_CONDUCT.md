@@ -59,7 +59,7 @@ representative at an online or offline event.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the project maintainers at [76159629+sovopr@users.noreply.github.com](mailto:76159629+sovopr@users.noreply.github.com) or by opening a private report on GitHub. All complaints will be reviewed and investigated promptly and fairly.
+reported to the project maintainers by opening a [GitHub Issue](https://github.com/sovopr/svorrent/issues/new) or private report on GitHub. All complaints will be reviewed and investigated promptly and fairly.
 
 All community leaders are obligated to respect the privacy and security of the
 reporter of any incident.

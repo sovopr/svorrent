@@ -8,10 +8,10 @@ Svorrent takes the security and privacy of its users seriously. As a peer-to-pee
 
 Only the latest release branch actively receives security patches:
 
-| Version | Supported          |
-| :---    | :---               |
-| `1.0.x` | :white_check_mark: |
-| `< 1.0` | :x:                |
+| Version | Supported |
+| :---    | :---      |
+| `1.0.x` | Yes       |
+| `< 1.0` | No        |
 
 We strongly encourage all users to run the latest version or update using the built-in in-app updater.
 
@@ -39,12 +39,11 @@ Svorrent incorporates multiple proactive security layers:
 
 **Please do not report security vulnerabilities through public GitHub issues.**
 
-If you believe you have discovered a vulnerability in Svorrent:
+If you believe you have discovered a vulnerability in Svorrent, submit a report privately through GitHub Security Advisories:
 
-1. **GitHub Private Vulnerability Reporting (Preferred)**:
-   - Go to the [Security Advisories](https://github.com/sovopr/svorrent/security/advisories) tab on GitHub and click **"Report a vulnerability"**.
-2. **Direct Contact**:
-   - Alternatively, email the maintainer at [76159629+sovopr@users.noreply.github.com](mailto:76159629+sovopr@users.noreply.github.com) with the subject line `[SECURITY] Potential vulnerability in Svorrent`.
+1. Navigate to the [Security Advisories](https://github.com/sovopr/svorrent/security/advisories) tab on GitHub.
+2. Click **"Report a vulnerability"** to submit your advisory directly to the repository maintainer.
+3. This opens a secure, private advisory workspace where maintainers can review, discuss, and coordinate a patch before public disclosure.
 
 ### What to Include in Your Report
 To help us triage and resolve the issue quickly, please provide:

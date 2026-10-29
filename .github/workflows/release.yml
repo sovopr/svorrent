@@ -29,7 +29,7 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          node -e "const fs=require('node:fs'); const tag=process.env.RELEASE_TAG; for(const dir of ['backend','frontend']) { const version=JSON.parse(fs.readFileSync(dir+'/package.json')).version; if(tag !== 'v'+version) { console.error(dir+' version '+version+' does not match '+tag); process.exitCode=1; } }"
+          node -e "const fs=require('node:fs'); const tag=process.env.RELEASE_TAG; for(const dir of ['.', 'backend', 'frontend']) { const version=JSON.parse(fs.readFileSync(dir+'/package.json')).version; if(tag !== 'v'+version) { console.error(dir+' version '+version+' does not match '+tag); process.exitCode=1; } }"
       - name: Install, lint, and test frontend
         shell: bash
         working-directory: frontend

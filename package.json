@@ -1,0 +1,13 @@
+{
+  "name": "svorrent",
+  "version": "1.0.4",
+  "private": true,
+  "description": "A desktop BitTorrent client with search, downloads, local media playback, and network and peer diagnostics.",
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  }
+}

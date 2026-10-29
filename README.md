@@ -18,7 +18,7 @@
 
 ---
 
-## Downloads (v1.0.5)
+## Downloads (v1.0.7)
 
 Svorrent uses a local web interface. Desktop launchers start the backend and open the interface in your default browser. Node.js 22.12 or newer is required; the current packages do not bundle it.
 

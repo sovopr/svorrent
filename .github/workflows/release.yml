@@ -150,7 +150,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release download --repo "$GITHUB_REPOSITORY" --pattern "Svorrent.apk" --clobber || true
+          gh release download --repo sovopr/svorrent-android --pattern "Svorrent.apk" --clobber || gh release download --repo "$GITHUB_REPOSITORY" --pattern "Svorrent.apk" --clobber || true
       - name: Check package set and create checksums
         working-directory: release
         run: |

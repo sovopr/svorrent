@@ -1,70 +1,298 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" viewBox="0 0 1280 640" fill="none">
-  <!-- Solid webapp background (#121314) -->
+  <defs>
+    <!-- Technical Dot Matrix Grid Pattern -->
+    <pattern id="dotGrid" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#24252a" />
+    </pattern>
+
+    <!-- Card Background Gradient -->
+    <linearGradient id="cardBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#18191c" />
+      <stop offset="100%" stop-color="#141517" />
+    </linearGradient>
+
+    <!-- Subtle Top Card Border Highlight -->
+    <linearGradient id="cardTopHighlight" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#3e4048" stop-opacity="0.8" />
+      <stop offset="50%" stop-color="#2a2b30" stop-opacity="0.3" />
+      <stop offset="100%" stop-color="#3e4048" stop-opacity="0.8" />
+    </linearGradient>
+
+    <!-- Logo Gradient -->
+    <linearGradient id="logoGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#60a5fa" />
+      <stop offset="100%" stop-color="#3b82f6" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background base: Svorrent Webapp Dark (#121314) -->
   <rect width="1280" height="640" fill="#121314" />
 
-  <!-- Subtle outer frame -->
-  <rect x="24" y="24" width="1232" height="592" rx="10" fill="none" stroke="#2a2b2f" stroke-width="1" />
+  <!-- Technical Engineering Dot Matrix Grid -->
+  <rect width="1280" height="640" fill="url(#dotGrid)" />
 
-  <!-- Brand Section (Top Left) -->
-  <g transform="translate(80, 76)">
+  <!-- Outer Structural Border -->
+  <rect x="20" y="20" width="1240" height="600" rx="10" fill="none" stroke="#24252a" stroke-width="1.2" />
+
+  <!-- =================================================================== -->
+  <!-- TECHNICAL TELEMETRY: REAL PIECE MATRIX IN UPPER-RIGHT BACKGROUND   -->
+  <!-- =================================================================== -->
+  <g transform="translate(770, 52)" opacity="0.85">
+    <!-- Matrix Header -->
+    <text x="0" y="0" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="10.5" font-weight="600" fill="#4a4d56" letter-spacing="1">SWARM TELEMETRY · SEQUENTIAL PIECE FRONTIER</text>
+    
+    <!-- 4 Rows of 28 Piece Blocks (112 pieces) -->
+    <!-- Row 0: Verified Pieces (Green) -->
+    <g transform="translate(0, 12)">
+      <!-- Verified Chunks (#57ab72) -->
+      <rect x="0" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="15" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="30" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="45" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="60" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="75" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="90" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="105" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="120" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="135" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="150" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="165" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="180" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="195" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="210" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="225" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="240" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="255" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="270" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="285" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="300" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="315" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="330" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="345" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="360" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="375" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="390" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="405" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+    </g>
+
+    <!-- Row 1: Active In-Flight Chunks & Frontier -->
+    <g transform="translate(0, 27)">
+      <rect x="0" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="15" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="30" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="45" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="60" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="75" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="90" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <!-- Frontier Active Blue Chunks (#5b8dee) -->
+      <rect x="105" y="0" width="11" height="11" rx="2" fill="#5b8dee" fill-opacity="0.65" />
+      <rect x="120" y="0" width="11" height="11" rx="2" fill="#5b8dee" fill-opacity="0.65" />
+      <rect x="135" y="0" width="11" height="11" rx="2" fill="#5b8dee" fill-opacity="0.65" />
+      <rect x="150" y="0" width="11" height="11" rx="2" fill="#5b8dee" fill-opacity="0.65" />
+      <rect x="165" y="0" width="11" height="11" rx="2" fill="#5b8dee" fill-opacity="0.65" />
+      <rect x="180" y="0" width="11" height="11" rx="2" fill="#5b8dee" fill-opacity="0.65" />
+      <!-- Empty Unacquired Chunks (#1e1f23) -->
+      <rect x="195" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="210" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="225" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="240" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="255" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="270" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="285" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="300" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="315" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="330" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="345" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="360" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="375" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="390" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="405" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+    </g>
+
+    <!-- Row 2: Future Chunks (Muted Dark) -->
+    <g transform="translate(0, 42)">
+      <rect x="0" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="15" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="30" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="45" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="60" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="75" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="90" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="105" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="120" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="135" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="150" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="165" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="180" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="195" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="210" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="225" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="240" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="255" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="270" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="285" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="300" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="315" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="330" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="345" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="360" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="375" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="390" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="405" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+    </g>
+
+    <!-- Row 3: Faststart Tail Atoms Verified (Head & Tail verification) -->
+    <g transform="translate(0, 57)">
+      <rect x="0" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="15" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="30" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="45" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="60" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="75" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="90" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="105" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="120" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="135" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="150" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="165" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="180" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="195" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="210" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="225" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="240" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="255" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="270" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="285" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="300" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="315" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="330" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="345" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <rect x="360" y="0" width="11" height="11" rx="2" fill="#1e1f23" />
+      <!-- Tail pieces verified for moov atom -->
+      <rect x="375" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="390" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+      <rect x="405" y="0" width="11" height="11" rx="2" fill="#57ab72" fill-opacity="0.35" />
+    </g>
+  </g>
+
+  <!-- =================================================================== -->
+  <!-- TECHNICAL TELEMETRY: DUAL-NETWORK WAVEFORM BEHIND CARDS           -->
+  <!-- =================================================================== -->
+  <g opacity="0.35">
+    <!-- Wi-Fi Waveform (wlan0) -->
+    <path d="M 80 236 C 220 220, 340 248, 520 226 C 700 206, 850 240, 1020 222 C 1120 212, 1160 225, 1200 220" fill="none" stroke="#5b8dee" stroke-width="1.8" />
+    <!-- 5G Mobile Data Waveform (rmnet0) -->
+    <path d="M 80 245 C 240 252, 380 232, 540 248 C 720 262, 870 230, 1040 244 C 1130 250, 1170 242, 1200 245" fill="none" stroke="#57ab72" stroke-width="1.8" />
+  </g>
+
+  <!-- =================================================================== -->
+  <!-- BRAND HEADER SECTION (TOP LEFT)                                     -->
+  <!-- =================================================================== -->
+  <g transform="translate(80, 56)">
     <!-- App Logo Icon -->
-    <rect width="84" height="84" rx="14" fill="#5b8dee" />
-    <!-- Sigma Icon -->
-    <path d="M 59 25 L 25 25 L 45 42 L 25 59 L 59 59" fill="none" stroke="#121314" stroke-width="8" stroke-linecap="round" stroke-linejoin="round" />
+    <rect width="84" height="84" rx="16" fill="url(#logoGrad)" />
+    <!-- Sigma Icon (Sharp & Clean) -->
+    <path d="M 58 26 L 26 26 L 44 42 L 26 58 L 58 58" fill="none" stroke="#0f1115" stroke-width="7.5" stroke-linecap="round" stroke-linejoin="round" />
 
     <!-- Project Title -->
-    <text x="108" y="58" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="52" font-weight="700" fill="#e7e7e5" letter-spacing="-1">Svorrent</text>
+    <text x="108" y="52" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="48" font-weight="700" fill="#f0f0ee" letter-spacing="-1">Svorrent</text>
 
     <!-- Subtitle -->
-    <text x="108" y="86" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="16" font-weight="400" fill="#a3a4a8">BitTorrent client with multi-network bonding and instant playback</text>
+    <text x="108" y="80" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="15" font-weight="400" fill="#9ca3af">High-throughput BitTorrent client with multi-network socket bonding &amp; sequential streaming</text>
   </g>
 
   <!-- Divider Line -->
-  <line x1="80" y1="216" x2="1200" y2="216" stroke="#2a2b2f" stroke-width="1" />
+  <line x1="80" y1="184" x2="1200" y2="184" stroke="#24252a" stroke-width="1" />
 
-  <!-- 3 Feature Cards in exact requested order: Search -> Network Bonding -> Buffer-Free Streaming -->
-  <g transform="translate(80, 260)">
+  <!-- =================================================================== -->
+  <!-- 3 FEATURE CARDS (EXACT REQUESTED ORDER)                            -->
+  <!-- Card 1: Multi-Source Search                                         -->
+  <!-- Card 2: Network Bonding                                             -->
+  <!-- Card 3: Buffer-Free Streaming                                       -->
+  <!-- =================================================================== -->
+  <g transform="translate(80, 222)">
     <!-- Card 1: Multi-Source Search -->
     <g transform="translate(0, 0)">
-      <rect width="346" height="186" rx="8" fill="#17181a" stroke="#2a2b2f" stroke-width="1" />
-      <text x="24" y="46" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="18" font-weight="600" fill="#e7e7e5">Multi-Source Search</text>
-      <text x="24" y="84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">Query public torrent indexers</text>
-      <text x="24" y="108" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">with bounded timeouts and DNS-</text>
-      <text x="24" y="132" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">over-HTTPS anti-censorship fallback.</text>
+      <rect width="350" height="236" rx="8" fill="url(#cardBg)" stroke="#282a30" stroke-width="1.2" />
+      <path d="M 0 8 Q 0 0 8 0 L 342 0 Q 350 0 350 8 L 350 9 L 0 9 Z" fill="url(#cardTopHighlight)" />
+      
+      <!-- Category Badge -->
+      <rect x="24" y="24" width="76" height="22" rx="4" fill="#1e2433" stroke="#2a354d" stroke-width="1" />
+      <text x="62" y="39" font-family="ui-monospace, monospace" font-size="10.5" font-weight="600" fill="#60a5fa" text-anchor="middle" letter-spacing="0.5">SEARCH</text>
+
+      <!-- Card Title -->
+      <text x="24" y="78" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="19" font-weight="600" fill="#f0f0ee">Multi-Source Search</text>
+
+      <!-- Card Description -->
+      <text x="24" y="112" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af" line-height="1.5">Query public torrent indexers</text>
+      <text x="24" y="134" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">directly with fast timeouts, result</text>
+      <text x="24" y="156" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">deduplication, and encrypted DNS-</text>
+      <text x="24" y="178" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">over-HTTPS anti-censorship fallback.</text>
+
+      <!-- Sub-label footer -->
+      <text x="24" y="214" font-family="ui-monospace, monospace" font-size="11" font-weight="500" fill="#4b5563">DoH Resolver · One-Click Magnets</text>
     </g>
 
     <!-- Card 2: Network Bonding -->
-    <g transform="translate(386, 0)">
-      <rect width="346" height="186" rx="8" fill="#17181a" stroke="#2a2b2f" stroke-width="1" />
-      <text x="24" y="46" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="18" font-weight="600" fill="#e7e7e5">Network Bonding</text>
-      <text x="24" y="84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">Route peer connections across</text>
-      <text x="24" y="108" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">Wi-Fi and Mobile Data (5G/LTE)</text>
-      <text x="24" y="132" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">simultaneously for pooled speed.</text>
+    <g transform="translate(385, 0)">
+      <rect width="350" height="236" rx="8" fill="url(#cardBg)" stroke="#282a30" stroke-width="1.2" />
+      <path d="M 0 8 Q 0 0 8 0 L 342 0 Q 350 0 350 8 L 350 9 L 0 9 Z" fill="url(#cardTopHighlight)" />
+
+      <!-- Category Badge -->
+      <rect x="24" y="24" width="76" height="22" rx="4" fill="#1b2e24" stroke="#254634" stroke-width="1" />
+      <text x="62" y="39" font-family="ui-monospace, monospace" font-size="10.5" font-weight="600" fill="#4ade80" text-anchor="middle" letter-spacing="0.5">BONDING</text>
+
+      <!-- Card Title -->
+      <text x="24" y="78" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="19" font-weight="600" fill="#f0f0ee">Network Bonding</text>
+
+      <!-- Card Description -->
+      <text x="24" y="112" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">Throughput-weighted OS socket routing</text>
+      <text x="24" y="134" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">distributes peer connections across</text>
+      <text x="24" y="156" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">Wi-Fi and Mobile Data (5G/LTE)</text>
+      <text x="24" y="178" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">simultaneously for multiplied speed.</text>
+
+      <!-- Sub-label footer -->
+      <text x="24" y="214" font-family="ui-monospace, monospace" font-size="11" font-weight="500" fill="#4b5563">Wi-Fi wlan0 + 5G rmnet Pooling</text>
     </g>
 
     <!-- Card 3: Buffer-Free Streaming -->
-    <g transform="translate(772, 0)">
-      <rect width="348" height="186" rx="8" fill="#17181a" stroke="#2a2b2f" stroke-width="1" />
-      <text x="24" y="46" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="18" font-weight="600" fill="#e7e7e5">Buffer-Free Streaming</text>
-      <text x="24" y="84" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">Sequential piece scheduler and</text>
-      <text x="24" y="108" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">playback readiness checks allow</text>
-      <text x="24" y="132" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="14" font-weight="400" fill="#a3a4a8">instant video playback in VLC.</text>
+    <g transform="translate(770, 0)">
+      <rect width="350" height="236" rx="8" fill="url(#cardBg)" stroke="#282a30" stroke-width="1.2" />
+      <path d="M 0 8 Q 0 0 8 0 L 342 0 Q 350 0 350 8 L 350 9 L 0 9 Z" fill="url(#cardTopHighlight)" />
+
+      <!-- Category Badge -->
+      <rect x="24" y="24" width="86" height="22" rx="4" fill="#302618" stroke="#48361e" stroke-width="1" />
+      <text x="67" y="39" font-family="ui-monospace, monospace" font-size="10.5" font-weight="600" fill="#fbbf24" text-anchor="middle" letter-spacing="0.5">STREAMING</text>
+
+      <!-- Card Title -->
+      <text x="24" y="78" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="19" font-weight="600" fill="#f0f0ee">Buffer-Free Streaming</text>
+
+      <!-- Card Description -->
+      <text x="24" y="112" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">Sequential piece scheduling and</text>
+      <text x="24" y="134" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">faststart container inspection evaluate</text>
+      <text x="24" y="156" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">playback readiness so you can stream</text>
+      <text x="24" y="178" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13.5" font-weight="400" fill="#9ca3af">growing files in VLC without waiting.</text>
+
+      <!-- Sub-label footer -->
+      <text x="24" y="214" font-family="ui-monospace, monospace" font-size="11" font-weight="500" fill="#4b5563">Rolling Frontier · VLC Integration</text>
     </g>
   </g>
 
-  <!-- Bottom Platform Bar (macOS, Windows, Android) -->
-  <g transform="translate(80, 510)">
-    <!-- Platform Pills -->
-    <rect x="0" y="0" width="86" height="34" rx="6" fill="#1d1e21" stroke="#2a2b2f" stroke-width="1" />
-    <text x="43" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e7e7e5" text-anchor="middle">macOS</text>
+  <!-- =================================================================== -->
+  <!-- BOTTOM PLATFORM BAR (CLEAN: macOS, Windows, Android)                -->
+  <!-- =================================================================== -->
+  <g transform="translate(80, 524)">
+    <!-- Platform Pills (Clean, minimal, no technical clutter) -->
+    <rect x="0" y="0" width="84" height="34" rx="6" fill="#18191c" stroke="#2a2c32" stroke-width="1" />
+    <text x="42" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#d1d5db" text-anchor="middle">macOS</text>
 
-    <rect x="98" y="0" width="94" height="34" rx="6" fill="#1d1e21" stroke="#2a2b2f" stroke-width="1" />
-    <text x="145" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e7e7e5" text-anchor="middle">Windows</text>
+    <rect x="96" y="0" width="92" height="34" rx="6" fill="#18191c" stroke="#2a2c32" stroke-width="1" />
+    <text x="142" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#d1d5db" text-anchor="middle">Windows</text>
 
-    <rect x="204" y="0" width="88" height="34" rx="6" fill="#1d1e21" stroke="#2a2b2f" stroke-width="1" />
-    <text x="248" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#e7e7e5" text-anchor="middle">Android</text>
+    <rect x="200" y="0" width="86" height="34" rx="6" fill="#18191c" stroke="#2a2c32" stroke-width="1" />
+    <text x="243" y="22" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif" font-size="13" font-weight="500" fill="#d1d5db" text-anchor="middle">Android</text>
 
     <!-- Clean Repo Link on right -->
-    <text x="1120" y="22" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="14" font-weight="400" fill="#92949b" text-anchor="end">github.com/sovopr/svorrent</text>
+    <text x="1120" y="22" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-size="14.5" font-weight="500" fill="#6b7280" text-anchor="end">github.com/sovopr/svorrent</text>
   </g>
 </svg>

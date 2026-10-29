@@ -83,7 +83,12 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
         return Number.isFinite(number) ? Math.max(0, number) : 0;
       };
       resultId.current = id;
-      setResults(data.map((r, index) => ({
+      const validResults = data.filter((r) => {
+        if (!r || typeof r.title !== 'string') return false;
+        const lower = r.title.trim().toLowerCase();
+        return lower !== 'no results returned' && lower !== 'no results found';
+      });
+      setResults(validResults.map((r, index) => ({
         ...r,
         _id: `${id}:${index}`,
         _generation: id,

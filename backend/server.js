@@ -39,6 +39,7 @@ import {
   launchMediaPlayer,
 } from './lib/playability.js';
 import { AutoUpdater } from './lib/updater.js';
+import { buildSearchQueries, filterAndDeduplicateResults } from './lib/search.js';
 
 function parseClientString(v) {
   if (!v) return 'Unknown';
@@ -644,7 +645,7 @@ async function addTorrent(magnetURI, opts = {}) {
 // API Routes
 // ---------------------------------------------------------------------------
 
-// 1. Search enabled indexers with bounded provider timeouts
+// 1. Search enabled indexers with bounded provider timeouts & wildcard prefix expansion
 app.get('/api/search', async (req, res) => {
   const query = req.query.q;
   if (!query) {
@@ -652,35 +653,32 @@ app.get('/api/search', async (req, res) => {
   }
 
   try {
+    const queries = buildSearchQueries(query);
     const activeProviders = TorrentSearchApi.getActiveProviders();
-    const searchPromises = activeProviders.map(async (provider) => {
-      try {
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Provider timeout')), 2500)
+    const searchPromises = [];
+
+    for (const provider of activeProviders) {
+      for (const q of queries) {
+        searchPromises.push(
+          (async () => {
+            try {
+              const timeoutPromise = new Promise((_, reject) =>
+                setTimeout(() => reject(new Error('Provider timeout')), 2500)
+              );
+              const searchPromise = TorrentSearchApi.search([provider.name], q, 'All', 40);
+              const results = await Promise.race([searchPromise, timeoutPromise]);
+              return Array.isArray(results) ? results : [];
+            } catch (err) {
+              console.warn(`[search] Provider ${provider.name} query "${q}" timed out or failed:`, err.message);
+              return [];
+            }
+          })()
         );
-        const searchPromise = TorrentSearchApi.search([provider.name], query, 'All', 40);
-        const results = await Promise.race([searchPromise, timeoutPromise]);
-        return Array.isArray(results) ? results : [];
-      } catch (err) {
-        console.warn(`[search] Provider ${provider.name} timed out or failed:`, err.message);
-        return [];
       }
-    });
-
-    const resultsByProvider = await Promise.all(searchPromises);
-    const flattened = resultsByProvider.flat();
-
-    // Deduplicate by title + size
-    const seen = new Set();
-    const deduplicated = [];
-    for (const item of flattened) {
-      const key = `${item.title || ''}|${item.size || ''}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      deduplicated.push(item);
     }
 
-    const sorted = deduplicated.sort((a, b) => (parseInt(b.seeds, 10) || 0) - (parseInt(a.seeds, 10) || 0));
+    const resultsByProvider = await Promise.all(searchPromises);
+    const sorted = filterAndDeduplicateResults(resultsByProvider.flat());
     res.json(sorted);
   } catch (error) {
     console.error('Search error:', error);

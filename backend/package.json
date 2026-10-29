@@ -1,7 +1,7 @@
 {
   "name": "backend",
   "version": "1.0.7",
-  "description": "Svorrent BitTorrent daemon and network bonding engine",
+  "description": "Svorrent Torrent engine and network bonding daemon",
   "main": "server.js",
   "engines": {
     "node": ">=22.12.0"
@@ -16,7 +16,7 @@
     "setup:tether": "sudo ./scripts/install-tetherd.sh",
     "uninstall:tether": "sudo ./scripts/uninstall-tetherd.sh"
   },
-  "keywords": ["bittorrent", "network-bonding", "tethering", "streaming"],
+  "keywords": ["torrent-engine", "network-bonding", "tethering", "streaming"],
   "author": "",
   "license": "MIT",
   "type": "module",

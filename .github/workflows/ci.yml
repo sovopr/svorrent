@@ -10,7 +10,7 @@
 #   1. Static Oxlint code quality verification
 #   2. React production bundle compilation
 #   3. Security & logic unit tests
-#   4. Hermetic loopback BitTorrent download & SHA-256 integrity test
+#   4. Hermetic loopback Torrent download & SHA-256 integrity test
 #   5. Headless Chromium Browser E2E UI test (verifying tabs, routing, zero errors)
 #   6. Native macOS Cocoa launcher compilation
 # ==============================================================================
@@ -163,7 +163,7 @@ jobs:
             Windows) choco install ffmpeg --yes --no-progress ;;
           esac
 
-      - name: 9. Run Local Hermetic BitTorrent Transfer Test
+      - name: 9. Run Local Hermetic Torrent Transfer Test
         working-directory: backend
         run: npm run test:e2e
 

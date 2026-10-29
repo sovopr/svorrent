@@ -5,7 +5,7 @@
 <h1 align="center">Svorrent</h1>
 
 <p align="center">
-  <b>A desktop BitTorrent client with search, downloads, local media playback, and network and peer diagnostics.</b>
+  <b>A desktop Torrent engine with search, downloads, local media playback, and network and peer diagnostics.</b>
 </p>
 
 <p align="center">
@@ -66,7 +66,7 @@ $$\text{SafeDownloadedTarget} = \text{TotalLength} - \frac{\text{EffectiveSpeed}
 
 - **Dynamic Buffer Evaluation**: Computes the exact buffer required so playback never starves before the video finishes, incorporating container header validation and a 20% safety margin against connection fluctuations.
 - **Estimated Time to Play on Hover**: Hovering over the Play button or buffering hint displays the estimated time until safe streaming begins (e.g. `Estimated time to play: ~35m (need 4.2 GB more buffer to stream smoothly)`).
-- **Throughput Smoothing (EMA)**: Exponential moving average smoothing stabilizes the playability timer against momentary 1-second BitTorrent chunk writing dips.
+- **Throughput Smoothing (EMA)**: Exponential moving average smoothing stabilizes the playability timer against momentary 1-second torrent chunk writing dips.
 - **Media Player Integration**: Once the buffer threshold passes, one-click launches the growing file in VLC or your system's default media player.
 
 #### 2.4 Swarm Telemetry Matrix & Peer Inspector
@@ -86,7 +86,7 @@ Svorrent distributes outgoing peer connections across multiple local network int
 ![Network Bonding Interface](docs/screenshots/networks.webp)
 
 - **Throughput-Weighted Multi-Interface Bonding**: Once each active adapter establishes a baseline of 4 peers, new peer connections are weighted proportionally to each adapter's live download speed (`downSpeed`) rather than blind 50/50 round-robin, preventing a slower cellular link from bottlenecking a faster Wi-Fi/Ethernet link.
-- **Harmonized Download & Upload Telemetry**: Both incoming and outgoing BitTorrent protocol traffic (piece payloads, piece requests, HAVE notifications, keepalives) are harmonized across active interfaces, keeping per-adapter download/upload speeds, traffic share percentages, and session counters accurate.
+- **Harmonized Download & Upload Telemetry**: Both incoming and outgoing torrent protocol traffic (piece payloads, piece requests, HAVE notifications, keepalives) are harmonized across active interfaces, keeping per-adapter download/upload speeds, traffic share percentages, and session counters accurate.
 - **iOS Hotspot UDP Keepalive**: Proactive background UDP heartbeats prevent iOS cellular hotspots from dropping during active peer connections.
 - **Android USB Tethering (macOS)**: Native `svorrent-tetherd` service automatically manages RNDIS virtual interface binding and DHCP configuration.
 - **Per-Adapter Controls & Live Telemetry**: Toggle routing per interface on the fly with live download sparklines, peak speed tracking, traffic share percentages, and session data counters.
@@ -225,7 +225,7 @@ flowchart TD
     end
 
     subgraph Core["3. Core Engine Subsystems"]
-        WT["<b>BitTorrent Engine</b><br/>• Rolling critical frontier & sequential assembly<br/>• 2.5× dynamic block pipeline accelerator<br/>• Atomic fast-resume checkpoints"]
+        WT["<b>Torrent Engine</b><br/>• Rolling critical frontier & sequential assembly<br/>• 2.5× dynamic block pipeline accelerator<br/>• Atomic fast-resume checkpoints"]
         Play["<b>Buffer-Free Playability Engine</b><br/>• ffprobe & MP4 moov atom inspection<br/>• Throughput EMA playback safety gate<br/>• Native VLC player launch controller"]
         Bond["<b>Multi-Network Bonding Layer</b><br/>• Throughput-weighted localAddress routing<br/>• Harmonized download & upload attribution<br/>• Proactive cellular UDP keepalive"]
         Updater["<b>In-App Updater Engine</b><br/>• GitHub Releases & main commit tracking<br/>• Staged self-test verification<br/>• One-click Restart & Integrate"]

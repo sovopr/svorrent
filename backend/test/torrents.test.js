@@ -12,5 +12,5 @@ test('normalizes hashes and preserves encoded magnet fields', () => {
 });
 
 test('rejects malformed info hashes', () => {
-  assert.throws(() => cleanMagnet('magnet:?xt=urn:btih:invalid'), /Invalid BitTorrent info hash/);
+  assert.throws(() => cleanMagnet('magnet:?xt=urn:btih:invalid'), /Invalid torrent info hash/);
 });

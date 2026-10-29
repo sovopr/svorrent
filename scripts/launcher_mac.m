@@ -1,5 +1,5 @@
 // Svorrent Native macOS Cocoa Application Launcher
-// Keeps Svorrent active on the macOS Dock just like BitTorrent Web,
+// Keeps Svorrent active on the macOS Dock as a native background application,
 // manages the Node.js backend daemon, and opens/focuses the web interface in the browser.
 
 #import <Cocoa/Cocoa.h>

@@ -166,7 +166,7 @@ echo "==> 8. Creating DMG Staging with Applications shortcut..."
 cp -R "$APP_BUNDLE" "$DMG_STAGING/"
 ln -s /Applications "$DMG_STAGING/Applications"
 
-echo "==> 9. Generating lightweight compressed DMG installer (BitTorrent Web profile)..."
+echo "==> 9. Generating lightweight compressed DMG installer (Torrent Engine profile)..."
 hdiutil create -volname "Svorrent" -srcfolder "$DMG_STAGING" -ov -fs HFS+ -format UDBZ "$DMG_OUTPUT"
 
 rm -rf "$DMG_STAGING"

@@ -151,7 +151,7 @@ const disablePublicDiscovery = process.env.SVORRENT_DISABLE_PUBLIC_DISCOVERY ===
 const TRACKERS = disablePublicDiscovery ? [] : createTrackerList(DATA_DIR);
 
 // ---------------------------------------------------------------------------
-// BitTorrent Engine Configuration
+// Torrent Engine Configuration
 // ---------------------------------------------------------------------------
 
 function isPortFree(testPort) {

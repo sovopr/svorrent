@@ -1,6 +1,6 @@
 # Security Policy
 
-Svorrent takes the security and privacy of its users seriously. As a peer-to-peer BitTorrent client with local API orchestration and multi-network bonding, Svorrent incorporates built-in defense-in-depth measures.
+Svorrent takes the security and privacy of its users seriously. As a peer-to-peer Torrent engine with local API orchestration and multi-network bonding, Svorrent incorporates built-in defense-in-depth measures.
 
 ---
 

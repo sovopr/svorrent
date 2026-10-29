@@ -1,7 +1,7 @@
 {
   "name": "Svorrent",
   "short_name": "Svorrent",
-  "description": "Multi-network BitTorrent engine and streaming client",
+  "description": "Multi-network Torrent engine and streaming client",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0c0d0e",

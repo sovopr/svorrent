@@ -18,15 +18,16 @@
 
 ---
 
-## Downloads (v1.0.7)
+## Downloads (v1.0.8)
 
-Svorrent uses a local web interface. Desktop launchers start the backend and open the interface in your default browser. Node.js 22.12 or newer is required; the current packages do not bundle it.
+Svorrent uses a local web interface. Desktop launchers start the backend and open the interface in your default browser. Desktop packages bundle an official standalone Node.js runtime (no external Node.js installation required).
 
 | Platform | Package | Size | Description |
 | :--- | :--- | :--- | :--- |
+| **macOS (Apple Silicon)** | [**`Svorrent.dmg`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.dmg) | 47.4 MB | Native Apple Silicon disk image with bundled Node runtime and self-healing Cocoa launcher. Drag `Svorrent.app` into `/Applications`. |
+| **Windows (x64)** | [**`Svorrent-Setup.exe`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent-Setup.exe) | 42.7 MB | Installer with Desktop & Start Menu shortcuts and bundled Node runtime. |
+| **Windows (Portable)** | [**`Svorrent-Windows-x64-Portable.zip`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent-Windows-x64-Portable.zip) | 83.0 MB | Standalone portable archive for USB drives and isolated environments. |
 | **Android** | [**`Svorrent.apk`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.apk) | 47.3 MB | Native Android app with simultaneous Wi-Fi + Mobile Data (5G/LTE) bonding and background downloads. |
-| **Windows (x64)** | [**`Svorrent-Setup.exe`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent-Setup.exe) | 23.4 MB | Installer with Desktop & Start Menu shortcuts. |
-| **macOS (Apple Silicon)** | [**`Svorrent.dmg`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.dmg) | 19.0 MB | Native Apple Silicon disk image. Drag `Svorrent.app` into `/Applications`. |
 
 The macOS package is arm64-only; an Intel Mac build is not currently available.
 The Android package is a standalone native app (Jetpack Compose + libtorrent C++ engine) featuring simultaneous multi-network bonding across Wi-Fi and Mobile Data (5G/LTE), background foreground service downloading, and direct in-app updates.
@@ -36,9 +37,12 @@ Releases include `SHA256SUMS.txt` and support SHA-256-verified in-app updates fr
 
 ## Features & Interface Workflow
 
-### 1. Torrent Search
-The search interface queries The Pirate Bay with a bounded request timeout and DNS-over-HTTPS (DoH) fallback.
-- Queries are deduplicated, normalized, and sortable by seeds, leechers, file size, or indexer source.
+### 1. Federated Torrent Search Engine
+The search interface aggregates results across multiple indexers and scrapers with bounded request timeouts and DNS-over-HTTPS (DoH) fallback:
+- **Federated Multi-Source Scraper**: Concurrently queries **BitSearch** (with multi-page scraper pagination), **The Pirate Bay** (apibay.org API), **Torrents.csv**, and **Nyaa** RSS.
+- **Un-Capped Exhaustive Results**: Search results are un-capped; queries return comprehensive result sets with pagination controls (25, 50, 100 per page) and windowed page selectors.
+- **Result Deduplication & Normalization**: Duplicate releases across indexers are merged by info hash, preserving the highest seed/leech counts.
+- **Swarm Integrity & Security**: 64-bit integer overflow protection masks erroneous tracker swarms, single-pass HTML entity decoding prevents double-unescaping vulnerabilities, and magnet resolution enforces strict numeric ID validation.
 - Magnets launch directly into the download pipeline with a single click.
 
 ![Search Interface](docs/screenshots/search.webp)
@@ -87,6 +91,8 @@ Svorrent distributes outgoing peer connections across multiple local network int
 
 - **Throughput-Weighted Multi-Interface Bonding**: Once each active adapter establishes a baseline of 4 peers, new peer connections are weighted proportionally to each adapter's live download speed (`downSpeed`) rather than blind 50/50 round-robin, preventing a slower cellular link from bottlenecking a faster Wi-Fi/Ethernet link.
 - **Harmonized Download & Upload Telemetry**: Both incoming and outgoing torrent protocol traffic (piece payloads, piece requests, HAVE notifications, keepalives) are harmonized across active interfaces, keeping per-adapter download/upload speeds, traffic share percentages, and session counters accurate.
+- **Responsive 2x2 KPI Grid & Interface Row Priority**: Clean quadrant symmetry across all viewport dimensions with column-prioritized layout for compact and mobile screens.
+- **Self-Healing Desktop Launchers**: Native macOS (`launcher_mac.m`) and Windows (`launcher.c`) launchers inspect port 3001 on startup, querying `/api/updater/status` against `build-info.json`. If a stale, mismatched, or hung process from an older build is running, the launcher automatically terminates it with SIGTERM + SIGKILL fallback and launches the fresh bundled backend.
 - **iOS Hotspot UDP Keepalive**: Proactive background UDP heartbeats prevent iOS cellular hotspots from dropping during active peer connections.
 - **Android USB Tethering (macOS)**: Native `svorrent-tetherd` service automatically manages RNDIS virtual interface binding and DHCP configuration.
 - **Per-Adapter Controls & Live Telemetry**: Toggle routing per interface on the fly with live download sparklines, peak speed tracking, traffic share percentages, and session data counters.
@@ -112,7 +118,7 @@ svorrent/
 │   │   └── libusb-1.0.0.dylib  # USB dependency
 │   ├── tether/                  # C++ tether daemon source (RNDIS / libusb)
 │   ├── lib/
-│   │   ├── search.js            # Multi-provider query expansion & result deduplication
+│   │   ├── search.js            # Federated scraper engine (BitSearch, TPB, Torrents.csv, Nyaa) & pagination
 │   │   ├── networks.js          # Throughput-weighted socket bonding & adapter telemetry
 │   │   ├── torrents.js          # Swarm pipeline accelerator, rolling frontier & pause recovery
 │   │   ├── updater.js           # In-app release & continuous repo code updater with self-tests
@@ -148,8 +154,8 @@ svorrent/
     ├── build-dmg.sh                 # macOS .app bundle and compressed DMG builder
     ├── build-windows.sh             # Windows Win32 launcher, NSIS installer, and portable ZIP builder
     ├── build-windows-snapshot.ps1   # PowerShell snapshot builder with commit stamping
-    ├── launcher_mac.m               # Native macOS Cocoa/Objective-C app launcher
-    ├── launcher.c                   # Native Win32 background daemon launcher (C/MinGW)
+    ├── launcher_mac.m               # Native macOS Cocoa app launcher with daemon verification & auto-termination
+    ├── launcher.c                   # Native Win32 daemon launcher with daemon verification & auto-termination
     ├── launcher.rc                  # Windows icon resource & manifest definition
     ├── manifest.xml                 # Windows DPI awareness and security application manifest
     └── installer.nsi                # Nullsoft NSIS installer configuration (LZMA solid compression)
@@ -274,9 +280,9 @@ flowchart TD
 | Component | Implementation |
 | :--- | :--- |
 | Core Protocol & Swarm | WebTorrent, libtorrent4j (Android C++), P2P Wire Protocol, DHT, 2.5× dynamic block pipeline accelerator, rolling critical frontier |
-| Desktop & Mobile Architecture | Native Win32 / macOS browser-client launchers (~19–23 MB packages, zero Electron overhead) & Native Jetpack Compose Android client (~47 MB) |
+| Desktop & Mobile Architecture | Native Win32 / macOS browser-client launchers (~42–47 MB packages with bundled standalone Node.js runtime, zero Electron overhead) & Native Jetpack Compose Android client (~47 MB) |
 | In-App Updater | SHA-256 release verification + continuous `main` branch code integration with staged self-testing (Desktop) & in-app APK installer (Android) |
-| Search Engine | Multi-provider aggregation with bounded timeouts & DoH anti-censorship shield |
+| Search Engine | Federated multi-source scraper engine (BitSearch, The Pirate Bay, Torrents.csv, Nyaa) with un-capped pagination & DoH anti-censorship shield |
 | Network Routing & Bonding | Throughput-weighted multi-interface OS socket binding (macOS/Win) & Android ConnectivityManager multi-network socket bonding (Wi-Fi + 5G/LTE) |
 | Streaming Readiness Engine | ffprobe metadata extraction + MP4 `moov` atom inspection + dynamic buffer equation with EMA smoothing |
 | Swarm Telemetry | Piece bitfield availability heatmap, per-interface breakdown, and interactive vector SVG map |

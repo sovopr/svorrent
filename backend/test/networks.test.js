@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import net from 'node:net';
 import os from 'node:os';
-import { NetworkManager } from '../lib/networks.js';
+import { NetworkManager, classifyInterface } from '../lib/networks.js';
 
 test('self-assigned adapters stay visible but are excluded from peer routing', () => {
   const originalNetworkInterfaces = os.networkInterfaces;
@@ -49,3 +49,37 @@ test('interface routing does not capture ordinary web requests', () => {
     net.connect = realConnect;
   }
 });
+
+test('classifyInterface accurately categorizes standard, cellular, bridge, and VPN tunnel devices', () => {
+  // Wi-Fi
+  assert.equal(classifyInterface('Wi-Fi', 'en0'), 'wifi');
+  assert.equal(classifyInterface('Wireless Network Adapter', 'wlan0'), 'wifi');
+  assert.equal(classifyInterface('AirPort Extreme', 'en1'), 'wifi');
+
+  // Cellular & Tethering
+  assert.equal(classifyInterface('iPhone USB', 'en14'), 'cellular');
+  assert.equal(classifyInterface('Android Tether', 'rndis0'), 'cellular');
+  assert.equal(classifyInterface('Mobile Hotspot', 'feth0'), 'cellular');
+
+  // Ethernet
+  assert.equal(classifyInterface('Ethernet', 'en5'), 'ethernet');
+  assert.equal(classifyInterface('Gigabit LAN', 'eth0'), 'ethernet');
+  assert.equal(classifyInterface('USB 10/100/1000 LAN', 'en8'), 'ethernet');
+
+  // Bridge
+  assert.equal(classifyInterface('Thunderbolt Bridge', 'bridge0'), 'bridge');
+
+  // VPN & Tunnels
+  assert.equal(classifyInterface('Tailscale', 'utun3'), 'vpn');
+  assert.equal(classifyInterface('WireGuard', 'wg0'), 'vpn');
+  assert.equal(classifyInterface('OpenVPN Client', 'tun0'), 'vpn');
+  assert.equal(classifyInterface('Corporate IPsec', 'ppp0'), 'vpn');
+
+  // Fallbacks and unknown devices
+  assert.equal(classifyInterface('Unknown Hardware Device', 'unk0'), 'other');
+  assert.equal(classifyInterface('Loopback Adapter', 'lo0'), 'other');
+  assert.equal(classifyInterface('', ''), 'other');
+  assert.equal(classifyInterface(null, null), 'other');
+  assert.equal(classifyInterface(undefined, undefined), 'other');
+});
+

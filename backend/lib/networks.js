@@ -24,12 +24,13 @@ function getTetherDaemonBin() {
   return path.resolve(__dirname, '../bin/svorrent-tetherd');
 }
 
-function classifyInterface(name, device) {
-  const s = `${name} ${device}`.toLowerCase();
+export function classifyInterface(name = '', device = '') {
+  const s = `${name || ''} ${device || ''}`.toLowerCase();
   if (/wi-?fi|wireless|wlan|airport|802\.11/.test(s)) return 'wifi';
+  if (/usb.*(lan|ethernet)|ethernet|lan|gigabit/.test(s)) return 'ethernet';
   if (/iphone|ipad|tether|hotspot|cellular|mobile|usb|rndis|feth|samsung|android/.test(s)) return 'cellular';
-  if (/ethernet|lan|gigabit|usb.*lan/.test(s)) return 'ethernet';
   if (/bridge|thunderbolt bridge/.test(s)) return 'bridge';
+  if (/vpn|wireguard|wg\d*|tailscale|utun|tun\d*|tap\d*|ppp|ipsec/.test(s)) return 'vpn';
   return 'other';
 }
 

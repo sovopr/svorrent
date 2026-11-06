@@ -1,7 +1,7 @@
 // Federated Multi-Source Indexer Engine for Svorrent
 // Replaces torrent-search-api with modern native fetch() scrapers across multiple
 // public indexers (ThePirateBay, BitSearch, Torrents.csv, Nyaa).
-// Eliminates 22 npm audit CVEs, un-caps 100-result limits, and aggregates hundreds
+// Eliminates npm audit CVEs, un-caps 100-result limits, and aggregates hundreds
 // of deduplicated torrents across providers.
 
 export const DEFAULT_TRACKERS = [
@@ -14,16 +14,34 @@ export const DEFAULT_TRACKERS = [
   'udp://tracker.cyberia.is:6969/announce',
 ];
 
+const HTML_ENTITY_MAP = {
+  '&amp;': '&',
+  '&lt;': '<',
+  '&gt;': '>',
+  '&quot;': '"',
+  '&#039;': "'",
+  '&#39;': "'",
+  '&#x27;': "'",
+  '&#x3d;': '=',
+};
+
 export function decodeHtmlEntities(str) {
   if (!str || typeof str !== 'string') return '';
-  return str
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#0*39;/g, "'")
-    .replace(/&#x27;/gi, "'")
-    .replace(/&#x3D;/gi, '=');
+  return str.replace(/&(?:amp|lt|gt|quot|#(?:0*39|x27|x3[dD]));/gi, (match) => {
+    const key = match.toLowerCase();
+    return HTML_ENTITY_MAP[key] || match;
+  });
+}
+
+export function stripHtmlTags(str) {
+  if (!str || typeof str !== 'string') return '';
+  let prev;
+  let clean = str;
+  do {
+    prev = clean;
+    clean = clean.replace(/<[^>]*>/g, '');
+  } while (clean !== prev);
+  return clean.trim();
 }
 
 export function sanitizeSwarmCount(raw) {
@@ -99,7 +117,7 @@ export async function searchThePirateBay(query, { category = '', limit, signal }
     const infoHash = item.info_hash ? String(item.info_hash).trim().toLowerCase() : '';
     const seeds = sanitizeSwarmCount(item.seeders);
     const peers = sanitizeSwarmCount(item.leechers);
-    const title = decodeHtmlEntities(String(item.name).trim());
+    const title = decodeHtmlEntities(stripHtmlTags(String(item.name || '')));
 
     results.push({
       provider: 'ThePirateBay',
@@ -147,13 +165,13 @@ export async function scrapeBitSearchPage(query, page = 1, { signal } = {}) {
 
     // Title
     const titleMatch = card.match(/<h3[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i);
-    const rawTitle = titleMatch ? titleMatch[1].replace(/<[^>]+>/g, '').trim() : '';
+    const rawTitle = titleMatch ? stripHtmlTags(titleMatch[1]) : '';
     const title = decodeHtmlEntities(rawTitle);
     if (!title) continue;
 
     // Magnet URI
     const magnetMatch = card.match(/href="(magnet:\?[^"]+)"/i);
-    let magnet = magnetMatch ? magnetMatch[1].replace(/&#x3D;/g, '=').replace(/&amp;/g, '&') : '';
+    let magnet = magnetMatch ? magnetMatch[1].replace(/&#x3D;/gi, '=').replace(/&amp;/g, '&') : '';
 
     const infoHash = extractInfoHash(magnet);
     if (!magnet && infoHash) {
@@ -191,8 +209,7 @@ export async function scrapeBitSearch(query, { maxPages = 3, signal } = {}) {
   const pagePromises = [];
   for (let p = 1; p <= maxPages; p++) {
     pagePromises.push(
-      scrapeBitSearchPage(query, p, { signal }).catch((err) => {
-        // Individual page failure shouldn't abort entire provider
+      scrapeBitSearchPage(query, p, { signal }).catch(() => {
         return [];
       })
     );
@@ -232,7 +249,7 @@ export async function searchTorrentsCsv(query, { signal } = {}) {
     const sizeStr = item.size_bytes ? formatBytes(item.size_bytes) : '';
     const seeds = sanitizeSwarmCount(item.seeders);
     const peers = sanitizeSwarmCount(item.leechers);
-    const title = decodeHtmlEntities(String(item.name).trim());
+    const title = decodeHtmlEntities(stripHtmlTags(String(item.name || '')));
 
     results.push({
       provider: 'Torrents.csv',
@@ -277,7 +294,7 @@ export async function searchNyaa(query, { signal } = {}) {
     const item = m[1];
 
     const titleMatch = item.match(/<title>([\s\S]*?)<\/title>/i);
-    const rawTitle = titleMatch ? titleMatch[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').trim() : '';
+    const rawTitle = titleMatch ? stripHtmlTags(titleMatch[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')) : '';
     const title = decodeHtmlEntities(rawTitle);
     if (!title) continue;
 
@@ -414,28 +431,33 @@ export async function searchFederated(
 // 6. Magnet Resolution
 // ---------------------------------------------------------------------------
 export async function resolveMagnet({ provider, desc, link, magnet, infoHash, title } = {}) {
-  if (magnet && typeof magnet === 'string' && magnet.startsWith('magnet:?xt=urn:btih:')) {
+  if (typeof magnet === 'string' && magnet.startsWith('magnet:?xt=urn:btih:')) {
     return magnet;
   }
 
-  if (infoHash) {
+  if (typeof infoHash === 'string' && infoHash.trim()) {
     return formatMagnetUri(infoHash, title);
   }
 
-  // If link points to apibay details (t.php?id=...)
-  if (link && link.includes('apibay.org/t.php?id=')) {
-    try {
-      const res = await fetch(link, {
-        headers: { Accept: 'application/json' },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.info_hash) {
-          return formatMagnetUri(data.info_hash, data.name || title);
+  // If link points to apibay details (t.php?id=...), validate URL structure strictly
+  if (typeof link === 'string') {
+    const idMatch = link.match(/^https?:\/\/apibay\.org\/t\.php\?id=(\d+)$/);
+    if (idMatch) {
+      const safeId = idMatch[1];
+      const safeUrl = `https://apibay.org/t.php?id=${safeId}`;
+      try {
+        const res = await fetch(safeUrl, {
+          headers: { Accept: 'application/json' },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data && data.info_hash) {
+            return formatMagnetUri(data.info_hash, data.name || title);
+          }
         }
+      } catch {
+        // Fall through
       }
-    } catch {
-      // Fall through
     }
   }
 

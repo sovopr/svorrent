@@ -682,12 +682,15 @@ app.get('/api/search/doh-check', async (req, res) => {
 app.get('/api/magnet', async (req, res) => {
   const { provider, desc, link, magnet } = req.query;
 
-  if (magnet) {
+  if (typeof magnet === 'string' && magnet.startsWith('magnet:?xt=urn:btih:')) {
     return res.json({ magnet });
   }
 
   try {
-    const resolvedMagnet = await resolveMagnet({ provider, desc, link });
+    const safeProvider = typeof provider === 'string' ? provider : '';
+    const safeDesc = typeof desc === 'string' ? desc : '';
+    const safeLink = typeof link === 'string' ? link : '';
+    const resolvedMagnet = await resolveMagnet({ provider: safeProvider, desc: safeDesc, link: safeLink });
     if (!resolvedMagnet) {
       return res.status(404).json({ error: 'Magnet link could not be found' });
     }

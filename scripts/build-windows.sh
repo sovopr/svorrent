@@ -79,6 +79,10 @@ echo "==> 6. Copying application assets into staging..."
 cp -R "$ROOT_DIR/frontend/dist"/* "$STAGING_DIR/frontend/dist/"
 cp -R "$ROOT_DIR/backend/server.js" "$STAGING_DIR/backend/"
 cp -R "$ROOT_DIR/backend/package.json" "$STAGING_DIR/backend/"
+SOURCE_COMMIT="$(git -C "$ROOT_DIR" rev-parse HEAD 2>/dev/null || true)"
+if [ -n "$SOURCE_COMMIT" ]; then
+    printf '{"commit":"%s"}\n' "$SOURCE_COMMIT" > "$STAGING_DIR/backend/build-info.json"
+fi
 cp -R "$ROOT_DIR/backend/lib" "$STAGING_DIR/backend/"
 cp -R "$ROOT_DIR/backend/node_modules" "$STAGING_DIR/backend/"
 

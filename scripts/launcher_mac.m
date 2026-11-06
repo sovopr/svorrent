@@ -84,9 +84,114 @@ static BOOL isServerListening(int port) {
     return nil;
 }
 
+- (NSString *)bundleCommit {
+    NSBundle *bundle = [NSBundle mainBundle];
+    NSString *infoPath = [bundle.resourcePath stringByAppendingPathComponent:@"app/backend/build-info.json"];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:infoPath]) {
+        infoPath = @"/Users/soveet/svorrent/backend/build-info.json";
+    }
+    if (![[NSFileManager defaultManager] fileExistsAtPath:infoPath]) {
+        return nil;
+    }
+    NSData *data = [NSData dataWithContentsOfFile:infoPath];
+    if (!data) return nil;
+    NSError *err = nil;
+    id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&err];
+    if ([json isKindOfClass:[NSDictionary class]] && [json[@"commit"] isKindOfClass:[NSString class]]) {
+        return [json[@"commit"] lowercaseString];
+    }
+    return nil;
+}
+
+- (NSString *)bundleVersion {
+    NSBundle *bundle = [NSBundle mainBundle];
+    NSString *pkgPath = [bundle.resourcePath stringByAppendingPathComponent:@"app/backend/package.json"];
+    if (![[NSFileManager defaultManager] fileExistsAtPath:pkgPath]) {
+        pkgPath = @"/Users/soveet/svorrent/backend/package.json";
+    }
+    if (![[NSFileManager defaultManager] fileExistsAtPath:pkgPath]) {
+        return nil;
+    }
+    NSData *data = [NSData dataWithContentsOfFile:pkgPath];
+    if (!data) return nil;
+    NSError *err = nil;
+    id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&err];
+    if ([json isKindOfClass:[NSDictionary class]] && [json[@"version"] isKindOfClass:[NSString class]]) {
+        return json[@"version"];
+    }
+    return nil;
+}
+
+- (NSDictionary *)fetchRunningBackendStatus {
+    NSURL *url = [NSURL URLWithString:@"http://127.0.0.1:3001/api/updater/status"];
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url
+                                                       cachePolicy:NSURLRequestReloadIgnoringLocalCacheData
+                                                   timeoutInterval:1.0];
+    __block NSDictionary *result = nil;
+    dispatch_semaphore_t sema = dispatch_semaphore_create(0);
+    NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:req
+        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+            if (!error && data && [(NSHTTPURLResponse *)response statusCode] == 200) {
+                NSError *jsonErr = nil;
+                id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:&jsonErr];
+                if ([json isKindOfClass:[NSDictionary class]]) {
+                    result = (NSDictionary *)json;
+                }
+            }
+            dispatch_semaphore_signal(sema);
+        }];
+    [task resume];
+    dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)));
+    return result;
+}
+
+- (BOOL)isExistingBackendOutdated {
+    if (!isServerListening(3001)) {
+        return NO;
+    }
+
+    NSDictionary *status = [self fetchRunningBackendStatus];
+    if (!status) {
+        NSLog(@"[Svorrent] Port 3001 is listening but not responding to updater status. Considering outdated/unresponsive.");
+        return YES;
+    }
+
+    NSString *runningCommit = [status[@"currentCommit"] isKindOfClass:[NSString class]] ? [status[@"currentCommit"] lowercaseString] : nil;
+    NSString *runningVersion = [status[@"currentVersion"] isKindOfClass:[NSString class]] ? status[@"currentVersion"] : nil;
+
+    NSString *expectedCommit = [self bundleCommit];
+    NSString *expectedVersion = [self bundleVersion];
+
+    if (expectedCommit.length > 0 && runningCommit.length > 0) {
+        if (![expectedCommit isEqualToString:runningCommit]) {
+            NSLog(@"[Svorrent] Running backend commit mismatch (running: %@, bundle: %@). Needs replacement.", runningCommit, expectedCommit);
+            return YES;
+        }
+    }
+
+    if (expectedVersion.length > 0 && runningVersion.length > 0) {
+        if (![expectedVersion isEqualToString:runningVersion]) {
+            NSLog(@"[Svorrent] Running backend version mismatch (running: %@, bundle: %@). Needs replacement.", runningVersion, expectedVersion);
+            return YES;
+        }
+    }
+
+    return NO;
+}
+
 - (void)startBackendIfNeeded {
     if (isServerListening(3001)) {
-        return;
+        if ([self isExistingBackendOutdated]) {
+            NSLog(@"[Svorrent] Stale backend detected on port 3001. Terminating old process...");
+            killBackendProcess(self.backendTask);
+            for (int i = 0; i < 20; i++) {
+                if (!isServerListening(3001)) break;
+                usleep(100000);
+            }
+        } else {
+            NSLog(@"[Svorrent] Healthy and matching backend is already running on port 3001.");
+            return;
+        }
     }
 
     NSString *nodeBin = [self findNodeBinary];
@@ -231,14 +336,31 @@ static void killBackendProcess(NSTask *task) {
     if (task && [task isRunning]) {
         [task terminate];
     }
-    // Ensure any process on port 3001 is cleanly stopped
-    NSTask *killTask = [[NSTask alloc] init];
-    killTask.launchPath = @"/bin/sh";
-    killTask.arguments = @[@"-c", @"lsof -ti :3001 | xargs kill -15 2>/dev/null"];
+    // Attempt graceful SIGTERM first
+    NSTask *termTask = [[NSTask alloc] init];
+    termTask.launchPath = @"/bin/sh";
+    termTask.arguments = @[@"-c", @"lsof -ti :3001 | xargs kill -15 2>/dev/null"];
     @try {
-        [killTask launch];
-        [killTask waitUntilExit];
+        [termTask launch];
+        [termTask waitUntilExit];
     } @catch (NSException *e) {}
+
+    // Wait up to 1.5 seconds for port to clear
+    for (int i = 0; i < 15; i++) {
+        if (!isServerListening(3001)) break;
+        usleep(100000); // 100ms
+    }
+
+    // Force SIGKILL if port is still listening
+    if (isServerListening(3001)) {
+        NSTask *killTask = [[NSTask alloc] init];
+        killTask.launchPath = @"/bin/sh";
+        killTask.arguments = @[@"-c", @"lsof -ti :3001 | xargs kill -9 2>/dev/null"];
+        @try {
+            [killTask launch];
+            [killTask waitUntilExit];
+        } @catch (NSException *e) {}
+    }
 
     // Clean up launchd job if any
     uid_t uid = getuid();
@@ -257,6 +379,8 @@ static void killBackendProcess(NSTask *task) {
 @end
 
 int main(int argc, const char * argv[]) {
+    (void)argc;
+    (void)argv;
     @autoreleasepool {
         NSApplication *app = [NSApplication sharedApplication];
         AppDelegate *delegate = [[AppDelegate alloc] init];

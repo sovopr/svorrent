@@ -68,6 +68,11 @@ for _ in $(seq 1 40); do
     sleep 0.5
 done
 if lsof -nP -iTCP:3001 -sTCP:LISTEN >/dev/null 2>&1; then
+    echo 'Backend process still listening on port 3001; attempting force termination...' >&2
+    lsof -ti :3001 | xargs kill -9 2>/dev/null || true
+    sleep 1
+fi
+if lsof -nP -iTCP:3001 -sTCP:LISTEN >/dev/null 2>&1; then
     echo 'Old Svorrent backend did not stop; leaving installation untouched' >&2
     exit 1
 fi

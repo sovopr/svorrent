@@ -6,6 +6,8 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <stdbool.h>
 
 #ifdef _MSC_VER
@@ -117,20 +119,107 @@ static bool find_node(const wchar_t* appDir, wchar_t* outNode, size_t maxLen) {
     return false;
 }
 
+static bool is_backend_outdated(const wchar_t* exePath) {
+    if (!is_server_listening()) return false;
+
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return false;
+
+    SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (sock == INVALID_SOCKET) {
+        WSACleanup();
+        return false;
+    }
+
+    struct sockaddr_in addr;
+    ZeroMemory(&addr, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(3001);
+    addr.sin_addr.s_addr = inet_addr("127.0.0.1");
+
+    if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) != 0) {
+        closesocket(sock);
+        WSACleanup();
+        return false;
+    }
+
+    DWORD timeout = 1000;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout, sizeof(timeout));
+
+    const char* req = "GET /api/updater/status HTTP/1.0\r\nHost: 127.0.0.1:3001\r\nConnection: close\r\n\r\n";
+    send(sock, req, (int)strlen(req), 0);
+
+    char resp[4096];
+    ZeroMemory(resp, sizeof(resp));
+    int bytes = recv(sock, resp, sizeof(resp) - 1, 0);
+    closesocket(sock);
+    WSACleanup();
+
+    if (bytes <= 0 || strstr(resp, "\"currentVersion\"") == NULL) {
+        return true;
+    }
+
+    wchar_t infoPath[MAX_PATH];
+    swprintf(infoPath, MAX_PATH, L"%ls\\backend\\build-info.json", exePath);
+    FILE* f = _wfopen(infoPath, L"rb");
+    if (f) {
+        char buf[512];
+        ZeroMemory(buf, sizeof(buf));
+        size_t r = fread(buf, 1, sizeof(buf) - 1, f);
+        fclose(f);
+        if (r > 0) {
+            char* commitPos = strstr(buf, "\"commit\":");
+            if (commitPos) {
+                char* q1 = strchr(commitPos, '"');
+                if (q1) {
+                    q1 = strchr(q1 + 1, '"');
+                    if (q1) {
+                        char* q2 = strchr(q1 + 1, '"');
+                        if (q2) {
+                            char* q3 = strchr(q2 + 1, '"');
+                            if (q3 && (q3 - q2 - 1) == 40) {
+                                char commitSha[41];
+                                memcpy(commitSha, q2 + 1, 40);
+                                commitSha[40] = '\0';
+                                if (strstr(resp, commitSha) == NULL) {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+static void kill_stale_backend(void) {
+    _wsystem(L"cmd.exe /c \"for /f \\\"tokens=5\\\" %a in ('netstat -aon ^| findstr :3001 ^| findstr LISTENING') do taskkill /F /PID %a >nul 2>&1\"");
+    Sleep(500);
+}
+
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
     (void)hInstance;
     (void)hPrevInstance;
     (void)lpCmdLine;
     (void)nCmdShow;
-    if (is_server_listening()) {
-        ShellExecuteW(NULL, L"open", L"http://localhost:3001", NULL, NULL, SW_SHOWNORMAL);
-        return 0;
-    }
 
     wchar_t exePath[MAX_PATH];
     GetModuleFileNameW(NULL, exePath, MAX_PATH);
     wchar_t* lastSlash = wcsrchr(exePath, L'\\');
     if (lastSlash) *lastSlash = L'\0';
+
+    if (is_server_listening()) {
+        if (is_backend_outdated(exePath)) {
+            kill_stale_backend();
+        } else {
+            ShellExecuteW(NULL, L"open", L"http://localhost:3001", NULL, NULL, SW_SHOWNORMAL);
+            return 0;
+        }
+    }
 
     wchar_t nodePath[MAX_PATH];
     if (!find_node(exePath, nodePath, MAX_PATH)) {

@@ -698,7 +698,7 @@ export class AutoUpdater {
       const logDir = path.join(os.homedir(), 'Library', 'Logs', 'Svorrent');
       fs.mkdirSync(logDir, { recursive: true });
       const logFd = fs.openSync(path.join(logDir, 'update.log'), 'a');
-      const relaunchCmd = `sleep 0.6; osascript -e 'tell application id "com.sovopr.svorrent" to quit' >/dev/null 2>&1 || true; sleep 1.0; open -g "${appPath}" || open "${appPath}"`;
+      const relaunchCmd = `sleep 0.6; osascript -e 'tell application id "com.sovopr.svorrent" to quit' >/dev/null 2>&1 || true; sleep 0.5; lsof -ti :3001 | xargs kill -9 2>/dev/null || true; sleep 0.5; open -g "${appPath}" || open "${appPath}"`;
       const helper = spawn('/bin/bash', ['-c', relaunchCmd], {
         detached: true,
         stdio: ['ignore', logFd, logFd],
@@ -736,9 +736,14 @@ export class AutoUpdater {
     this.state.status = 'idle';
     this.state.stagedSourceDir = null;
     this.state.step = 'Updated to latest repository code';
+
+    setTimeout(() => {
+      process.exit(0);
+    }, 1000);
+
     return {
       success: true,
-      message: `Integrated latest repository commit ${(appliedCommit || '').slice(0, 7)}.`,
+      message: `Integrated latest repository commit ${(appliedCommit || '').slice(0, 7)}. Restarting process...`,
     };
   }
 

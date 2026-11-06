@@ -335,13 +335,13 @@ export function NetworksPage({ notify, isActive = true }) {
               <thead>
                 <tr>
                   <th className="col-iface">Interface</th>
-                  <th className="col-type">Type</th>
-                  <th className="col-ip">IPv4</th>
+                  <th className="col-type col-hide-sm">Type</th>
+                  <th className="col-ip col-hide-sm">IPv4</th>
                   <th className="col-num col-download">Download</th>
                   <th className="col-num col-upload">Upload</th>
-                  <th className="col-num col-share">Share</th>
-                  <th className="col-num col-data">Session</th>
-                  <th className="col-num col-peers">Peers</th>
+                  <th className="col-num col-share col-hide-md">Share</th>
+                  <th className="col-num col-data col-hide-md">Session</th>
+                  <th className="col-num col-peers col-hide-md">Peers</th>
                   <th className="col-actions">Routing</th>
                 </tr>
               </thead>
@@ -361,15 +361,22 @@ export function NetworksPage({ notify, isActive = true }) {
                             style={{ backgroundColor: isOnline ? color : undefined }}
                             title={iface.statusReason === 'link-local' ? 'Needs DHCP; turn off "Disable unless needed" in System Settings' : !iface.connected ? 'Disconnected' : iface.enabled ? 'Routing enabled' : 'Routing disabled'}
                           />
-                          <span className="iface-name">{iface.name}</span>
-                          <span className="mono muted iface-device">{iface.device}</span>
-                          {iface.statusReason === 'link-local' && (
-                            <span className="tag-inline-warn">Needs DHCP</span>
-                          )}
+                          <div className="iface-info">
+                            <div className="iface-title-row">
+                              <span className="iface-name">{iface.name}</span>
+                              <span className="mono muted iface-device">{iface.device}</span>
+                            </div>
+                            <div className="iface-meta-compact col-show-sm mono muted">
+                              {typeLabel}{iface.ip ? ` • ${iface.ip}` : ''}
+                            </div>
+                            {iface.statusReason === 'link-local' && (
+                              <span className="tag-inline-warn">Needs DHCP</span>
+                            )}
+                          </div>
                         </div>
                       </td>
-                      <td className="col-type muted">{typeLabel}</td>
-                      <td className="col-ip mono muted">{iface.ip || '—'}</td>
+                      <td className="col-type col-hide-sm muted">{typeLabel}</td>
+                      <td className="col-ip col-hide-sm mono muted">{iface.ip || '—'}</td>
                       <td className="col-num col-download">
                         <div className="speed-with-sparkline">
                           <span className="mono">{formatSpeed(iface.downSpeed)}</span>
@@ -377,11 +384,11 @@ export function NetworksPage({ notify, isActive = true }) {
                         </div>
                       </td>
                       <td className="col-num col-upload mono muted">{formatSpeed(iface.upSpeed)}</td>
-                      <td className="col-num col-share mono muted">
+                      <td className="col-num col-share col-hide-md mono muted">
                         {!iface.enabled ? 'Off' : totalDownSpeed > 0 ? `${share}%` : '—'}
                       </td>
-                      <td className="col-num col-data mono muted">{formatBytes(iface.downloaded)}</td>
-                      <td className="col-num col-peers mono muted">{iface.peers ?? 0}</td>
+                      <td className="col-num col-data col-hide-md mono muted">{formatBytes(iface.downloaded)}</td>
+                      <td className="col-num col-peers col-hide-md mono muted">{iface.peers ?? 0}</td>
                       <td className="col-actions">
                         <button
                           className={`btn-toggle ${iface.enabled ? 'is-active' : ''}`}

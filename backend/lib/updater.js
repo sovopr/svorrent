@@ -686,8 +686,9 @@ export class AutoUpdater {
     }
 
     // If running inside /Applications/Svorrent.app on macOS, re-seal ad-hoc signature and relaunch
-    const appPath = path.resolve(currentBackendDir, '../../../');
-    if (this.platform === 'darwin' && appPath.startsWith('/Applications/') && path.basename(appPath) === 'Svorrent.app') {
+    const appIndex = currentBackendDir.indexOf('.app');
+    const appPath = appIndex !== -1 ? currentBackendDir.slice(0, appIndex + 4) : path.resolve(currentBackendDir, '../../../../');
+    if (this.platform === 'darwin' && appPath.endsWith('.app') && fs.existsSync(appPath)) {
       try {
         await execFileAsync('codesign', ['--force', '--sign', '-', appPath], { timeout: 15000 });
       } catch (err) {

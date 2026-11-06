@@ -20,17 +20,17 @@
 
 ## Downloads (v1.0.8)
 
-Svorrent uses a local web interface. Desktop launchers start the backend and open the interface in your default browser. Desktop packages bundle an official standalone Node.js runtime (no external Node.js installation required).
+Svorrent runs locally and opens in your default web browser with zero external dependencies required.
 
 | Platform | Package | Size | Description |
 | :--- | :--- | :--- | :--- |
-| **macOS (Apple Silicon)** | [**`Svorrent.dmg`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.dmg) | 47.4 MB | Native Apple Silicon disk image with bundled Node runtime and self-healing Cocoa launcher. Drag `Svorrent.app` into `/Applications`. |
-| **Windows (x64)** | [**`Svorrent-Setup.exe`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent-Setup.exe) | 42.7 MB | Installer with Desktop & Start Menu shortcuts and bundled Node runtime. |
+| **macOS (Apple Silicon)** | [**`Svorrent.dmg`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.dmg) | 47.4 MB | Native Apple Silicon disk image. Drag `Svorrent.app` into `/Applications`. |
+| **Windows (x64)** | [**`Svorrent-Setup.exe`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent-Setup.exe) | 42.7 MB | Installer with Desktop & Start Menu shortcuts. |
 | **Android** | [**`Svorrent.apk`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.apk) | 47.3 MB | Native Android app with simultaneous Wi-Fi + Mobile Data (5G/LTE) bonding and background downloads. |
 
 The macOS package is arm64-only; an Intel Mac build is not currently available.
 The Android package is a standalone native app (Jetpack Compose + libtorrent C++ engine) featuring simultaneous multi-network bonding across Wi-Fi and Mobile Data (5G/LTE), background foreground service downloading, and direct in-app updates.
-Releases include `SHA256SUMS.txt` and support SHA-256-verified in-app updates from GitHub Releases as well as continuous repository code integration from `main` (staged self-testing via `node --check` and the unit test suite before prompting **Restart & Integrate** on macOS and Windows).
+Releases include `SHA256SUMS.txt` and support SHA-256-verified in-app updates from GitHub Releases as well as continuous repository code integration from `main` (staged self-testing via the test suite before prompting **Restart & Integrate** on macOS and Windows).
 
 ---
 

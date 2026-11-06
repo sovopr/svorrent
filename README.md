@@ -26,7 +26,6 @@ Svorrent uses a local web interface. Desktop launchers start the backend and ope
 | :--- | :--- | :--- | :--- |
 | **macOS (Apple Silicon)** | [**`Svorrent.dmg`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.dmg) | 47.4 MB | Native Apple Silicon disk image with bundled Node runtime and self-healing Cocoa launcher. Drag `Svorrent.app` into `/Applications`. |
 | **Windows (x64)** | [**`Svorrent-Setup.exe`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent-Setup.exe) | 42.7 MB | Installer with Desktop & Start Menu shortcuts and bundled Node runtime. |
-| **Windows (Portable)** | [**`Svorrent-Windows-x64-Portable.zip`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent-Windows-x64-Portable.zip) | 83.0 MB | Standalone portable archive for USB drives and isolated environments. |
 | **Android** | [**`Svorrent.apk`**](https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.apk) | 47.3 MB | Native Android app with simultaneous Wi-Fi + Mobile Data (5G/LTE) bonding and background downloads. |
 
 The macOS package is arm64-only; an Intel Mac build is not currently available.

@@ -7,6 +7,7 @@ const TYPE_LABELS = {
   cellular: 'Cellular',
   ethernet: 'Ethernet',
   bridge: 'Bridge',
+  vpn: 'VPN',
   other: 'Adapter',
 };
 
@@ -15,6 +16,7 @@ const TYPE_COLORS = {
   cellular: '#57ab72',
   ethernet: '#c9a24a',
   bridge: '#a3a4a8',
+  vpn: '#9d7cd8',
   other: '#a3a4a8',
 };
 

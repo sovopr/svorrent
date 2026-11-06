@@ -27,4 +27,5 @@ android/app/build/
 android/local.properties
 dist-android/
 *.keystore
+!android/svorrent-release.keystore
 *.apk

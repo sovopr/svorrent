@@ -1,0 +1,3 @@
+-keep class org.libtorrent4j.** { *; }
+-dontwarn org.libtorrent4j.**
+

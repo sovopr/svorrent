@@ -149,7 +149,7 @@ svorrent/
 │   │   ├── useDialog.js         # Accessible modal dialog state hook
 │   │   └── lib.js               # API client, units formatting, and speed calculations
 │   └── package.json
-├── dist-android/                # Native Android client (Jetpack Compose + libtorrent4j)
+├── android/                     # Native Android client (Jetpack Compose + libtorrent4j)
 └── scripts/
     ├── build-dmg.sh                 # macOS .app bundle and compressed DMG builder
     ├── build-windows.sh             # Windows Win32 launcher, NSIS installer, and portable ZIP builder

@@ -657,15 +657,18 @@ app.get('/api/search', async (req, res) => {
     const activeProviders = TorrentSearchApi.getActiveProviders();
     const searchPromises = [];
 
+    const rawLimit = req.query.limit ? parseInt(req.query.limit, 10) : undefined;
+    const searchLimit = Number.isInteger(rawLimit) && rawLimit > 0 ? rawLimit : undefined;
+
     for (const provider of activeProviders) {
       for (const q of queries) {
         searchPromises.push(
           (async () => {
             try {
               const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Provider timeout')), 2500)
+                setTimeout(() => reject(new Error('Provider timeout')), 3500)
               );
-              const searchPromise = TorrentSearchApi.search([provider.name], q, 'All', 40);
+              const searchPromise = TorrentSearchApi.search([provider.name], q, 'All', searchLimit);
               const results = await Promise.race([searchPromise, timeoutPromise]);
               return Array.isArray(results) ? results : [];
             } catch (err) {

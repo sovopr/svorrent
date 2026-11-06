@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './Icon';
-import { apiGet, apiPost, parseSize } from './lib';
+import { apiGet, apiPost, getPageNumbers, parseSize } from './lib';
 
 const COLUMNS = [
   { key: 'title', label: 'Name', className: 'col-name' },
@@ -45,8 +45,11 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
   const [sort, setSort] = useState({ key: 'seeds', dir: 'desc' });
   const [source, setSource] = useState('all');
   const [rowState, setRowState] = useState({});
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
 
   const inputRef = useRef(null);
+  const tableRef = useRef(null);
   const searchId = useRef(0);
   const searchController = useRef(null);
   const resultId = useRef(0);
@@ -101,6 +104,7 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
       })));
       setRowState({});
       setSource('all');
+      setPage(1);
       setSearchedTerm(term);
     } catch (err) {
       if (mounted.current && searchId.current === id && !controller.signal.aborted) {
@@ -138,6 +142,7 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
         setError('');
         setRowState({});
         setSource('all');
+        setPage(1);
       }
     }
   }, [initialQuery, cancelSearch]);
@@ -183,7 +188,27 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
     return list;
   }, [results, sort, source]);
 
+  const totalResults = rows.length;
+  const totalPages = Math.max(1, Math.ceil(totalResults / pageSize));
+  const currentPage = Math.min(Math.max(1, page), totalPages);
+  const startIndex = (currentPage - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, totalResults);
+  const paginatedRows = useMemo(() => rows.slice(startIndex, endIndex), [rows, startIndex, endIndex]);
+
+  const goToPage = (newPage) => {
+    const target = Math.min(Math.max(1, newPage), totalPages);
+    setPage(target);
+    const prefersReducedMotion = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    const behavior = prefersReducedMotion ? 'auto' : 'smooth';
+    requestAnimationFrame(() => {
+      window.scrollTo({ top: 0, left: 0, behavior });
+      document.documentElement?.scrollTo({ top: 0, left: 0, behavior });
+      document.body?.scrollTo({ top: 0, left: 0, behavior });
+    });
+  };
+
   const toggleSort = (key) => {
+    setPage(1);
     setSort((prev) =>
       prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'title' || key === 'provider' ? 'asc' : 'desc' }
     );
@@ -248,6 +273,7 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
     setError('');
     setRowState({});
     setSource('all');
+    setPage(1);
     setLoading(false);
     inputRef.current?.focus();
   };
@@ -303,101 +329,177 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
       {hasResults && (
         <div className="toolbar">
           <span className="toolbar-summary" role="status">
-            {loading ? 'Searching…' : `${rows.length} result${rows.length === 1 ? '' : 's'} for “${searchedTerm}”`}
+            {loading
+              ? 'Searching…'
+              : totalResults > pageSize
+              ? `Showing ${startIndex + 1}–${endIndex} of ${totalResults} results for “${searchedTerm}”`
+              : `${totalResults} result${totalResults === 1 ? '' : 's'} for “${searchedTerm}”`}
           </span>
-          {sources.length > 1 && (
-            <label className="select-wrap">
-              <span className="sr-only">Filter by source</span>
-              <select id="source-filter" value={source} onChange={(e) => setSource(e.target.value)}>
-                <option value="all">All sources ({sources.length})</option>
-                {sources.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
+          <div className="toolbar-actions">
+            {sources.length > 1 && (
+              <label className="select-wrap">
+                <span className="sr-only">Filter by source</span>
+                <select
+                  id="source-filter"
+                  value={source}
+                  onChange={(e) => {
+                    setSource(e.target.value);
+                    setPage(1);
+                  }}
+                >
+                  <option value="all">All sources ({sources.length})</option>
+                  {sources.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+            {totalResults > 20 && (
+              <label className="select-wrap">
+                <span className="sr-only">Results per page</span>
+                <select
+                  id="page-size-select"
+                  value={pageSize}
+                  onChange={(e) => {
+                    setPageSize(Number(e.target.value));
+                    setPage(1);
+                  }}
+                >
+                  <option value={20}>20 / page</option>
+                  <option value={25}>25 / page</option>
+                  <option value={50}>50 / page</option>
+                  <option value={100}>100 / page</option>
+                </select>
+              </label>
+            )}
+          </div>
         </div>
       )}
 
       {hasResults ? (
-        <div className={`table-wrap ${loading ? 'is-stale' : ''}`} aria-busy={loading}>
-          <table className="table results-table">
-            <thead>
-              <tr>
-                {COLUMNS.map((c) => (
-                  <th key={c.key} className={c.className} aria-sort={sort.key === c.key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-                    <button className="th-btn" onClick={() => toggleSort(c.key)}>
-                      {c.label}
-                      <span className={`sort-caret ${sort.key === c.key ? 'is-on' : ''}`}>{sort.key === c.key && sort.dir === 'asc' ? '▴' : '▾'}</span>
-                    </button>
+        <>
+          <div ref={tableRef} className={`table-wrap ${loading ? 'is-stale' : ''}`} aria-busy={loading}>
+            <table className="table results-table">
+              <thead>
+                <tr>
+                  {COLUMNS.map((c) => (
+                    <th key={c.key} className={c.className} aria-sort={sort.key === c.key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                      <button className="th-btn" onClick={() => toggleSort(c.key)}>
+                        {c.label}
+                        <span className={`sort-caret ${sort.key === c.key ? 'is-on' : ''}`}>{sort.key === c.key && sort.dir === 'asc' ? '▴' : '▾'}</span>
+                      </button>
+                    </th>
+                  ))}
+                  <th className="col-actions">
+                    <span className="sr-only">Actions</span>
                   </th>
-                ))}
-                <th className="col-actions">
-                  <span className="sr-only">Actions</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((t) => {
-                const state = rowState[t._id];
-                const busy = ['adding', 'opening', 'copying'].includes(state);
-                return (
-                  <tr key={t._id}>
-                    <td className="col-name">
-                      <span className="cell-title" title={t.title}>
-                        {t.title}
-                      </span>
-                    </td>
-                    <td className="col-num mono">{t.size || '—'}</td>
-                    <td className={`col-num mono ${seedClass(t.seeds || 0)}`}>{t.seeds ?? 0}</td>
-                    <td className="col-num mono muted">{t.peers ?? 0}</td>
-                    <td className="col-source">
-                      <span className="provider-pill">{t.provider}</span>
-                    </td>
-                    <td className="col-actions">
-                      <div className="row-actions">
-                        <button
-                          className={`btn btn-sm ${state === 'added' ? 'btn-done' : 'btn-outline'}`}
-                          onClick={() => handleAction(t, 'adding')}
-                          disabled={busy || state === 'added'}
-                          aria-label={`${state === 'added' ? 'Added' : 'Download'} ${t.title}`}
-                        >
-                          {state === 'added' ? (
-                            <>
-                              <Icon name="check" size={14} /> Added
-                            </>
-                          ) : state === 'adding' ? (
-                            'Adding…'
+                </tr>
+              </thead>
+              <tbody>
+                {paginatedRows.map((t) => {
+                  const state = rowState[t._id];
+                  const busy = ['adding', 'opening', 'copying'].includes(state);
+                  return (
+                    <tr key={t._id}>
+                      <td className="col-name">
+                        <span className="cell-title" title={t.title}>
+                          {t.title}
+                        </span>
+                      </td>
+                      <td className="col-num mono">{t.size || '—'}</td>
+                      <td className={`col-num mono ${seedClass(t.seeds || 0)}`}>{t.seeds ?? 0}</td>
+                      <td className="col-num mono muted">{t.peers ?? 0}</td>
+                      <td className="col-source">
+                        <span className="provider-pill">{t.provider}</span>
+                      </td>
+                      <td className="col-actions">
+                        <div className="row-actions">
+                          <button
+                            className={`btn btn-sm ${state === 'added' ? 'btn-done' : 'btn-outline'}`}
+                            onClick={() => handleAction(t, 'adding')}
+                            disabled={busy || state === 'added'}
+                            aria-label={`${state === 'added' ? 'Added' : 'Download'} ${t.title}`}
+                          >
+                            {state === 'added' ? (
+                              <>
+                                <Icon name="check" size={14} /> Added
+                              </>
+                            ) : state === 'adding' ? (
+                              'Adding…'
+                            ) : (
+                              <>
+                                <Icon name="download" size={14} /> Download
+                              </>
+                            )}
+                          </button>
+                          <button className="icon-btn" disabled={busy} onClick={() => handleAction(t, 'opening')} title="Open magnet in desktop client" aria-label={`Open magnet for ${t.title}`}>
+                            <Icon name="magnet" />
+                          </button>
+                          <button className="icon-btn" disabled={busy} onClick={() => handleAction(t, 'copying')} title="Copy magnet link" aria-label={`Copy magnet link for ${t.title}`}>
+                            <Icon name="copy" />
+                          </button>
+                          {t.link ? (
+                            <a className="icon-btn" href={t.link} target="_blank" rel="noreferrer" download title="Download .torrent file" aria-label="Download .torrent file">
+                              <Icon name="file" />
+                            </a>
                           ) : (
-                            <>
-                              <Icon name="download" size={14} /> Download
-                            </>
+                            <span className="icon-btn is-placeholder" />
                           )}
-                        </button>
-                        <button className="icon-btn" disabled={busy} onClick={() => handleAction(t, 'opening')} title="Open magnet in desktop client" aria-label={`Open magnet for ${t.title}`}>
-                          <Icon name="magnet" />
-                        </button>
-                        <button className="icon-btn" disabled={busy} onClick={() => handleAction(t, 'copying')} title="Copy magnet link" aria-label={`Copy magnet link for ${t.title}`}>
-                          <Icon name="copy" />
-                        </button>
-                        {t.link ? (
-                          <a className="icon-btn" href={t.link} target="_blank" rel="noreferrer" download title="Download .torrent file" aria-label="Download .torrent file">
-                            <Icon name="file" />
-                          </a>
-                        ) : (
-                          <span className="icon-btn is-placeholder" />
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          {rows.length === 0 && <p className="empty">No results match the current source filter.</p>}
-        </div>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {rows.length === 0 && <p className="empty">No results match the current source filter.</p>}
+          </div>
+
+          {totalPages > 1 && (
+            <nav className="pagination" aria-label="Search results pagination">
+              <button
+                type="button"
+                className="btn btn-outline btn-sm pagination-btn pagination-prev"
+                onClick={() => goToPage(currentPage - 1)}
+                disabled={currentPage === 1}
+                aria-label="Previous page"
+              >
+                Previous
+              </button>
+              <div className="pagination-pages">
+                {getPageNumbers(currentPage, totalPages).map((p, idx) =>
+                  typeof p === 'number' ? (
+                    <button
+                      key={`page-${p}`}
+                      type="button"
+                      className={`pagination-page ${p === currentPage ? 'is-active' : ''}`}
+                      onClick={() => goToPage(p)}
+                      aria-label={`Page ${p}`}
+                      aria-current={p === currentPage ? 'page' : undefined}
+                    >
+                      {p}
+                    </button>
+                  ) : (
+                    <span key={`ellipsis-${idx}`} className="pagination-ellipsis" aria-hidden="true">
+                      &hellip;
+                    </span>
+                  )
+                )}
+              </div>
+              <button
+                type="button"
+                className="btn btn-outline btn-sm pagination-btn pagination-next"
+                onClick={() => goToPage(currentPage + 1)}
+                disabled={currentPage === totalPages}
+                aria-label="Next page"
+              >
+                Next
+              </button>
+            </nav>
+          )}
+        </>
       ) : loading ? (
         <p className="empty" role="status">Searching…</p>
       ) : !error && searchedTerm && query.trim() ? (

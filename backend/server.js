@@ -9,7 +9,6 @@ const __dirname = path.dirname(__filename);
 import net from 'node:net';
 import dgram from 'node:dgram';
 import { spawn, execFile } from 'node:child_process';
-import TorrentSearchApi from 'torrent-search-api';
 import WebTorrent from 'webtorrent';
 import Wire from 'bittorrent-protocol';
 import peerid from 'bittorrent-peerid';
@@ -39,7 +38,7 @@ import {
   launchMediaPlayer,
 } from './lib/playability.js';
 import { AutoUpdater } from './lib/updater.js';
-import { buildSearchQueries, filterAndDeduplicateResults } from './lib/search.js';
+import { searchFederated, resolveMagnet } from './lib/indexer.js';
 
 function parseClientString(v) {
   if (!v) return 'Unknown';
@@ -426,10 +425,6 @@ app.post('/api/updater/restart', async (_req, res) => {
   }
 });
 
-// Keep the configured provider explicit so unavailable indexes do not delay search.
-TorrentSearchApi.disableAllProviders();
-TorrentSearchApi.enableProvider('ThePirateBay');
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -645,7 +640,7 @@ async function addTorrent(magnetURI, opts = {}) {
 // API Routes
 // ---------------------------------------------------------------------------
 
-// 1. Search enabled indexers with bounded provider timeouts & wildcard prefix expansion
+// 1. Search federated indexers with bounded provider timeouts and deduplication
 app.get('/api/search', async (req, res) => {
   const query = req.query.q;
   if (!query) {
@@ -653,36 +648,20 @@ app.get('/api/search', async (req, res) => {
   }
 
   try {
-    const queries = buildSearchQueries(query);
-    const activeProviders = TorrentSearchApi.getActiveProviders();
-    const searchPromises = [];
-
     const rawLimit = req.query.limit ? parseInt(req.query.limit, 10) : undefined;
     const searchLimit = Number.isInteger(rawLimit) && rawLimit > 0 ? rawLimit : undefined;
 
-    for (const provider of activeProviders) {
-      for (const q of queries) {
-        searchPromises.push(
-          (async () => {
-            try {
-              const timeoutPromise = new Promise((_, reject) =>
-                setTimeout(() => reject(new Error('Provider timeout')), 3500)
-              );
-              const searchPromise = TorrentSearchApi.search([provider.name], q, 'All', searchLimit);
-              const results = await Promise.race([searchPromise, timeoutPromise]);
-              return Array.isArray(results) ? results : [];
-            } catch (err) {
-              console.warn('[search] Provider search timed out or failed:', provider.name, err.message);
-              return [];
-            }
-          })()
-        );
-      }
-    }
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 7500);
 
-    const resultsByProvider = await Promise.all(searchPromises);
-    const sorted = filterAndDeduplicateResults(resultsByProvider.flat());
-    res.json(sorted);
+    const results = await searchFederated(query, {
+      limit: searchLimit,
+      bitSearchPages: 4,
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    res.json(results);
   } catch (error) {
     console.error('Search error:', error);
     res.status(500).json({ error: 'Failed to search torrents' });
@@ -707,12 +686,8 @@ app.get('/api/magnet', async (req, res) => {
     return res.json({ magnet });
   }
 
-  if (!provider) {
-    return res.status(400).json({ error: 'Provider is required to resolve magnet' });
-  }
-
   try {
-    const resolvedMagnet = await TorrentSearchApi.getMagnet({ provider, desc, link });
+    const resolvedMagnet = await resolveMagnet({ provider, desc, link });
     if (!resolvedMagnet) {
       return res.status(404).json({ error: 'Magnet link could not be found' });
     }
@@ -727,9 +702,9 @@ app.get('/api/magnet', async (req, res) => {
 app.post('/api/torrent/download', async (req, res) => {
   let { magnet, provider, desc, link } = req.body;
 
-  if (!magnet && provider && (desc || link)) {
+  if (!magnet && (desc || link)) {
     try {
-      magnet = await TorrentSearchApi.getMagnet({ provider, desc, link });
+      magnet = await resolveMagnet({ provider, desc, link });
     } catch (err) {
       return res.status(400).json({ error: 'Failed to resolve magnet: ' + err.message });
     }

@@ -58,6 +58,14 @@ if [ ! -f "$WIN_NODE_DATACHANNEL" ]; then
     rm -rf "/tmp/build" "/tmp/node_datachannel_win.tar.gz"
 fi
 
+echo "==> 4b. Bundling standalone Windows node.exe runtime..."
+WIN_NODE_EXE="$CACHE_DIR/node-v22.12.0-win-x64.exe"
+if [ ! -f "$WIN_NODE_EXE" ]; then
+    echo "Downloading official standalone Node.js win-x64 binary (v22.12.0)..."
+    curl -s -L "https://nodejs.org/dist/v22.12.0/win-x64/node.exe" -o "$WIN_NODE_EXE"
+fi
+cp "$WIN_NODE_EXE" "$STAGING_DIR/node.exe"
+
 echo "==> 5. Compiling Windows Win32 native launcher (Svorrent.exe)..."
 cp "$SCRIPTS_DIR/manifest.xml" "$BUILD_DIR/manifest.xml"
 cp "$SCRIPTS_DIR/launcher.rc" "$BUILD_DIR/launcher.rc"

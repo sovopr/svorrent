@@ -16,7 +16,12 @@
     "setup:tether": "sudo ./scripts/install-tetherd.sh",
     "uninstall:tether": "sudo ./scripts/uninstall-tetherd.sh"
   },
-  "keywords": ["torrent-engine", "network-bonding", "tethering", "streaming"],
+  "keywords": [
+    "torrent-engine",
+    "network-bonding",
+    "tethering",
+    "streaming"
+  ],
   "author": "",
   "license": "MIT",
   "type": "module",
@@ -24,7 +29,6 @@
     "bittorrent-peerid": "^2.0.2",
     "express": "^5.3.0",
     "geoip-lite": "^2.0.3",
-    "torrent-search-api": "^2.1.4",
     "webtorrent": "^3.0.21"
   },
   "devDependencies": {

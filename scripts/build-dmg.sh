@@ -122,6 +122,19 @@ echo "==> 5. Compiling Native macOS Cocoa Launcher..."
     "$ROOT_DIR/scripts/launcher_mac.m" -o "$APP_BUNDLE/Contents/MacOS/Svorrent"
 chmod +x "$APP_BUNDLE/Contents/MacOS/Svorrent"
 
+echo "==> 5b. Bundling standalone Node.js runtime into application bundle..."
+NODE_BUNDLE_TARGET="$APP_BUNDLE/Contents/MacOS/node"
+if [ -n "$SVORRENT_BUNDLED_NODE" ] && [ -f "$SVORRENT_BUNDLED_NODE" ]; then
+    cp "$SVORRENT_BUNDLED_NODE" "$NODE_BUNDLE_TARGET"
+    chmod +x "$NODE_BUNDLE_TARGET"
+    echo "Bundled custom Node binary ($SVORRENT_BUNDLED_NODE) into $NODE_BUNDLE_TARGET"
+elif command -v node >/dev/null 2>&1; then
+    HOST_NODE="$(command -v node)"
+    cp "$HOST_NODE" "$NODE_BUNDLE_TARGET"
+    chmod +x "$NODE_BUNDLE_TARGET"
+    echo "Bundled host Node runtime ($HOST_NODE) into $NODE_BUNDLE_TARGET"
+fi
+
 echo "==> 6. Copying application assets..."
 cp -R "$ROOT_DIR/frontend/dist"/* "$APP_BUNDLE/Contents/Resources/app/frontend/dist/"
 cp -R "$ROOT_DIR/backend/server.js" "$APP_BUNDLE/Contents/Resources/app/backend/"
@@ -159,6 +172,9 @@ while IFS= read -r -d '' code_file; do
 done < <(find "$APP_BUNDLE/Contents/Resources/app/backend" -type f \
     \( -name '*.dylib' -o -name '*.node' -o -name '*.so' \) -print0)
 codesign "${SIGN_ARGS[@]}" "$APP_BUNDLE/Contents/Resources/app/backend/bin/svorrent-tetherd"
+if [ -f "$NODE_BUNDLE_TARGET" ]; then
+    codesign "${SIGN_ARGS[@]}" "$NODE_BUNDLE_TARGET"
+fi
 codesign "${SIGN_ARGS[@]}" "$APP_BUNDLE"
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 

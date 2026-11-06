@@ -33,6 +33,12 @@ if ($LASTEXITCODE -ne 0) { throw 'Windows launcher compilation failed' }
 $backend = Join-Path $staging 'backend'
 Copy-Item (Join-Path $root 'backend\server.js'), (Join-Path $root 'backend\package.json') $backend
 Copy-Item (Join-Path $root 'backend\lib'), (Join-Path $root 'backend\scripts'), (Join-Path $root 'backend\node_modules') $backend -Recurse
+
+# Bundle standalone node.exe into staging for zero-dependency desktop installation
+$nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+if ($nodeCmd -and $nodeCmd.Source) {
+    Copy-Item $nodeCmd.Source (Join-Path $staging 'node.exe') -Force
+}
 if ($SourceCommit) {
     @{ commit = $SourceCommit } |
         ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $backend 'build-info.json') -Encoding UTF8

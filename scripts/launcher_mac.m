@@ -51,6 +51,11 @@ static BOOL isServerListening(int port) {
         return bundledNode;
     }
 
+    NSString *macOSNode = [[bundle.bundlePath stringByAppendingPathComponent:@"Contents/MacOS"] stringByAppendingPathComponent:@"node"];
+    if ([[NSFileManager defaultManager] isExecutableFileAtPath:macOSNode]) {
+        return macOSNode;
+    }
+
     NSArray *candidates = @[
         @"/opt/homebrew/bin/node",
         @"/usr/local/bin/node",

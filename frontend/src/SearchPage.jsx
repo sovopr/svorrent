@@ -36,6 +36,15 @@ function validMagnet(value) {
   }
 }
 
+function formatSwarmCount(val) {
+  if (!Number.isFinite(val) || val <= 0) return 0;
+  if (val > 500000) {
+    const masked = val >>> 0;
+    return masked > 500000 ? 0 : masked;
+  }
+  return val;
+}
+
 export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = true }) {
   const [query, setQuery] = useState(initialQuery || '');
   const [results, setResults] = useState([]);
@@ -409,8 +418,8 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
                         </span>
                       </td>
                       <td className="col-num mono">{t.size || '—'}</td>
-                      <td className={`col-num mono ${seedClass(t.seeds || 0)}`}>{t.seeds ?? 0}</td>
-                      <td className="col-num mono muted">{t.peers ?? 0}</td>
+                      <td className={`col-num mono ${seedClass(formatSwarmCount(t.seeds))}`}>{formatSwarmCount(t.seeds)}</td>
+                      <td className="col-num mono muted">{formatSwarmCount(t.peers)}</td>
                       <td className="col-source">
                         <span className="provider-pill">{t.provider}</span>
                       </td>

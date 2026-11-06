@@ -823,6 +823,9 @@ main:focus-visible,
 
 .results-table .col-num {
   width: 82px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .results-table th.col-num:nth-child(3),

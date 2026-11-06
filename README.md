@@ -329,40 +329,38 @@ flowchart TD
 
 ---
 
-### Subsystem Architectural Specifications
+### Subsystem Architecture
 
-#### 1. Multi-Interface Socket Bonding & Hardware Discovery Engine
-Traditional operating systems bind outbound traffic to a single default gateway determined by routing metrics. Svorrent overcomes this bottleneck across both desktop and mobile platforms:
-- **Discrete Socket Binding:** On macOS and Windows, `backend/lib/networks.js` queries active IPv4 adapters and binds individual peer sockets to explicit local IP addresses (`net.Socket.connect({ localAddress })` and `dgram.createSocket().bind({ address })`), striping BitTorrent peer wires across multiple physical networks. On Android, `MultiNetworkBondingManager.kt` registers simultaneous network requests via `ConnectivityManager.requestNetwork` for both `TRANSPORT_WIFI` and `TRANSPORT_CELLULAR`, using `Network.bindSocket()` to maintain active data links on both radios.
-- **Dynamic Throughput-Weighted Allocation:** Rather than blind round-robin, Svorrent establishes a baseline of 4 peer connections per active adapter, after which newly recruited peers are distributed proportionally based on each adapter's measured moving download speed (`downSpeed`). This prevents high-latency or metered cellular links from bottlenecking high-bandwidth Wi-Fi or Ethernet channels.
-- **Hardware Interface Classification:** Hardware discovery evaluates interface identifiers against prioritized rules, ensuring physical USB Ethernet dongles (`usb.*(lan|ethernet)`) are classified as Ethernet rather than mistaken for mobile tethering, while identifying virtual VPN tunnels (`/vpn|wireguard|wg\d*|tailscale|utun|tun\d*|tap\d*|ppp|ipsec/`) for dedicated UI badging.
-- **Cellular Keepalive & Latency Backpressure:** Proactive background UDP heartbeats prevent mobile hotspot interfaces from idling on macOS, while latency monitoring applies backpressure to cellular piece pipelines whenever round-trip time spikes indicate queue congestion.
+#### 1. Multi-Interface Network Bonding
+Combines Wi-Fi, Ethernet, and Mobile Data to pool bandwidth across physical connections:
+- **Discrete Socket Binding**: Binds peer connections directly to specific local network adapters on desktop and mobile (`ConnectivityManager` on Android), bypassing single-gateway operating system limits.
+- **Throughput-Weighted Routing**: Distributes new peers proportionally to each connection's measured download speed, preventing slower cellular connections from bottlenecking fast Wi-Fi.
+- **Smart Interface Classification**: Categorizes Wi-Fi, Ethernet, Cellular, Bridge, and VPN tunnel adapters (`WireGuard`, `Tailscale`, `utun`) with dedicated status badges in the UI.
+- **Connection Keepalive**: Sends proactive background heartbeats to prevent mobile hotspots from idling during active downloads.
 
-#### 2. Sequential Piece Assembly & Buffer-Free Playability Engine
-Unlike standard BitTorrent clients that download pieces in rarest-first order, Svorrent implements an accelerated sequential streaming pipeline:
-- **Rolling Critical Frontier:** Enforces sequential piece acquisition from chunk 0 through N while continuously maintaining a 16-piece rolling forward lookahead window marked critical. This guarantees that unverified chunks immediately ahead of the video player cursor arrive before playback consumption.
-- **Dynamic Block Pipeline Acceleration:** The per-wire request pipeline (`reqq`) dynamically scales 2.5× based on real-time peer throughput (between a 256 KB/s floor and an 8 MB/s ceiling), eliminating request starvation on high-RTT connections.
-- **In-Memory MP4 Atom Inspection:** Analyzes `ftyp` and `moov` container headers before download completion (`hasMoovAtBeginning`). If an MP4 container places its index atom at the tail of the file, tail chunks are immediately injected into the critical acquisition set.
-- **Predictive Playability Equation:** Evaluates playback safety using exponential moving average (EMA) throughput smoothing:
-  $$\text{SafeDownloadedTarget} = \text{TotalLength} - \frac{\text{EffectiveSpeed} \times \text{Duration}}{\text{SafetyMargin}}$$
-  Once the downloaded buffer exceeds the target, Svorrent launches the growing file in VLC or the default system media player with zero mid-stream buffering.
+#### 2. Sequential Streaming & Playability Engine
+Prioritizes download pieces to enable instant, buffer-free video playback:
+- **Rolling Critical Frontier**: Downloads chunks sequentially (piece 0 to N) while keeping a 16-piece lookahead window marked critical ahead of the video player cursor.
+- **Pipeline Acceleration**: Dynamically scales the block request pipeline up to 2.5× with peer speed to prevent stalling on higher-latency connections.
+- **Fast Container Inspection**: Checks MP4 headers (`moov` atoms) on the fly to verify index data before starting playback.
+- **Buffer Safety Equation**: Continuously calculates when enough buffer exists to play without interruptions, launching VLC or your default player the moment it is safe.
 
-#### 3. Federated Multi-Source Search & Censorship Resistance
-- **Concurrent Scraping Pipeline:** `search.js` and `SearchRepository.kt` concurrently dispatch asynchronous queries across BitSearch, The Pirate Bay (apibay API), Torrents.csv, and Nyaa RSS with isolated per-source timeouts.
-- **Anti-Censorship DNS-over-HTTPS (DoH):** In environments where ISPs hijack or poison UDP/53 DNS traffic to block torrent trackers and indexers, Svorrent routes queries over RFC 8484 wire-format HTTPS queries to Cloudflare (`1.1.1.1`) and Google (`8.8.8.8`).
-- **Swarm Sanitization & Un-Capped Pagination:** Enforces 64-bit integer overflow protection against corrupted tracker counters, applies single-pass HTML entity sanitization to prevent double-unescaping vulnerabilities, and provides un-capped result windows.
+#### 3. Federated Search & Anti-Censorship
+- **Multi-Source Scraping**: Concurrently queries BitSearch, The Pirate Bay, Torrents.csv, and Nyaa with un-capped pagination.
+- **DNS-over-HTTPS (DoH)**: Resolves tracker and indexer domains over encrypted Cloudflare and Google DoH, bypassing local ISP DNS censorship.
+- **Swarm Integrity**: Masks 64-bit tracker counter overflows and sanitizes HTML entities to ensure clean, valid magnet metadata.
 
-#### 4. Host Isolation, Security Sandboxing & Origin Firewall
-- **Loopback Origin Firewall:** `local-access.js` validates every inbound HTTP connection, restricting API access to `127.0.0.1` and `localhost`. It strictly validates HTTP `Host` headers, checks request `Origin` headers against allowed origins, and responds to W3C Private Network Access (PNA) preflight checks.
-- **SafePath Directory Containment:** All file paths received via the API or torrent metadata are verified using `safe-path.js`, which resolves canonical real paths (`fs.realpath`) to guarantee that disk writes remain strictly sandboxed within `~/Downloads/Svorrent/`, eliminating path traversal vulnerabilities (`../`).
+#### 4. Security Sandboxing & Origin Protection
+- **Loopback Firewall**: Restricts backend API access strictly to `localhost` and `127.0.0.1`, verifying Host and Origin headers against unauthorized cross-site requests.
+- **SafePath Directory Containment**: Validates all file targets against canonical real paths, preventing directory traversal outside the `~/Downloads/Svorrent` folder.
 
-#### 5. Atomic State Serialization & Fast Crash Recovery
-- **Bitfield Checkpointing:** Verified piece bitfields and torrent runtime metadata are serialized atomically to `~/.svorrent/session.json` using atomic temporary file renaming (`renameSync`), preventing file corruption during unexpected power cuts or system restarts.
-- **Orphan & Halfway Download Scanner:** On startup, `scanner.js` traverses the local download directory to reconcile partially downloaded files against known metadata, allowing instant one-click resumption without re-downloading existing verified blocks.
+#### 5. Session Checkpointing & Crash Recovery
+- **Atomic State Persistence**: Saves verified piece bitfields and torrent state atomically to `~/.svorrent/session.json`, preventing corruption during unexpected shutdowns.
+- **Halfway File Recovery**: Scans the download directory on launch to recognize partial downloads and resume immediately without re-checking verified blocks.
 
-#### 6. Dual-Platform Native Client Architecture
-- **Desktop Process Supervisor:** Compiled native launchers (`launcher_mac.m` Cocoa on macOS, `launcher.c` Win32 on Windows) bundle a standalone Node.js runtime, supervisor-polling port 3001 on startup. Stale or hung processes from older builds are terminated via graceful SIGTERM with SIGKILL fallback before launching the current backend.
-- **Android Background Engine:** `SvorrentEngineService.kt` runs as an Android sticky foreground service holding a `PARTIAL_WAKE_LOCK`, ensuring background downloads and multi-network bonding persist smoothly when the screen turns off or the UI is minimized.
+#### 6. Dual-Platform Native Architecture
+- **Desktop Process Supervisor**: Compiled Cocoa (macOS) and Win32 (Windows) launchers bundle a standalone Node runtime, automatically managing background daemon startup and cleanup.
+- **Android Foreground Service**: Runs as a persistent foreground service with wake locks to ensure downloads and multi-network bonding continue seamlessly when the app is in the background.
 
 ---
 

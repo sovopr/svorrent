@@ -403,6 +403,38 @@ export async function stitchSplitDownload(sourcePath, targetPath, torrent, targe
   }
 }
 
+export function cleanupCandidateSource(candidate, targetPath) {
+  if (!candidate || !candidate.path) return;
+  const resolvedSrc = path.resolve(candidate.path);
+  const resolvedDst = targetPath ? path.resolve(targetPath) : null;
+
+  // Never delete if the source path happens to be the same file as target
+  if (resolvedDst && resolvedSrc === resolvedDst) return;
+
+  try {
+    if (fs.existsSync(resolvedSrc)) {
+      fs.unlinkSync(resolvedSrc);
+      console.log(`[browser-adoption] Cleaned up adopted browser source file: ${resolvedSrc}`);
+    }
+  } catch (err) {
+    console.warn(`[browser-adoption] Could not remove candidate file ${resolvedSrc}:`, err.message);
+  }
+
+  // If candidate was inside a Safari bundle, remove bundle directory if empty or completed
+  if (candidate.bundleDir) {
+    const resolvedBundle = path.resolve(candidate.bundleDir);
+    if (resolvedDst && (resolvedBundle === path.dirname(resolvedDst) || resolvedBundle === resolvedDst)) return;
+    try {
+      if (fs.existsSync(resolvedBundle)) {
+        fs.rmSync(resolvedBundle, { recursive: true, force: true });
+        console.log(`[browser-adoption] Cleaned up adopted Safari bundle directory: ${resolvedBundle}`);
+      }
+    } catch (err) {
+      console.warn(`[browser-adoption] Could not remove bundle dir ${resolvedBundle}:`, err.message);
+    }
+  }
+}
+
 export function transferCandidateFile(sourcePath, targetPath, options = {}) {
   const mode = options.mode || 'auto'; // 'auto', 'clone', 'move', 'copy'
 
@@ -488,24 +520,9 @@ export async function adoptBrowserDownload(torrent, candidate, options = {}) {
 
   // 5. Rescan and verify piece SHA-1 hashes
   return new Promise((resolve, reject) => {
-    if (typeof torrent.rescanFiles === 'function') {
-      torrent.rescanFiles((err) => {
-        if (!wasPaused && typeof torrent.resume === 'function') {
-          try { torrent.resume(); } catch {}
-        }
-        if (err) return reject(err);
-        resolve({
-          success: true,
-          method: transferMethod,
-          bytesAdopted: candidate.size,
-          progress: torrent.progress || 0,
-          downloaded: torrent.downloaded || 0,
-          browser: candidate.browser,
-        });
-      });
-    } else {
-      if (!wasPaused && typeof torrent.resume === 'function') {
-        try { torrent.resume(); } catch {}
+    const handleSuccess = () => {
+      if (options.cleanupSource !== false) {
+        cleanupCandidateSource(candidate, targetPath);
       }
       resolve({
         success: true,
@@ -515,6 +532,21 @@ export async function adoptBrowserDownload(torrent, candidate, options = {}) {
         downloaded: torrent.downloaded || 0,
         browser: candidate.browser,
       });
+    };
+
+    if (typeof torrent.rescanFiles === 'function') {
+      torrent.rescanFiles((err) => {
+        if (!wasPaused && typeof torrent.resume === 'function') {
+          try { torrent.resume(); } catch {}
+        }
+        if (err) return reject(err);
+        handleSuccess();
+      });
+    } else {
+      if (!wasPaused && typeof torrent.resume === 'function') {
+        try { torrent.resume(); } catch {}
+      }
+      handleSuccess();
     }
   });
 }

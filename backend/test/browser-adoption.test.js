@@ -10,6 +10,7 @@ import {
   findBestCandidateForTorrent,
   adoptBrowserDownload,
   transferCandidateFile,
+  cleanupCandidateSource,
   closeStoreFiles,
   reopenTorrentStore,
   stitchSplitDownload,
@@ -124,6 +125,38 @@ test('adoptBrowserDownload transfers file and triggers rescan', async () => {
     assert.equal(rescanned, true);
     assert.equal(result.progress, 0.5);
     assert.equal(fs.existsSync(path.join(destDir, filename)), true);
+    assert.equal(fs.existsSync(srcFile), false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('cleanupCandidateSource safely deletes candidate files and bundles', () => {
+  const tmpDir = path.join(os.tmpdir(), `svorrent-test-cleanup-${Date.now()}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  try {
+    const srcFile = path.join(tmpDir, 'download.part');
+    const targetFile = path.join(tmpDir, 'download.mkv');
+    fs.writeFileSync(srcFile, 'data');
+    fs.writeFileSync(targetFile, 'data');
+
+    // Safe cleanup deletes source but never touches target
+    cleanupCandidateSource({ path: srcFile }, targetFile);
+    assert.equal(fs.existsSync(srcFile), false);
+    assert.equal(fs.existsSync(targetFile), true);
+
+    // Safeguard: does not delete if source matches target
+    cleanupCandidateSource({ path: targetFile }, targetFile);
+    assert.equal(fs.existsSync(targetFile), true);
+
+    // Cleans up Safari bundle directory
+    const bundleDir = path.join(tmpDir, 'movie.download');
+    fs.mkdirSync(bundleDir, { recursive: true });
+    const bundleInner = path.join(bundleDir, 'movie.mkv');
+    fs.writeFileSync(bundleInner, 'movie');
+    cleanupCandidateSource({ path: bundleInner, bundleDir }, targetFile);
+    assert.equal(fs.existsSync(bundleDir), false);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

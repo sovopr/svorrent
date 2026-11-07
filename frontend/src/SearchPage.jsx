@@ -259,15 +259,10 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
           notify('Added to downloads.');
           onDownloadAdded?.();
         }
-      } else {
+      } else if (action === 'opening') {
         const magnet = await resolveMagnet(t, controller);
-        if (!isCurrent(t, controller)) return;
-        if (!active.current) return;
-        if (action === 'opening') window.location.assign(magnet);
-        else {
-          await navigator.clipboard.writeText(magnet);
-          if (isCurrent(t, controller)) notify('Magnet link copied');
-        }
+        if (!isCurrent(t, controller) || !active.current) return;
+        window.location.assign(magnet);
       }
     } catch (err) {
       setRow(t, controller, previous || null);
@@ -415,7 +410,7 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
               <tbody>
                 {paginatedRows.map((t) => {
                   const state = rowState[t._id];
-                  const busy = ['adding', 'opening', 'copying'].includes(state);
+                  const busy = state === 'adding' || state === 'opening';
                   return (
                     <tr key={t._id}>
                       <td className="col-name">
@@ -452,13 +447,6 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
                           <button className="icon-btn" disabled={busy} onClick={() => handleAction(t, 'opening')} title="Open magnet in desktop client" aria-label={`Open magnet for ${t.title}`}>
                             <Icon name="magnet" />
                           </button>
-                          {t.link ? (
-                            <a className="icon-btn" href={t.link} target="_blank" rel="noreferrer" download title="Download .torrent file" aria-label="Download .torrent file">
-                              <Icon name="file" />
-                            </a>
-                          ) : (
-                            <span className="icon-btn is-placeholder" />
-                          )}
                         </div>
                       </td>
                     </tr>
@@ -519,7 +507,7 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
       ) : (
         !error && (
           <p className="empty">
-            Search by name. Choose a result to download or copy its magnet link.
+            Search by name. Choose a result to download.
           </p>
         )
       )}

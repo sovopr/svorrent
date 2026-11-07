@@ -834,7 +834,7 @@ main:focus-visible,
 }
 
 .results-table .col-actions {
-  width: 214px;
+  width: 160px;
 }
 
 .seeds-good {
@@ -1133,6 +1133,7 @@ main:focus-visible,
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
 }
 
 .stat-label {
@@ -1145,6 +1146,7 @@ main:focus-visible,
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  min-width: 0;
 }
 
 .stat-value {
@@ -1152,6 +1154,7 @@ main:focus-visible,
   font-weight: 600;
   color: var(--text);
   line-height: 1.25;
+  white-space: nowrap;
 }
 
 .stat-unit {
@@ -1217,39 +1220,40 @@ main:focus-visible,
 }
 
 .adapters-table .col-iface {
-  width: 210px;
+  width: auto;
+  min-width: 170px;
 }
 
 .adapters-table .col-type {
-  width: 90px;
+  width: 82px;
 }
 
 .adapters-table .col-ip {
-  width: 130px;
+  width: 124px;
 }
 
 .adapters-table .col-download {
-  width: 155px;
+  width: 150px;
 }
 
 .adapters-table .col-upload {
-  width: 90px;
+  width: 150px;
 }
 
 .adapters-table .col-share {
-  width: 70px;
-}
-
-.adapters-table .col-data {
-  width: 90px;
-}
-
-.adapters-table .col-peers {
   width: 64px;
 }
 
+.adapters-table .col-data {
+  width: 84px;
+}
+
+.adapters-table .col-peers {
+  width: 58px;
+}
+
 .adapters-table .col-actions {
-  width: 74px;
+  width: 68px;
   text-align: right;
   padding-right: 14px;
 }
@@ -2447,7 +2451,7 @@ main:focus-visible,
     display: block;
   }
   .results-table .col-actions {
-    width: 128px;
+    width: 88px;
   }
   .results-table .row-actions .btn {
     width: 26px;
@@ -2482,12 +2486,13 @@ main:focus-visible,
   }
   .adapters-table .col-iface {
     width: auto;
+    min-width: 0;
   }
   .adapters-table .col-download {
     width: 125px;
   }
   .adapters-table .col-upload {
-    width: 78px;
+    width: 125px;
   }
   .adapters-table .col-actions {
     width: 58px;
@@ -2496,14 +2501,19 @@ main:focus-visible,
 }
 
 @media (max-width: 480px) {
-  .adapters-table .col-download {
-    width: 82px;
+  .stat-value-row .mini-sparkline,
+  .stat-value-row .sparkline-placeholder {
+    width: 48px;
   }
-  .adapters-table .col-download .mini-sparkline {
-    display: none;
-  }
+  .adapters-table .col-download,
   .adapters-table .col-upload {
-    width: 68px;
+    width: 76px;
+  }
+  .adapters-table .col-download .mini-sparkline,
+  .adapters-table .col-upload .mini-sparkline,
+  .adapters-table .col-download .sparkline-placeholder,
+  .adapters-table .col-upload .sparkline-placeholder {
+    display: none;
   }
 }
 

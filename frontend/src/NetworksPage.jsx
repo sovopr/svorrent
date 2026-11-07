@@ -34,7 +34,7 @@ function MiniSparkline({ data = [], color = '#5b8dee', height = 18, width = 64 }
   }).join(' ');
 
   return (
-    <svg width={width} height={height} className="mini-sparkline" aria-hidden="true">
+    <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} className="mini-sparkline" aria-hidden="true">
       <polyline
         fill="none"
         stroke={color}
@@ -58,6 +58,7 @@ export function NetworksPage({ notify, isActive = true }) {
     bondedCount: 0,
     connectedCount: 0,
     aggregateHistory: [],
+    aggregateUpHistory: [],
   });
   const [loading, setLoading] = useState(true);
   const [peakSpeed, setPeakSpeed] = useState(0);
@@ -192,6 +193,7 @@ export function NetworksPage({ notify, isActive = true }) {
     bondedCount = 0,
     connectedCount = 0,
     aggregateHistory = [],
+    aggregateUpHistory = [],
   } = data;
 
   const selfAssignedInterfaces = interfaces.filter((i) => i.statusReason === 'link-local');
@@ -292,7 +294,10 @@ export function NetworksPage({ notify, isActive = true }) {
 
         <div>
           <span className="stat-label">Upload</span>
-          <span className="stat-value mono">{formatSpeed(totalUpSpeed)}</span>
+          <div className="stat-value-row">
+            <span className="stat-value mono">{formatSpeed(totalUpSpeed)}</span>
+            <MiniSparkline data={aggregateUpHistory} color="#57ab72" width={68} height={18} />
+          </div>
           <span className="stat-meta mono muted">
             {totalPeers} active peer{totalPeers === 1 ? '' : 's'}
           </span>
@@ -385,7 +390,12 @@ export function NetworksPage({ notify, isActive = true }) {
                           <MiniSparkline data={iface.history} color={isOnline ? color : '#3a3b40'} width={52} height={16} />
                         </div>
                       </td>
-                      <td className="col-num col-upload mono muted">{formatSpeed(iface.upSpeed)}</td>
+                      <td className="col-num col-upload">
+                        <div className="speed-with-sparkline">
+                          <span className="mono muted">{formatSpeed(iface.upSpeed)}</span>
+                          <MiniSparkline data={iface.upHistory} color={isOnline ? color : '#3a3b40'} width={52} height={16} />
+                        </div>
+                      </td>
                       <td className="col-num col-share col-hide-md mono muted">
                         {!iface.enabled ? 'Off' : totalDownSpeed > 0 ? `${share}%` : '—'}
                       </td>

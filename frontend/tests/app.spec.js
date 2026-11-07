@@ -38,6 +38,7 @@ test.describe('Svorrent Web End-to-End Application Checks', () => {
     await expect(page).toHaveURL(/.*networks/);
     await expect(page).toHaveTitle(/Networks · Svorrent/);
     await expect(page.locator('#refresh-networks')).toBeVisible();
+    await expect(page.locator('.network-kpi-grid .mini-sparkline')).toHaveCount(2);
 
     // 5. Switch back to Search tab
     await page.click('#nav-search');

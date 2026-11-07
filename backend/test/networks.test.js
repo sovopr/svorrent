@@ -83,3 +83,67 @@ test('classifyInterface accurately categorizes standard, cellular, bridge, and V
   assert.equal(classifyInterface(undefined, undefined), 'other');
 });
 
+test('tick and getSnapshot track per-interface upHistory and aggregateUpHistory across active adapters', () => {
+  const originalNetworkInterfaces = os.networkInterfaces;
+  os.networkInterfaces = () => ({
+    en0: [{ family: 'IPv4', internal: false, address: '10.0.0.5' }],
+    en7: [{ family: 'IPv4', internal: false, address: '172.20.10.2' }],
+  });
+  try {
+    const wireWifi = {
+      destroyed: false,
+      conn: { localAddress: '10.0.0.5' },
+      downloadSpeed: () => 4096,
+      uploadSpeed: () => 2048,
+    };
+    const wireCell = {
+      destroyed: false,
+      conn: { localAddress: '172.20.10.2' },
+      downloadSpeed: () => 8192,
+      uploadSpeed: () => 1024,
+    };
+    const client = {
+      maxConns: 120,
+      torrents: [{
+        destroyed: false,
+        paused: false,
+        done: false,
+        downloadSpeed: 12288,
+        uploadSpeed: 3072,
+        wires: [wireWifi, wireCell],
+      }],
+    };
+    const manager = Object.create(NetworkManager.prototype);
+    manager.getClient = () => client;
+    manager.hardwarePorts = new Map([['en0', 'Wi-Fi'], ['en7', 'iPhone USB']]);
+    manager.disabledIds = new Set();
+    manager.stats = new Map();
+    manager.wireToInterface = new WeakMap();
+    manager.socketToInterface = new WeakMap();
+    manager.wireToSocket = new WeakMap();
+    manager.baseMaxConns = 120;
+    manager.roundRobinIndex = 0;
+
+    manager.tick();
+    const snap = manager.getSnapshot();
+    assert.equal(snap.totalDownSpeed, 12288);
+    assert.equal(snap.totalUpSpeed, 3072);
+    assert.equal(snap.aggregateHistory.length, 24);
+    assert.equal(snap.aggregateUpHistory.length, 24);
+    assert.equal(snap.aggregateHistory.at(-1), 12288);
+    assert.equal(snap.aggregateUpHistory.at(-1), 3072);
+
+    const wifi = snap.interfaces.find((i) => i.id === 'en0');
+    const cell = snap.interfaces.find((i) => i.id === 'en7');
+    assert.equal(wifi.upHistory.at(-1), 2048);
+    assert.equal(cell.upHistory.at(-1), 1024);
+
+    // Disabling cellular excludes its upload history from aggregateUpHistory
+    manager.disabledIds.add('en7');
+    const disabledSnap = manager.getSnapshot();
+    assert.equal(disabledSnap.aggregateUpHistory.at(-1), 2048);
+  } finally {
+    os.networkInterfaces = originalNetworkInterfaces;
+  }
+});
+

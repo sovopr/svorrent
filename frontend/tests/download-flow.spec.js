@@ -23,7 +23,7 @@ test('search, download, pause, play, resume, and remove work in the UI', async (
 
   await page.route('**/api/search?*', async (route) => {
     await route.fulfill({
-      json: [{ title: item.name, size: '128 KB', seeds: 1, peers: 1, provider: 'Local test', magnet }],
+      json: [{ title: item.name, size: '128 KB', seeds: 1, peers: 1, provider: 'Local test', magnet, link: 'https://example.com/test.torrent' }],
     });
   });
   await page.route('**/api/config', async (route) => {
@@ -54,6 +54,7 @@ test('search, download, pause, play, resume, and remove work in the UI', async (
   await page.getByRole('searchbox', { name: 'Search torrents' }).fill('test clip');
   await page.getByRole('button', { name: 'Search', exact: true }).click();
   await expect(page.getByRole('button', { name: `Download ${item.name}` })).toBeVisible();
+  await expect(page.locator('.results-table .is-placeholder, .results-table a[download]')).toHaveCount(0);
   await page.getByRole('button', { name: `Download ${item.name}` }).click();
   await expect(page.getByRole('button', { name: `Added ${item.name}` })).toBeVisible();
 

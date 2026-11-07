@@ -98,7 +98,7 @@ export class NetworkManager {
     this.socketToInterface = new WeakMap();
     this.wireToSocket = new WeakMap();
     this.baseMaxConns = this.getClient()?.maxConns || 120;
-    this.stats = new Map(); // id -> { downloaded: 0, uploaded: 0, currentDown: 0, currentUp: 0, peers: 0, history: [] }
+    this.stats = new Map(); // id -> { downloaded: 0, uploaded: 0, currentDown: 0, currentUp: 0, peers: 0, history: [], upHistory: [] }
     this.usbTetherDevice = { found: false, name: null };
     this.iosDevice = { found: false, detected: false, name: null, locked: false };
     this.isTetherDaemonRunning = false;
@@ -699,9 +699,12 @@ except Exception as e:
           currentUp: 0,
           peers: 0,
           history: Array(24).fill(0),
+          upHistory: Array(24).fill(0),
         });
       }
       const st = this.stats.get(id);
+      if (!Array.isArray(st.history)) st.history = Array(24).fill(0);
+      if (!Array.isArray(st.upHistory)) st.upHistory = Array(24).fill(0);
       const isEnabled = iface.connected && !this.disabledIds.has(id);
       const currentDown = isEnabled ? (speedMap.get(id) || 0) : 0;
       const currentUp = isEnabled ? (upMap.get(id) || 0) : 0;
@@ -716,6 +719,10 @@ except Exception as e:
       st.history.push(currentDown);
       if (st.history.length > 24) {
         st.history.shift();
+      }
+      st.upHistory.push(currentUp);
+      if (st.upHistory.length > 24) {
+        st.upHistory.shift();
       }
     }
   }
@@ -736,9 +743,12 @@ except Exception as e:
         currentUp: 0,
         peers: 0,
         history: Array(24).fill(0),
+        upHistory: Array(24).fill(0),
       };
       const currentDown = isEnabled ? (st.currentDown || 0) : 0;
       const currentUp = isEnabled ? (st.currentUp || 0) : 0;
+      const downHistory = Array.isArray(st.history) ? [...st.history] : Array(24).fill(0);
+      const upHistory = Array.isArray(st.upHistory) ? [...st.upHistory] : Array(24).fill(0);
 
       totalDown += currentDown;
       totalUp += currentUp;
@@ -757,7 +767,8 @@ except Exception as e:
         downloaded: st.downloaded,
         uploaded: st.uploaded,
         peers: st.peers || 0,
-        history: [...st.history],
+        history: downHistory,
+        upHistory,
       };
     });
 
@@ -771,15 +782,24 @@ except Exception as e:
     // Aggregate throughput history over time (last 24 data points)
     const historyLength = 24;
     const aggregateHistory = [];
+    const aggregateUpHistory = [];
     for (let t = 0; t < historyLength; t++) {
-      let tSum = 0;
+      let tDownSum = 0;
+      let tUpSum = 0;
       for (const item of enriched) {
-        if (item.connected && item.enabled && item.history) {
-          const val = item.history[item.history.length - historyLength + t];
-          if (typeof val === 'number') tSum += val;
+        if (item.connected && item.enabled) {
+          if (item.history) {
+            const downVal = item.history[item.history.length - historyLength + t];
+            if (typeof downVal === 'number') tDownSum += downVal;
+          }
+          if (item.upHistory) {
+            const upVal = item.upHistory[item.upHistory.length - historyLength + t];
+            if (typeof upVal === 'number') tUpSum += upVal;
+          }
         }
       }
-      aggregateHistory.push(tSum);
+      aggregateHistory.push(tDownSum);
+      aggregateUpHistory.push(tUpSum);
     }
 
     return {
@@ -791,6 +811,7 @@ except Exception as e:
       bondedCount: bondedInterfaces.length,
       connectedCount: enriched.filter((i) => i.connected).length,
       aggregateHistory,
+      aggregateUpHistory,
       usbTether: {
         detected: this.usbTetherDevice?.found || false,
         name: this.usbTetherDevice?.name || null,

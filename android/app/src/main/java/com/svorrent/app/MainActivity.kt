@@ -335,27 +335,29 @@ fun SvorrentApp() {
                             softWrap = false
                         )
 
-                        val isUpdateAvailable = updateState.status == "available"
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(4.dp))
-                                .border(
-                                    1.dp,
-                                    if (isUpdateAvailable) AccentBlue else BorderDark,
-                                    RoundedCornerShape(4.dp)
+                        val isUpdateAvailable = updateState.status in listOf("available", "downloading", "ready")
+                        if (isUpdateAvailable) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .border(1.dp, AccentBlue, RoundedCornerShape(4.dp))
+                                    .background(AccentBlue.copy(alpha = 0.15f))
+                                    .clickable { showUpdateModal = true }
+                                    .padding(horizontal = 7.dp, vertical = 3.dp)
+                            ) {
+                                Text(
+                                    text = when (updateState.status) {
+                                        "downloading" -> "Downloading… ${updateState.downloadProgress}%"
+                                        "ready" -> "Ready to Install"
+                                        else -> "↑ Update"
+                                    },
+                                    color = AccentBlue,
+                                    fontSize = 10.5.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    maxLines = 1,
+                                    softWrap = false
                                 )
-                                .background(if (isUpdateAvailable) AccentBlue.copy(alpha = 0.15f) else SurfaceDark)
-                                .clickable { showUpdateModal = true }
-                                .padding(horizontal = 7.dp, vertical = 3.dp)
-                        ) {
-                            Text(
-                                text = if (isUpdateAvailable) "↑ Update" else "v${BuildConfig.VERSION_NAME}",
-                                color = if (isUpdateAvailable) AccentBlue else TextMuted,
-                                fontSize = 10.5.sp,
-                                fontFamily = FontFamily.Monospace,
-                                maxLines = 1,
-                                softWrap = false
-                            )
+                            }
                         }
                     }
                 }

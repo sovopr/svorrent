@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 
 const KNOWN_BROWSER_SUFFIXES = ['.crdownload', '.part', '.download', '.fdownload', '.tmp'];
@@ -171,7 +172,7 @@ export function findBrowserCandidates(targetFileName, targetFileSize, options = 
 }
 
 export function findBestCandidateForTorrent(torrent, options = {}) {
-  if (!torrent) return null;
+  if (!torrent || torrent.done || torrent._adoptedFromBrowser || torrent._adoptingBrowser) return null;
   const files = Array.isArray(torrent.files) && torrent.files.length > 0
     ? torrent.files
     : [{ name: torrent.name, path: torrent.name, length: torrent.length || 0 }];
@@ -282,6 +283,138 @@ export function reopenTorrentStore(torrent) {
   }
 }
 
+export function stitchSplitDownload(sourcePath, targetPath, torrent, targetLength) {
+  if (!fs.existsSync(sourcePath)) return null;
+  const stat = fs.statSync(sourcePath);
+  if (stat.size >= targetLength || !torrent.pieceLength || !torrent._hashes) return null;
+
+  const pieceLen = torrent.pieceLength;
+  const numPieces = torrent.pieces ? torrent.pieces.length : Math.ceil(targetLength / pieceLen);
+  const lastPieceIndex = numPieces - 1;
+  const lastPieceExpectedLen = torrent.lastPieceLength || (targetLength - lastPieceIndex * pieceLen);
+  const lastPieceExpectedHash = torrent._hashes[lastPieceIndex];
+  if (!lastPieceExpectedHash) return null;
+
+  // Check if last piece of sourcePath matches the torrent's last piece
+  const fdSrc = fs.openSync(sourcePath, 'r');
+  try {
+    const tailBuf = Buffer.alloc(lastPieceExpectedLen);
+    const readBytes = fs.readSync(fdSrc, tailBuf, 0, lastPieceExpectedLen, stat.size - lastPieceExpectedLen);
+    if (readBytes !== lastPieceExpectedLen) return null;
+    const tailHash = crypto.createHash('sha1').update(tailBuf).digest('hex').toLowerCase();
+    if (tailHash !== lastPieceExpectedHash.toLowerCase()) {
+      return null; // Not a tail-matching split download
+    }
+
+    const missingMiddle = targetLength - stat.size;
+
+    // Binary search head matching pieces
+    let low = 0;
+    let high = Math.min(numPieces - 1, Math.floor(stat.size / pieceLen));
+    let headValid = 0;
+    const testBuf = Buffer.alloc(pieceLen);
+
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      fs.readSync(fdSrc, testBuf, 0, pieceLen, mid * pieceLen);
+      const h = crypto.createHash('sha1').update(testBuf).digest('hex').toLowerCase();
+      if (h === torrent._hashes[mid].toLowerCase()) {
+        headValid = mid + 1;
+        low = mid + 1;
+      } else {
+        high = mid - 1;
+      }
+    }
+
+    // Binary search tail matching pieces
+    low = headValid;
+    high = numPieces - 1;
+    let tailStart = numPieces;
+
+    while (low <= high) {
+      const mid = Math.floor((low + high) / 2);
+      const torrentOff = mid * pieceLen;
+      const dlOff = torrentOff - missingMiddle;
+      if (dlOff < 0) {
+        low = mid + 1;
+        continue;
+      }
+      const curLen = Math.min(pieceLen, targetLength - torrentOff);
+      fs.readSync(fdSrc, testBuf, 0, curLen, dlOff);
+      const slice = curLen === pieceLen ? testBuf : testBuf.subarray(0, curLen);
+      const h = crypto.createHash('sha1').update(slice).digest('hex').toLowerCase();
+      if (h === torrent._hashes[mid].toLowerCase()) {
+        tailStart = mid;
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    }
+
+    const tailValid = numPieces - tailStart;
+    if (tailValid <= 0) return null;
+
+    console.log(`[browser-adoption] Split download detected! Head: ${headValid} pieces, Tail: ${tailValid} pieces (missing middle: ${(missingMiddle / (1024*1024*1024)).toFixed(2)} GB). Stitching...`);
+
+    // Clone source to target first (provides head instantly via APFS clone)
+    if (process.platform === 'darwin') {
+      try {
+        execFileSync('cp', ['-c', '-f', sourcePath, targetPath]);
+      } catch {
+        fs.copyFileSync(sourcePath, targetPath);
+      }
+    } else {
+      fs.copyFileSync(sourcePath, targetPath);
+    }
+
+    // Expand target to full length
+    const fdDst = fs.openSync(targetPath, 'r+');
+    try {
+      fs.ftruncateSync(fdDst, targetLength);
+
+      // Copy tail from sourcePath to targetPath at proper offset
+      const tailSrcOffset = tailStart * pieceLen - missingMiddle;
+      const tailDstOffset = tailStart * pieceLen;
+      const tailBytes = targetLength - tailDstOffset;
+      const bufSize = 32 * 1024 * 1024;
+      const copyBuf = Buffer.alloc(bufSize);
+      let copied = 0;
+
+      while (copied < tailBytes) {
+        const toRead = Math.min(bufSize, tailBytes - copied);
+        const n = fs.readSync(fdSrc, copyBuf, 0, toRead, tailSrcOffset + copied);
+        if (n <= 0) break;
+        fs.writeSync(fdDst, copyBuf, 0, n, tailDstOffset + copied);
+        copied += n;
+      }
+
+      // Zero-out middle gap
+      const headEndOffset = headValid * pieceLen;
+      const gapBytes = tailDstOffset - headEndOffset;
+      if (gapBytes > 0) {
+        const zeroBuf = Buffer.alloc(Math.min(gapBytes, 16 * 1024 * 1024));
+        let cleared = 0;
+        while (cleared < gapBytes) {
+          const toWrite = Math.min(zeroBuf.length, gapBytes - cleared);
+          fs.writeSync(fdDst, zeroBuf, 0, toWrite, headEndOffset + cleared);
+          cleared += toWrite;
+        }
+      }
+    } finally {
+      fs.closeSync(fdDst);
+    }
+
+    return {
+      stitched: true,
+      headPieces: headValid,
+      tailPieces: tailValid,
+      totalValidPieces: headValid + tailValid,
+    };
+  } finally {
+    fs.closeSync(fdSrc);
+  }
+}
+
 export function transferCandidateFile(sourcePath, targetPath, options = {}) {
   const mode = options.mode || 'auto'; // 'auto', 'clone', 'move', 'copy'
 
@@ -344,7 +477,23 @@ export async function adoptBrowserDownload(torrent, candidate, options = {}) {
   await closeStoreFiles(torrent);
 
   // 3. Transfer file into Svorrent target location
-  const transferMethod = transferCandidateFile(candidate.path, targetPath, options);
+  let transferMethod = 'clone';
+  const targetLength = candidate.targetLength || torrent.length || 0;
+  let splitResult = null;
+  if (candidate.size < targetLength && torrent.pieceLength && torrent._hashes) {
+    try {
+      splitResult = stitchSplitDownload(candidate.path, targetPath, torrent, targetLength);
+      if (splitResult) {
+        transferMethod = 'stitch';
+      }
+    } catch (e) {
+      console.warn('[browser-adoption] Split stitching fallback:', e.message);
+    }
+  }
+
+  if (!splitResult) {
+    transferMethod = transferCandidateFile(candidate.path, targetPath, options);
+  }
 
   // 4. Reopen chunk store with fresh file descriptors on the newly adopted file
   reopenTorrentStore(torrent);

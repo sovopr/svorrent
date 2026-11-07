@@ -65,6 +65,7 @@ export function createSession(dataDir) {
           torrentFile: torrentFileStr,
           bitfield: bitfieldStr,
           knownPeers: t._knownPeers ? Array.from(t._knownPeers).slice(-100) : (existing?.knownPeers || []),
+          adoptedFromBrowser: t._adoptedFromBrowser || existing?.adoptedFromBrowser || null,
         };
       });
 

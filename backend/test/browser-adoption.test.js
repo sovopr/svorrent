@@ -3,6 +3,7 @@ import test from 'node:test';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import {
   normalizeMediaName,
   findBrowserCandidates,
@@ -11,6 +12,7 @@ import {
   transferCandidateFile,
   closeStoreFiles,
   reopenTorrentStore,
+  stitchSplitDownload,
 } from '../lib/browser-adoption.js';
 
 test('normalizeMediaName normalizes punctuation, delimiters, and browser suffixes', () => {
@@ -221,4 +223,80 @@ test('reopenTorrentStore safely reconstructs store hierarchy', () => {
   assert.equal(mockTorrent.store instanceof FakeImmediateStore, true);
   assert.equal(mockTorrent.store.store instanceof FakeCacheStore, true);
   assert.equal(mockTorrent.store.store.store instanceof FakeRawStore, true);
+});
+
+test('stitchSplitDownload dynamically detects split boundaries and stitches sparse target file', () => {
+  const tmpDir = path.join(os.tmpdir(), `svorrent-test-stitch-${Date.now()}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  try {
+    const pieceLen = 256 * 1024; // 256 KB
+    const numPieces = 16;
+    const targetLength = numPieces * pieceLen;
+
+    const originalData = crypto.randomBytes(targetLength);
+    const hashes = [];
+    for (let i = 0; i < numPieces; i++) {
+      const slice = originalData.subarray(i * pieceLen, (i + 1) * pieceLen);
+      hashes.push(crypto.createHash('sha1').update(slice).digest('hex'));
+    }
+
+    // Split: 5 head pieces (0..4), 6 middle missing pieces (5..10), 5 tail pieces (11..15)
+    const headPieces = 5;
+    const gapPieces = 6;
+    const tailStartPiece = 11;
+    const tailPieces = numPieces - tailStartPiece;
+
+    const headBuf = originalData.subarray(0, headPieces * pieceLen);
+    const tailBuf = originalData.subarray(tailStartPiece * pieceLen, targetLength);
+    const splitBuf = Buffer.concat([headBuf, tailBuf]);
+
+    const srcFile = path.join(tmpDir, 'download.mkv');
+    const dstFile = path.join(tmpDir, 'target.mkv');
+    fs.writeFileSync(srcFile, splitBuf);
+
+    const mockTorrent = {
+      length: targetLength,
+      pieceLength: pieceLen,
+      lastPieceLength: pieceLen,
+      _hashes: hashes,
+      pieces: new Array(numPieces).fill(null),
+    };
+
+    const res = stitchSplitDownload(srcFile, dstFile, mockTorrent, targetLength);
+    assert.ok(res);
+    assert.equal(res.stitched, true);
+    assert.equal(res.headPieces, headPieces);
+    assert.equal(res.tailPieces, tailPieces);
+    assert.equal(res.totalValidPieces, headPieces + tailPieces);
+
+    const stat = fs.statSync(dstFile);
+    assert.equal(stat.size, targetLength);
+
+    const fd = fs.openSync(dstFile, 'r');
+    const buf = Buffer.alloc(pieceLen);
+
+    for (let i = 0; i < numPieces; i++) {
+      fs.readSync(fd, buf, 0, pieceLen, i * pieceLen);
+      const h = crypto.createHash('sha1').update(buf).digest('hex');
+      const isZero = buf.every((b) => b === 0);
+
+      if (i < headPieces) {
+        assert.equal(h, hashes[i]);
+      } else if (i < tailStartPiece) {
+        assert.equal(isZero, true);
+      } else {
+        assert.equal(h, hashes[i]);
+      }
+    }
+    fs.closeSync(fd);
+
+    // Negative case: mismatched last piece returns null
+    const corruptFile = path.join(tmpDir, 'corrupt.mkv');
+    fs.writeFileSync(corruptFile, crypto.randomBytes(1024 * 1024));
+    const corruptRes = stitchSplitDownload(corruptFile, dstFile, mockTorrent, targetLength);
+    assert.equal(corruptRes, null);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });

@@ -29,6 +29,8 @@ import {
 import {
   findBestCandidateForTorrent,
   adoptBrowserDownload,
+  closeStoreFiles,
+  reopenTorrentStore,
 } from './lib/browser-adoption.js';
 import { createSettingsManager } from './lib/settings.js';
 import { localAccess } from './lib/local-access.js';
@@ -295,6 +297,9 @@ async function restoreSession() {
         if (Array.isArray(entry.knownPeers) && entry.knownPeers.length > 0) {
           torrent._knownPeers = new Set(entry.knownPeers);
         }
+        if (entry.adoptedFromBrowser) {
+          torrent._adoptedFromBrowser = entry.adoptedFromBrowser;
+        }
         setupTorrentHooks(torrent);
       }
     } catch (err) {
@@ -407,7 +412,7 @@ const autoUpdater = new AutoUpdater({
   currentCommit,
   repo: 'sovopr/svorrent',
 });
-if (!disablePublicDiscovery) {
+if (!disablePublicDiscovery && !process.env.PORT && !process.env.SVORRENT_NO_AUTO_UPDATE) {
   autoUpdater.start();
 }
 
@@ -569,6 +574,7 @@ function setupTorrentHooks(torrent) {
             torrent._adoptedFromBrowser = {
               browser: candidate.browser,
               size: candidate.size,
+              verifiedBytes: torrent.downloaded || 0,
               percent: candidate.percent,
             };
             console.log(`[browser-adoption] Successfully adopted ${candidate.browser} download: ${(torrent.downloaded / (1024 * 1024 * 1024)).toFixed(2)} GB verified (${(torrent.progress * 100).toFixed(1)}%)`);
@@ -780,7 +786,9 @@ app.get('/api/torrents', (req, res) => {
 
     const isPaused = !!(t.paused || t._pausedManually);
     const playability = assessTorrentPlayability(t, DOWNLOAD_DIR);
-    const candidate = findBestCandidateForTorrent(t, { downloadDir: t.path || DOWNLOAD_DIR });
+    const candidate = (!t._adoptedFromBrowser && !t.done)
+      ? findBestCandidateForTorrent(t, { downloadDir: t.path || DOWNLOAD_DIR })
+      : null;
 
     return {
       infoHash: t.infoHash,
@@ -1387,6 +1395,9 @@ app.post('/api/torrent/:id/recheck', async (req, res) => {
   const torrent = await client.get(req.params.id);
   if (!torrent) return res.status(404).json({ error: 'Torrent not found' });
 
+  await closeStoreFiles(torrent);
+  reopenTorrentStore(torrent);
+
   if (typeof torrent.rescanFiles === 'function') {
     torrent.rescanFiles((err) => {
       if (err) return res.status(500).json({ error: err.message });
@@ -1425,6 +1436,7 @@ app.post('/api/torrent/:id/adopt-download', async (req, res) => {
     torrent._adoptedFromBrowser = {
       browser: candidate.browser,
       size: candidate.size,
+      verifiedBytes: torrent.downloaded || 0,
       percent: candidate.percent,
     };
     if (typeof torrent._applyPriorities === 'function') {

@@ -394,7 +394,7 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
                               </span>
                             </>
                           )}
-                          {t.browserCandidate && !t.done && (
+                          {!t.adoptedFromBrowser && t.browserCandidate && !t.done && (
                             <>
                               <span className="dot-sep" />
                               <button
@@ -408,7 +408,7 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
                                 title={`Adopt ${formatBytes(t.browserCandidate.size)} from ${t.browserCandidate.browser}`}
                               >
                                 <Icon name="download" size={10} />
-                                <span>{t.adoptingBrowser ? 'Adopting…' : `Adopt ${formatBytes(t.browserCandidate.size)} from ${t.browserCandidate.browser}`}</span>
+                                <span>{t.adoptingBrowser ? 'Verifying browser data…' : `Adopt ${formatBytes(t.browserCandidate.size)} from ${t.browserCandidate.browser}`}</span>
                               </button>
                             </>
                           )}
@@ -416,7 +416,7 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
                             <>
                               <span className="dot-sep" />
                               <span className="adopted-tag" title={`Verified piece data from ${t.adoptedFromBrowser.browser}`}>
-                                Adopted from {t.adoptedFromBrowser.browser}
+                                Adopted {t.adoptedFromBrowser.verifiedBytes ? `${formatBytes(t.adoptedFromBrowser.verifiedBytes)} ` : ''}from {t.adoptedFromBrowser.browser}
                               </span>
                             </>
                           )}
@@ -501,17 +501,6 @@ export function DownloadsManager({ torrents, setTorrents, refresh, notify, onGoS
                                 aria-label={`Play media: ${t.playability.reason}`}
                               >
                                 <Icon name="play" size={12} /> Play
-                              </button>
-                            )}
-                            {t.browserCandidate && !t.done && (
-                              <button
-                                className="btn btn-outline btn-sm btn-adopt"
-                                onClick={() => runAction(t.infoHash, () => adoptDownload(t))}
-                                disabled={pending.has(t.infoHash) || t.adoptingBrowser}
-                                title={`Adopt ${formatBytes(t.browserCandidate.size)} from ${t.browserCandidate.browser}`}
-                              >
-                                <Icon name="download" size={12} />
-                                <span>{t.adoptingBrowser ? 'Adopting…' : `Adopt (${t.browserCandidate.percent}%)`}</span>
                               </button>
                             )}
                             <button className="icon-btn" onClick={() => setSwarmTorrent(t)} title="Peers and pieces" aria-label="Peers and pieces">

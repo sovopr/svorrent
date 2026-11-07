@@ -167,13 +167,13 @@ test('sendHeartbeat sends keepalive probe only for idle cellular interfaces', ()
     manager.disabledIds = new Set(['en9']); // en9 disabled
     manager.stats = new Map([
       ['en7', { currentDown: 5000, currentUp: 0 }], // busy cellular -> should skip
-      ['feth0', { currentDown: 0, currentUp: 0 }],  // idle cellular -> should send probe
+      ['feth0', { currentDown: 0, currentUp: 240000 }], // feth0 with upload share -> must still probe!
     ]);
     manager.getAllInterfaces = () => [
-      { id: 'en0', type: 'wifi', ip: '10.0.0.2', connected: true }, // wifi -> skip
-      { id: 'en9', type: 'cellular', ip: '192.168.1.5', connected: true }, // disabled -> skip
-      { id: 'en7', type: 'cellular', ip: '172.20.10.2', connected: true }, // busy -> skip
-      { id: 'feth0', type: 'cellular', ip: '10.78.7.77', connected: true }, // idle cellular -> probes!
+      { id: 'en0', device: 'en0', type: 'wifi', ip: '10.0.0.2', connected: true }, // wifi -> skip
+      { id: 'en9', device: 'en9', type: 'cellular', ip: '192.168.1.5', connected: true }, // disabled -> skip
+      { id: 'en7', device: 'en7', type: 'cellular', ip: '172.20.10.2', connected: true }, // busy -> skip
+      { id: 'feth0', device: 'feth0', type: 'cellular', ip: '10.78.7.77', connected: true }, // feth0 -> probes!
     ];
 
     manager.sendHeartbeat();
@@ -186,13 +186,19 @@ test('sendHeartbeat sends keepalive probe only for idle cellular interfaces', ()
   }
 });
 
-test('tick automatically triggers recoverUsbTether when feth0 is stuck on a link-local address', () => {
+test('tick automatically triggers recoverUsbTether when feth0 is stuck on a link-local address or unassigned', () => {
   const originalNetworkInterfaces = os.networkInterfaces;
   let fethIp = '169.254.75.221';
-  os.networkInterfaces = () => ({
-    en0: [{ family: 'IPv4', internal: false, address: '10.29.55.39' }],
-    feth0: [{ family: 'IPv4', internal: false, address: fethIp }],
-  });
+  let includeFeth = true;
+  os.networkInterfaces = () => {
+    const map = {
+      en0: [{ family: 'IPv4', internal: false, address: '10.29.55.39' }],
+    };
+    if (includeFeth) {
+      map.feth0 = [{ family: 'IPv4', internal: false, address: fethIp }];
+    }
+    return map;
+  };
 
   try {
     let recoverCalls = 0;
@@ -202,6 +208,7 @@ test('tick automatically triggers recoverUsbTether when feth0 is stuck on a link
     manager.disabledIds = new Set();
     manager.stats = new Map();
     manager.fethLinkLocalTicks = new Map();
+    manager.usbTetherDevice = { found: true, name: 'Samsung Galaxy' };
     manager.recoverUsbTether = () => {
       recoverCalls++;
     };
@@ -221,6 +228,16 @@ test('tick automatically triggers recoverUsbTether when feth0 is stuck on a link
     assert.equal(manager.fethLinkLocalTicks.has('feth0'), false);
     assert.equal(manager.getSnapshot().usbTether.interfacePresent, true);
     assert.equal(manager.getSnapshot().usbTether.interfaceActive, true);
+
+    // When USB RNDIS device is detected but feth0 has no IPv4 assigned at all,
+    // 15th consecutive tick triggers recovery automatically
+    includeFeth = false;
+    for (let i = 0; i < 14; i++) {
+      manager.tick();
+    }
+    assert.equal(recoverCalls, 1);
+    manager.tick();
+    assert.equal(recoverCalls, 2);
   } finally {
     os.networkInterfaces = originalNetworkInterfaces;
   }

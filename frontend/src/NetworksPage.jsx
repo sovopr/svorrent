@@ -281,13 +281,15 @@ export function NetworksPage({ notify, isActive = true }) {
           <div className="usb-tether-dot" />
           <div className="usb-tether-content">
             <span className="usb-tether-title">
-              {data.usbTether.name || 'Android device'} detected via USB
+              {data.usbTether.daemonActive
+                ? `Connecting to ${data.usbTether.name || 'Android device'} via USB…`
+                : `${data.usbTether.name || 'Android device'} detected via USB`}
             </span>
             <span className="usb-tether-hint muted">
               {!data.usbTether.helperInstalled
                 ? 'Reopen Svorrent from Applications and choose Enable Android USB tethering when prompted.'
                 : data.usbTether.daemonActive
-                  ? 'Connected via USB. On your phone, go to Settings → Connections → Mobile Hotspot and Tethering and turn on "USB Tethering".'
+                  ? 'Establishing RNDIS link and requesting a DHCP lease from your phone automatically.'
                   : 'The Android USB helper is not running. Reopen Svorrent to retry setup.'}
             </span>
           </div>

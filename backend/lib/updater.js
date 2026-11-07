@@ -370,6 +370,24 @@ export class AutoUpdater {
         throw new Error('Frontend build did not produce dist/index.html');
       }
 
+      // Build native macOS tether daemon if source and dylibs are available
+      if (this.platform === 'darwin' && fs.existsSync(path.join(stagedBackendDir, 'tether', 'Makefile'))) {
+        const currentBinDir = path.join(currentBackendDir, 'bin');
+        const stagedBinDir = path.join(stagedBackendDir, 'bin');
+        if (fs.existsSync(currentBinDir)) {
+          try {
+            fs.mkdirSync(stagedBinDir, { recursive: true });
+            fs.cpSync(currentBinDir, stagedBinDir, { recursive: true, force: true, verbatimSymlinks: true });
+            await execFileAsync('make', ['-C', path.join(stagedBackendDir, 'tether'), 'clean', 'all'], {
+              env: buildEnv,
+              timeout: 30000,
+            });
+          } catch (tetherErr) {
+            console.warn('[Updater] Native tether build warning:', tetherErr.message);
+          }
+        }
+      }
+
       // Run verification self-tests on the new backend code
       this.state.downloadProgress = 82;
       this.state.step = `Running verification tests on new code (${shortSha})…`;
@@ -649,11 +667,19 @@ export class AutoUpdater {
       }
     }
 
-    for (const dir of ['lib', 'scripts']) {
+    for (const dir of ['lib', 'scripts', 'tether']) {
       const srcDir = path.join(stagedBackend, dir);
       if (fs.existsSync(srcDir)) {
         fs.cpSync(srcDir, path.join(currentBackendDir, dir), { recursive: true, force: true });
       }
+    }
+
+    const stagedTetherBin = path.join(stagedBackend, 'bin', 'svorrent-tetherd');
+    if (fs.existsSync(stagedTetherBin)) {
+      const targetBinDir = path.join(currentBackendDir, 'bin');
+      fs.mkdirSync(targetBinDir, { recursive: true });
+      fs.copyFileSync(stagedTetherBin, path.join(targetBinDir, 'svorrent-tetherd'));
+      fs.chmodSync(path.join(targetBinDir, 'svorrent-tetherd'), 0o755);
     }
 
     const appliedCommit = this.state.latestCommit;
@@ -725,9 +751,15 @@ export class AutoUpdater {
           const src = path.join(stagedBackend, file);
           if (fs.existsSync(src)) fs.copyFileSync(src, path.join(bundleAppRoot, 'backend', file));
         }
-        for (const dir of ['lib', 'scripts']) {
+        for (const dir of ['lib', 'scripts', 'tether']) {
           const srcDir = path.join(stagedBackend, dir);
           if (fs.existsSync(srcDir)) fs.cpSync(srcDir, path.join(bundleAppRoot, 'backend', dir), { recursive: true, force: true });
+        }
+        if (fs.existsSync(stagedTetherBin)) {
+          const bundleBinDir = path.join(bundleAppRoot, 'backend', 'bin');
+          fs.mkdirSync(bundleBinDir, { recursive: true });
+          fs.copyFileSync(stagedTetherBin, path.join(bundleBinDir, 'svorrent-tetherd'));
+          fs.chmodSync(path.join(bundleBinDir, 'svorrent-tetherd'), 0o755);
         }
         await execFileAsync('codesign', ['--force', '--sign', '-', '/Applications/Svorrent.app'], { timeout: 15000 });
       } catch {}

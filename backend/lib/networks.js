@@ -327,9 +327,13 @@ except Exception as e:
       if (iface.type !== 'cellular') continue;
       if (!iface.ip || !iface.connected) continue;
 
-      // If interface is already actively downloading/uploading, skip probe
+      // If interface is already actively downloading/uploading, skip probe.
+      // For feth* Android USB tether links, always probe unless actively downloading,
+      // because unallocated upload shares during seeding can report currentUp > 0
+      // even when no packets are traversing the USB tether.
       const st = this.stats?.get(iface.id);
-      if (st && (st.currentDown > 1024 || st.currentUp > 1024)) {
+      const isFeth = Boolean(iface.device?.startsWith('feth') || iface.id?.startsWith('feth'));
+      if (st && (st.currentDown > 1024 || (!isFeth && st.currentUp > 1024))) {
         continue;
       }
 
@@ -597,12 +601,18 @@ except Exception as e:
     const peerMap = new Map();
 
     if (!this.fethLinkLocalTicks) this.fethLinkLocalTicks = new Map();
+    let hasConnectedFeth = false;
+    let hasAnyFeth = false;
     for (const iface of ifaces) {
       speedMap.set(iface.id, 0);
       upMap.set(iface.id, 0);
       peerMap.set(iface.id, 0);
       if (iface.device?.startsWith('feth')) {
-        if (iface.statusReason === 'link-local') {
+        hasAnyFeth = true;
+        if (iface.connected) {
+          hasConnectedFeth = true;
+          this.fethLinkLocalTicks.delete(iface.device);
+        } else if (iface.statusReason === 'link-local') {
           const ticks = (this.fethLinkLocalTicks.get(iface.device) || 0) + 1;
           this.fethLinkLocalTicks.set(iface.device, ticks);
           if (ticks === 25 || (ticks > 25 && (ticks - 25) % 30 === 0)) {
@@ -612,6 +622,17 @@ except Exception as e:
           this.fethLinkLocalTicks.delete(iface.device);
         }
       }
+    }
+    if (hasConnectedFeth) {
+      this.fethLinkLocalTicks.delete('usb-unassigned');
+    } else if (!hasAnyFeth && this.usbTetherDevice?.found) {
+      const ticks = (this.fethLinkLocalTicks.get('usb-unassigned') || 0) + 1;
+      this.fethLinkLocalTicks.set('usb-unassigned', ticks);
+      if (ticks === 15 || (ticks > 15 && (ticks - 15) % 20 === 0)) {
+        this.recoverUsbTether?.();
+      }
+    } else {
+      this.fethLinkLocalTicks.delete('usb-unassigned');
     }
 
     const availableActiveIds = ifaces.filter((i) => i.connected && !this.disabledIds.has(i.id)).map((i) => i.id);

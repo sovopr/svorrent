@@ -16,6 +16,19 @@ const execFileAsync = promisify(execFile);
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Pre-allocated RFC 1035 valid 17-byte DNS root query buffer for zero-allocation keepalive
+const DNS_KEEPALIVE_QUERY = Buffer.from([
+  0x12, 0x34, // Transaction ID
+  0x01, 0x00, // Flags: Standard query, recursion desired
+  0x00, 0x01, // Questions: 1
+  0x00, 0x00, // Answer RRs: 0
+  0x00, 0x00, // Authority RRs: 0
+  0x00, 0x00, // Additional RRs: 0
+  0x00,       // QNAME: root (.)
+  0x00, 0x02, // QTYPE: NS (0x0002)
+  0x00, 0x01, // QCLASS: IN (0x0001)
+]);
+
 function getTetherDaemonBin() {
   const privilegedSub = '/Library/PrivilegedHelperTools/com.svorrent.tetherd/svorrent-tetherd';
   if (fs.existsSync(privilegedSub)) return privilegedSub;
@@ -275,28 +288,40 @@ except Exception as e:
     this.iosDevice = { found: false, detected: false, name: null, locked: false };
   }
 
-  // Keep active cellular tether links from becoming idle. Other interfaces do
-  // not need this traffic, and a keepalive cannot guarantee carrier behavior.
+  // Keep active cellular tether links from becoming idle.
+  // When idle, Android shuts down USB tethering gadget mode after 60-120 seconds.
+  // Sending a tiny 17-byte DNS root query keeps the link alive bidirectional with negligible data (~30KB/hr).
   sendHeartbeat() {
-    const hasActiveTorrent = this.getClient()?.torrents?.some(
-      (torrent) => !torrent.destroyed && !torrent.paused && !torrent._pausedManually,
-    );
-    if (!hasActiveTorrent) return;
     const ifaces = this.getAllInterfaces();
     for (const iface of ifaces) {
       if (this.disabledIds.has(iface.id)) continue;
       if (iface.type !== 'cellular') continue;
       if (!iface.ip || !iface.connected) continue;
+
+      // If interface is already actively downloading/uploading, skip probe
+      const st = this.stats?.get(iface.id);
+      if (st && (st.currentDown > 1024 || st.currentUp > 1024)) {
+        continue;
+      }
+
       try {
         const sock = dgram.createSocket('udp4');
-        const close = () => { try { sock.close(); } catch {} };
+        let closed = false;
+        const close = () => {
+          if (!closed) {
+            closed = true;
+            try { sock.close(); } catch {}
+          }
+        };
         const timer = setTimeout(close, 2000);
         timer.unref?.();
         sock.once('close', () => clearTimeout(timer));
         sock.once('error', close);
+        sock.once('message', close);
         sock.bind(0, iface.ip, () => {
-          // Small keepalive request; the timeout also closes stalled sockets.
-          sock.send(Buffer.alloc(1), 53, '1.1.1.1', close);
+          sock.send(DNS_KEEPALIVE_QUERY, 53, '1.1.1.1', (err) => {
+            if (err) close();
+          });
         });
       } catch {}
     }

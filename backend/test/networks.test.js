@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import net from 'node:net';
 import os from 'node:os';
+import dgram from 'node:dgram';
 import { NetworkManager, classifyInterface } from '../lib/networks.js';
 
 test('self-assigned adapters stay visible but are excluded from peer routing', () => {
@@ -144,6 +145,44 @@ test('tick and getSnapshot track per-interface upHistory and aggregateUpHistory 
     assert.equal(disabledSnap.aggregateUpHistory.at(-1), 2048);
   } finally {
     os.networkInterfaces = originalNetworkInterfaces;
+  }
+});
+
+test('sendHeartbeat sends keepalive probe only for idle cellular interfaces', () => {
+  const sent = [];
+  const fakeSocket = {
+    once: () => {},
+    bind: (port, ip, cb) => cb(),
+    send: (buf, port, host, cb) => {
+      sent.push({ length: buf.length, host, port });
+      cb();
+    },
+    close: () => {},
+  };
+  const originalCreateSocket = dgram.createSocket;
+  dgram.createSocket = () => fakeSocket;
+
+  try {
+    const manager = Object.create(NetworkManager.prototype);
+    manager.disabledIds = new Set(['en9']); // en9 disabled
+    manager.stats = new Map([
+      ['en7', { currentDown: 5000, currentUp: 0 }], // busy cellular -> should skip
+      ['feth0', { currentDown: 0, currentUp: 0 }],  // idle cellular -> should send probe
+    ]);
+    manager.getAllInterfaces = () => [
+      { id: 'en0', type: 'wifi', ip: '10.0.0.2', connected: true }, // wifi -> skip
+      { id: 'en9', type: 'cellular', ip: '192.168.1.5', connected: true }, // disabled -> skip
+      { id: 'en7', type: 'cellular', ip: '172.20.10.2', connected: true }, // busy -> skip
+      { id: 'feth0', type: 'cellular', ip: '10.78.7.77', connected: true }, // idle cellular -> probes!
+    ];
+
+    manager.sendHeartbeat();
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].length, 17); // RFC valid 17-byte DNS query
+    assert.equal(sent[0].host, '1.1.1.1');
+    assert.equal(sent[0].port, 53);
+  } finally {
+    dgram.createSocket = originalCreateSocket;
   }
 });
 

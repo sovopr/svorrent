@@ -112,6 +112,17 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onStart() {
+        super.onStart()
+        SvorrentEngineService.isAppInForeground = true
+    }
+
+    override fun onStop() {
+        SvorrentEngineService.isAppInForeground = false
+        SvorrentEngineService.stopIfIdle(applicationContext)
+        super.onStop()
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleIncomingMagnetIntent(intent)
@@ -440,6 +451,7 @@ fun SvorrentApp() {
             onCheckNow = { scope.launch { AutoUpdater.checkForUpdates() } },
             onDownloadAndInstall = { url -> scope.launch { AutoUpdater.downloadAndInstallApk(context, url) } },
             onInstallDownloaded = { AutoUpdater.installDownloadedApk(context) },
+            onOpenBrowserDownload = { AutoUpdater.openPrivateReleaseApkDownload(context) },
             onDownloadLatestApk = {
                 scope.launch {
                     AutoUpdater.downloadAndInstallApk(
@@ -1698,6 +1710,7 @@ fun UpdateDialog(
     onCheckNow: () -> Unit,
     onDownloadAndInstall: (String) -> Unit,
     onInstallDownloaded: () -> Unit,
+    onOpenBrowserDownload: () -> Unit,
     onDownloadLatestApk: () -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -1783,7 +1796,13 @@ fun UpdateDialog(
             }
         },
         dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TextButton(onClick = onOpenBrowserDownload) {
+                    Text("Browser", color = AccentBlue)
+                }
                 TextButton(
                     onClick = onCheckNow,
                     enabled = updateState.status != "checking" && updateState.status != "downloading"

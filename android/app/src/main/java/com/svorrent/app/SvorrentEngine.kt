@@ -125,6 +125,9 @@ object SvorrentEngine {
                 while (true) {
                     try {
                         val hasActive = _torrents.value.any { !it.done && !it.paused }
+                        if (hasActive && ::appContext.isInitialized) {
+                            SvorrentEngineService.ensureRunning(appContext)
+                        }
                         if (hasActive || needsImmediateTick || inspectedSwarmHash != null || idleCycles >= 3) {
                             needsImmediateTick = false
                             idleCycles = 0
@@ -336,6 +339,9 @@ object SvorrentEngine {
                     handle.unsetFlags(TorrentFlags.AUTO_MANAGED)
                     handle.resume()
                     handle.forceReannounce()
+                    if (::appContext.isInitialized) {
+                        SvorrentEngineService.ensureRunning(appContext)
+                    }
                 } else {
                     pausedByUser.add(key)
                     handle.unsetFlags(TorrentFlags.AUTO_MANAGED)

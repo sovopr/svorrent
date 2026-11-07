@@ -28,40 +28,47 @@ class SvorrentEngineService : Service() {
         isServiceRunning = true
         SvorrentEngine.init(applicationContext)
         createNotificationChannel()
-        promoteToForeground("Svorrent · Idle", "Wi-Fi + Mobile Data bonding ready", isOngoing = false)
+
+        val initialActive = SvorrentEngine.torrents.value.filter { !it.done && !it.paused }
+        if (initialActive.isEmpty()) {
+            promoteToForeground("Svorrent", "Idle", isOngoing = false)
+            stopEngineService()
+            return
+        }
+
+        promoteToForeground("Svorrent · Starting…", "Connecting to peers…", isOngoing = true)
 
         serviceScope.launch {
             while (true) {
                 try {
                     val list = SvorrentEngine.torrents.value
                     val active = list.filter { !it.done && !it.paused }
+
+                    if (active.isEmpty()) {
+                        stopEngineService()
+                        break
+                    }
+
                     val down = active.sumOf { it.downloadSpeed }
                     val up = list.filter { !it.paused }.sumOf { it.uploadSpeed }
                     val net = SvorrentEngine.networkSnapshot.value
 
-                    val title = if (active.isNotEmpty()) {
-                        "↓ ${Formatters.formatSpeed(down)}  ·  ↑ ${Formatters.formatSpeed(up)}"
-                    } else {
-                        "Svorrent · Idle"
-                    }
-
+                    val title = "↓ ${Formatters.formatSpeed(down)}  ·  ↑ ${Formatters.formatSpeed(up)}"
                     val sub = if (net.bondedCount > 1) {
                         "${active.size} active · Bonded (${net.bondedCount} networks)"
                     } else {
                         "${active.size} active transfer${if (active.size == 1) "" else "s"}"
                     }
 
-                    // Only invoke SystemUI binder IPC when the notification text actually changes
                     if (title != lastTitle || sub != lastSub) {
                         lastTitle = title
                         lastSub = sub
-                        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-                        nm.notify(NOTIFICATION_ID, buildNotification(title, sub, isOngoing = active.isNotEmpty()))
+                        promoteToForeground(title, sub, isOngoing = true)
                     }
 
-                    delay(if (active.isNotEmpty()) 2000L else 4000L)
+                    delay(2000L)
                 } catch (_: Throwable) {
-                    delay(4000L)
+                    delay(3000L)
                 }
             }
         }
@@ -69,22 +76,34 @@ class SvorrentEngineService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
+            val active = SvorrentEngine.torrents.value.filter { !it.done && !it.paused }
+            for (t in active) {
+                SvorrentEngine.togglePause(t.infoHash)
+            }
             stopEngineService()
             return START_NOT_STICKY
         }
+
         isServiceRunning = true
         createNotificationChannel()
         val list = SvorrentEngine.torrents.value
         val active = list.filter { !it.done && !it.paused }
+        if (active.isEmpty()) {
+            promoteToForeground("Svorrent", "Idle", isOngoing = false)
+            stopEngineService()
+            return START_NOT_STICKY
+        }
+
         promoteToForeground(
-            lastTitle.ifEmpty { "Svorrent · Idle" },
-            lastSub.ifEmpty { "Wi-Fi + Mobile Data bonding ready" },
-            isOngoing = active.isNotEmpty()
+            lastTitle.ifEmpty { "Svorrent · Starting…" },
+            lastSub.ifEmpty { "Connecting to peers…" },
+            isOngoing = true
         )
         return START_NOT_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
+        isAppInForeground = false
         val active = SvorrentEngine.torrents.value.filter { !it.done && !it.paused }
         if (active.isEmpty()) {
             stopEngineService()
@@ -92,8 +111,7 @@ class SvorrentEngineService : Service() {
         super.onTaskRemoved(rootIntent)
     }
 
-    private fun stopEngineService() {
-        isServiceRunning = false
+    private fun dismissNotificationAndDemote() {
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 stopForeground(STOP_FOREGROUND_REMOVE)
@@ -105,6 +123,11 @@ class SvorrentEngineService : Service() {
             nm.cancel(NOTIFICATION_ID)
         } catch (_: Throwable) {
         }
+    }
+
+    private fun stopEngineService() {
+        isServiceRunning = false
+        dismissNotificationAndDemote()
         stopSelf()
     }
 
@@ -121,17 +144,12 @@ class SvorrentEngineService : Service() {
                 startForeground(NOTIFICATION_ID, notification)
             }
         } catch (_: Throwable) {
-            // Guard against foreground start restrictions on strict OEM ROMs
         }
     }
 
     override fun onDestroy() {
         isServiceRunning = false
-        try {
-            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            nm.cancel(NOTIFICATION_ID)
-        } catch (_: Throwable) {
-        }
+        dismissNotificationAndDemote()
         serviceScope.cancel()
         super.onDestroy()
     }
@@ -191,9 +209,15 @@ class SvorrentEngineService : Service() {
         private const val NOTIFICATION_ID = 3001
 
         @Volatile
+        var isAppInForeground: Boolean = false
+
+        @Volatile
         private var isServiceRunning = false
 
         fun ensureRunning(context: Context) {
+            val active = SvorrentEngine.torrents.value.filter { !it.done && !it.paused }
+            // Only spawn foreground service if there are active transfers running
+            if (active.isEmpty()) return
             if (isServiceRunning) return
             val appCtx = context.applicationContext
             val intent = Intent(appCtx, SvorrentEngineService::class.java)
@@ -204,6 +228,20 @@ class SvorrentEngineService : Service() {
                     appCtx.startService(intent)
                 }
             } catch (_: Throwable) {
+            }
+        }
+
+        fun stopIfIdle(context: Context) {
+            val active = SvorrentEngine.torrents.value.filter { !it.done && !it.paused }
+            if (active.isEmpty() && isServiceRunning) {
+                val appCtx = context.applicationContext
+                val stopIntent = Intent(appCtx, SvorrentEngineService::class.java).apply {
+                    action = ACTION_STOP
+                }
+                try {
+                    appCtx.startService(stopIntent)
+                } catch (_: Throwable) {
+                }
             }
         }
     }

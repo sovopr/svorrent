@@ -37,6 +37,12 @@ function getTetherDaemonBin() {
   return path.resolve(__dirname, '../bin/svorrent-tetherd');
 }
 
+function getBundledTetherBin() {
+  const bundled = path.resolve(__dirname, '../bin/svorrent-tetherd');
+  if (fs.existsSync(bundled)) return bundled;
+  return getTetherDaemonBin();
+}
+
 export function classifyInterface(name = '', device = '') {
   const s = `${name || ''} ${device || ''}`.toLowerCase();
   if (/wi-?fi|wireless|wlan|airport|802\.11/.test(s)) return 'wifi';
@@ -115,6 +121,8 @@ export class NetworkManager {
     this.usbTetherDevice = { found: false, name: null };
     this.iosDevice = { found: false, detected: false, name: null, locked: false };
     this.isTetherDaemonRunning = false;
+    this.fethLinkLocalTicks = new Map();
+    this.isRecoveringTether = false;
 
     // Start background scanner
     this.refreshHardwarePorts();
@@ -139,30 +147,51 @@ export class NetworkManager {
     this.hookNetConnect();
   }
 
-  async checkUsbTether() {
+  async recoverUsbTether() {
+    if (this.isRecoveringTether || process.platform !== 'darwin') return;
+    this.isRecoveringTether = true;
     try {
-      const tetherBin = getTetherDaemonBin();
-      const { stdout } = await execFileAsync(tetherBin, ['--list'], { timeout: 4000 });
-      if (stdout.includes('RNDIS devices found:')) {
-        let deviceName = 'Android Device';
-        if (stdout.includes('04e8:')) deviceName = 'Samsung Galaxy';
-        else if (stdout.includes('18d1:')) deviceName = 'Google Pixel';
-        else if (stdout.includes('2717:')) deviceName = 'Xiaomi / Redmi';
-        else if (stdout.includes('2a70:')) deviceName = 'OnePlus';
-        else if (stdout.includes('22b8:')) deviceName = 'Motorola';
-        else if (stdout.includes('0fce:')) deviceName = 'Sony Xperia';
-        else if (stdout.includes('12d1:')) deviceName = 'Huawei / Honor';
+      const tetherBin = getBundledTetherBin();
+      await execFileAsync(tetherBin, ['--recover'], { timeout: 5000 });
+    } catch {
+      // Recovery is best-effort
+    } finally {
+      this.isRecoveringTether = false;
+    }
+  }
 
-        this.usbTetherDevice = {
-          found: true,
-          name: deviceName,
-          details: stdout.trim(),
-        };
-      } else {
+  async checkUsbTether() {
+    const rawIfaces = os.networkInterfaces() || {};
+    const hasConnectedFeth = Object.entries(rawIfaces).some(
+      ([dev, addrs]) => dev.startsWith('feth') && Array.isArray(addrs) && addrs.some((a) => isUsableIpv4(a.address))
+    );
+
+    // Avoid spawning a separate libusb enumeration every 5s when feth is already online and identified
+    if (!hasConnectedFeth || !this.usbTetherDevice?.found) {
+      try {
+        const tetherBin = getTetherDaemonBin();
+        const { stdout } = await execFileAsync(tetherBin, ['--list'], { timeout: 4000 });
+        if (stdout.includes('RNDIS devices found:')) {
+          let deviceName = 'Android Device';
+          if (stdout.includes('04e8:')) deviceName = 'Samsung Galaxy';
+          else if (stdout.includes('18d1:')) deviceName = 'Google Pixel';
+          else if (stdout.includes('2717:')) deviceName = 'Xiaomi / Redmi';
+          else if (stdout.includes('2a70:')) deviceName = 'OnePlus';
+          else if (stdout.includes('22b8:')) deviceName = 'Motorola';
+          else if (stdout.includes('0fce:')) deviceName = 'Sony Xperia';
+          else if (stdout.includes('12d1:')) deviceName = 'Huawei / Honor';
+
+          this.usbTetherDevice = {
+            found: true,
+            name: deviceName,
+            details: stdout.trim(),
+          };
+        } else {
+          this.usbTetherDevice = { found: false, name: null };
+        }
+      } catch {
         this.usbTetherDevice = { found: false, name: null };
       }
-    } catch {
-      this.usbTetherDevice = { found: false, name: null };
     }
 
     try {
@@ -567,10 +596,22 @@ except Exception as e:
     const upMap = new Map();
     const peerMap = new Map();
 
+    if (!this.fethLinkLocalTicks) this.fethLinkLocalTicks = new Map();
     for (const iface of ifaces) {
       speedMap.set(iface.id, 0);
       upMap.set(iface.id, 0);
       peerMap.set(iface.id, 0);
+      if (iface.device?.startsWith('feth')) {
+        if (iface.statusReason === 'link-local') {
+          const ticks = (this.fethLinkLocalTicks.get(iface.device) || 0) + 1;
+          this.fethLinkLocalTicks.set(iface.device, ticks);
+          if (ticks === 25 || (ticks > 25 && (ticks - 25) % 30 === 0)) {
+            this.recoverUsbTether?.();
+          }
+        } else {
+          this.fethLinkLocalTicks.delete(iface.device);
+        }
+      }
     }
 
     const availableActiveIds = ifaces.filter((i) => i.connected && !this.disabledIds.has(i.id)).map((i) => i.id);
@@ -842,6 +883,7 @@ except Exception as e:
         name: this.usbTetherDevice?.name || null,
         helperInstalled: fs.existsSync('/Library/PrivilegedHelperTools/com.svorrent.tetherd/svorrent-tetherd'),
         daemonActive: this.isTetherDaemonRunning,
+        interfacePresent: all.some((i) => i.device.startsWith('feth')),
         interfaceActive: all.some((i) => i.device.startsWith('feth') && i.connected),
       },
       iosTether: {

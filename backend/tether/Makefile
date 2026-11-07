@@ -12,6 +12,7 @@ all: $(TARGET)
 $(TARGET): $(SRC)
 	@mkdir -p ../bin
 	$(CXX) $(CXXFLAGS) $(SRC) $(LDFLAGS) -o $(TARGET)
+	@install_name_tool -change @rpath/libtetherkit.0.dylib @executable_path/libtetherkit.0.dylib $(TARGET) 2>/dev/null || true
 	@codesign --force --sign - $(TARGET) 2>/dev/null || true
 	@echo "Built $(TARGET) successfully."
 

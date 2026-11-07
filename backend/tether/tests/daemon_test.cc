@@ -18,7 +18,7 @@ static int fake_usleep(useconds_t);
 enum Scenario {
     MANY_DEVICES, LIST_ERROR, NO_DEVICES, NOT_ROOT, TRANSIENT_SCAN_ERROR,
     FAILED_AND_DISCONNECTED, ONCE_FAILED, ONCE_DISCONNECTED, INTERRUPTED_START,
-    RECONNECT, INTERRUPTED_SCAN
+    RECONNECT, INTERRUPTED_SCAN, LEASE_DROPPED_REAPPLY
 };
 static Scenario scenario;
 static int scans, status_reads, creates, destroys, ip_requests, sleeps;
@@ -47,6 +47,23 @@ void tk_version(tk_version_info_t* version) {
 tk_result_t tk_check_environment(tk_environment_t* environment) {
     *environment = {};
     environment->is_root = scenario != NOT_ROOT;
+    return TK_OK;
+}
+
+tk_result_t tk_cleanup_orphan_interfaces(size_t* removed, tk_error_t*) {
+    if (removed) *removed = 0;
+    return TK_OK;
+}
+
+tk_result_t tk_net_query(const char* interface_name, tk_net_state_t* out_state, tk_error_t*) {
+    assert(strcmp(interface_name, "feth0") == 0);
+    *out_state = {};
+    out_state->has_address = true;
+    if (scenario == LEASE_DROPPED_REAPPLY && scans >= 3) {
+        strcpy(out_state->address, "169.254.75.221");
+    } else {
+        strcpy(out_state->address, "10.78.7.114");
+    }
     return TK_OK;
 }
 
@@ -164,5 +181,7 @@ int main() {
     assert(scans == 3 && creates == 2 && status_reads == 3 && ip_requests == 2);
     run(INTERRUPTED_SCAN, nullptr, 0);
     assert(scans == 1 && creates == 0 && ip_requests == 0);
-    puts("All 11 native daemon regression scenarios passed.");
+    run(LEASE_DROPPED_REAPPLY, nullptr, 0);
+    assert(scans == 3 && creates == 1 && ip_requests == 2);
+    puts("All 12 native daemon regression scenarios passed.");
 }

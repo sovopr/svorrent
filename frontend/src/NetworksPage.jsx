@@ -200,8 +200,9 @@ export function NetworksPage({ notify, isActive = true }) {
   const iphoneDhcpIface = interfaces.find(
     (i) => (i.name?.toLowerCase().includes('iphone') || (data?.iosTether?.detected && i.type === 'cellular')) && i.statusReason === 'link-local'
   );
+  const fethSelfAssigned = selfAssignedInterfaces.filter((i) => i.device?.startsWith('feth'));
   const showIosBanner = (data?.iosTether?.detected && !data?.iosTether?.interfaceActive) || !!iphoneDhcpIface;
-  const nonIosSelfAssigned = selfAssignedInterfaces.filter((i) => i !== iphoneDhcpIface);
+  const nonIosSelfAssigned = selfAssignedInterfaces.filter((i) => i !== iphoneDhcpIface && !i.device?.startsWith('feth'));
   const hasMultiple = bondedCount > 1;
   const totalPeers = interfaces.reduce((sum, i) => sum + (Number(i.peers) || 0), 0);
   const measuredPeak = Math.max(peakSpeed, ...(aggregateHistory || []), 0);
@@ -261,7 +262,21 @@ export function NetworksPage({ notify, isActive = true }) {
         </div>
       )}
 
-      {data?.usbTether?.detected && !data?.usbTether?.interfaceActive && (
+      {fethSelfAssigned.length > 0 && (
+        <div className="usb-tether-banner" role="status">
+          <div className="usb-tether-dot" />
+          <div className="usb-tether-content">
+            <span className="usb-tether-title">
+              Negotiating DHCP lease on {fethSelfAssigned.map((iface) => iface.device).join(', ')}…
+            </span>
+            <span className="usb-tether-hint muted">
+              Svorrent is automatically acquiring a routable IPv4 address from your Android USB tether.
+            </span>
+          </div>
+        </div>
+      )}
+
+      {data?.usbTether?.detected && !data?.usbTether?.interfaceActive && !data?.usbTether?.interfacePresent && fethSelfAssigned.length === 0 && (
         <div className="usb-tether-banner" role="status">
           <div className="usb-tether-dot" />
           <div className="usb-tether-content">
@@ -366,7 +381,7 @@ export function NetworksPage({ notify, isActive = true }) {
                           <span
                             className={`status-dot ${isOnline ? 'is-online' : 'is-offline'}`}
                             style={{ backgroundColor: isOnline ? color : undefined }}
-                            title={iface.statusReason === 'link-local' ? 'Needs DHCP; turn off "Disable unless needed" in System Settings' : !iface.connected ? 'Disconnected' : iface.enabled ? 'Routing enabled' : 'Routing disabled'}
+                            title={iface.statusReason === 'link-local' ? (iface.device?.startsWith('feth') ? 'Acquiring DHCP lease automatically…' : 'Needs DHCP; turn off "Disable unless needed" in System Settings') : !iface.connected ? 'Disconnected' : iface.enabled ? 'Routing enabled' : 'Routing disabled'}
                           />
                           <div className="iface-info">
                             <div className="iface-title-row">
@@ -377,7 +392,7 @@ export function NetworksPage({ notify, isActive = true }) {
                               {typeLabel}{iface.ip ? ` • ${iface.ip}` : ''}
                             </div>
                             {iface.statusReason === 'link-local' && (
-                              <span className="tag-inline-warn">Needs DHCP</span>
+                              <span className="tag-inline-warn">{iface.device?.startsWith('feth') ? 'Acquiring DHCP…' : 'Needs DHCP'}</span>
                             )}
                           </div>
                         </div>

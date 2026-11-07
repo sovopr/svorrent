@@ -186,3 +186,44 @@ test('sendHeartbeat sends keepalive probe only for idle cellular interfaces', ()
   }
 });
 
+test('tick automatically triggers recoverUsbTether when feth0 is stuck on a link-local address', () => {
+  const originalNetworkInterfaces = os.networkInterfaces;
+  let fethIp = '169.254.75.221';
+  os.networkInterfaces = () => ({
+    en0: [{ family: 'IPv4', internal: false, address: '10.29.55.39' }],
+    feth0: [{ family: 'IPv4', internal: false, address: fethIp }],
+  });
+
+  try {
+    let recoverCalls = 0;
+    const manager = Object.create(NetworkManager.prototype);
+    manager.getClient = () => ({ maxConns: 120, torrents: [] });
+    manager.hardwarePorts = new Map([['en0', 'Wi-Fi']]);
+    manager.disabledIds = new Set();
+    manager.stats = new Map();
+    manager.fethLinkLocalTicks = new Map();
+    manager.recoverUsbTether = () => {
+      recoverCalls++;
+    };
+
+    for (let i = 0; i < 24; i++) {
+      manager.tick();
+    }
+    assert.equal(recoverCalls, 0);
+
+    // 25th consecutive second stuck in link-local triggers recovery
+    manager.tick();
+    assert.equal(recoverCalls, 1);
+
+    // Once DHCP lease is acquired, counter resets
+    fethIp = '10.78.7.114';
+    manager.tick();
+    assert.equal(manager.fethLinkLocalTicks.has('feth0'), false);
+    assert.equal(manager.getSnapshot().usbTether.interfacePresent, true);
+    assert.equal(manager.getSnapshot().usbTether.interfaceActive, true);
+  } finally {
+    os.networkInterfaces = originalNetworkInterfaces;
+  }
+});
+
+

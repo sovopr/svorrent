@@ -259,6 +259,40 @@ static BOOL isServerListening(int port) {
     [NSApp setMainMenu:mainMenu];
 }
 
+- (void)ensureTetherHelperUpToDate {
+    NSBundle *bundle = [NSBundle mainBundle];
+    NSString *bundledBin = [bundle.resourcePath stringByAppendingPathComponent:@"app/backend/bin/svorrent-tetherd"];
+    NSString *installerScript = [bundle.resourcePath stringByAppendingPathComponent:@"app/backend/scripts/install-tetherd.sh"];
+    if (![[NSFileManager defaultManager] isExecutableFileAtPath:bundledBin] ||
+        ![[NSFileManager defaultManager] fileExistsAtPath:installerScript]) {
+        bundledBin = @"/Users/soveet/svorrent/backend/bin/svorrent-tetherd";
+        installerScript = @"/Users/soveet/svorrent/backend/scripts/install-tetherd.sh";
+    }
+    if (![[NSFileManager defaultManager] isExecutableFileAtPath:bundledBin] ||
+        ![[NSFileManager defaultManager] fileExistsAtPath:installerScript]) {
+        return;
+    }
+
+    NSString *installedBin = @"/Library/PrivilegedHelperTools/com.svorrent.tetherd/svorrent-tetherd";
+    if (![[NSFileManager defaultManager] isExecutableFileAtPath:installedBin] ||
+        [[NSFileManager defaultManager] contentsEqualAtPath:bundledBin andPath:installedBin]) {
+        return;
+    }
+
+    NSTask *task = [[NSTask alloc] init];
+    task.launchPath = @"/usr/bin/osascript";
+    NSString *appleScript = [NSString stringWithFormat:
+        @"do shell script \"/bin/bash '%@'\" with administrator privileges",
+        [installerScript stringByReplacingOccurrencesOfString:@"'" withString:@"'\\''"]];
+    task.arguments = @[@"-e", appleScript];
+    @try {
+        [task launch];
+        [task waitUntilExit];
+    } @catch (NSException *e) {
+        NSLog(@"[Svorrent] Tether helper update skipped: %@", e);
+    }
+}
+
 - (void)applicationDidFinishLaunching:(NSNotification *)aNotification {
     NSString *bundlePath = [[NSBundle mainBundle] bundlePath];
     if ([bundlePath hasPrefix:@"/Volumes/"] || [bundlePath containsString:@"/AppTranslocation/"]) {
@@ -272,6 +306,7 @@ static BOOL isServerListening(int port) {
     }
 
     [self setupMainMenu];
+    [self ensureTetherHelperUpToDate];
     [self startBackendIfNeeded];
     [self openWebInterface:nil];
 }

@@ -18,7 +18,7 @@
 
 ---
 
-## Downloads (v1.0.8)
+## Downloads (v1.0.11)
 
 Svorrent runs locally and opens in your default web browser with zero external dependencies required.
 
@@ -30,7 +30,7 @@ Svorrent runs locally and opens in your default web browser with zero external d
 
 The macOS package is arm64-only; an Intel Mac build is not currently available.
 The Android package is a standalone native app (Jetpack Compose + libtorrent C++ engine) featuring simultaneous multi-network bonding across Wi-Fi and Mobile Data (5G/LTE), background foreground service downloading, and direct in-app updates.
-Releases include `SHA256SUMS.txt` and support SHA-256-verified in-app updates from GitHub Releases as well as continuous repository code integration from `main` (staged self-testing via the test suite before prompting **Restart & Integrate** on macOS and Windows).
+Releases include `SHA256SUMS.txt` and support SHA-256-verified in-app updates from GitHub Releases as well as continuous repository code integration from `main` (staged self-testing via the test suite before prompting **Restart & Integrate** on macOS and Windows, and rolling `main-latest` APK builds on Android).
 
 ---
 
@@ -38,11 +38,12 @@ Releases include `SHA256SUMS.txt` and support SHA-256-verified in-app updates fr
 
 ### 1. Federated Torrent Search Engine
 The search interface aggregates results across multiple indexers and scrapers with bounded request timeouts and DNS-over-HTTPS (DoH) fallback:
+- **Intelligent Movie-First Relevance Ranking**: Ranks genuine video releases and movies ahead of game repacks, cracks, and small scrap files, with resolution-aware scoring (2160p / 1080p).
+- **Progressive Streaming & Dual DoH Racing**: Results stream into the UI progressively as each provider responds. Pre-warmed dual DNS-over-HTTPS (Cloudflare `1.1.1.1` and Google `8.8.8.8`) with Happy-Eyeballs socket racing and host circuit breakers bypasses ISP blocking with minimal latency.
 - **Federated Multi-Source Scraper**: Concurrently queries **BitSearch** (with multi-page scraper pagination), **The Pirate Bay** (apibay.org API), **Torrents.csv**, and **Nyaa** RSS.
-- **Un-Capped Exhaustive Results**: Search results are un-capped; queries return comprehensive result sets with pagination controls (25, 50, 100 per page) and windowed page selectors.
-- **Result Deduplication & Normalization**: Duplicate releases across indexers are merged by info hash, preserving the highest seed/leech counts.
-- **Swarm Integrity & Security**: 64-bit integer overflow protection masks erroneous tracker swarms, single-pass HTML entity decoding prevents double-unescaping vulnerabilities, and magnet resolution enforces strict numeric ID validation.
-- Magnets launch directly into the download pipeline with a single click.
+- **Un-Capped Exhaustive Results**: Search results are un-capped; queries return comprehensive result sets with pagination controls (20, 25, 50, 100 per page) and windowed page selectors.
+- **Title & Release Deduplication**: Duplicate releases across indexers are merged by info hash and normalized titles, keeping the highest seed/leech counts while filtering scraper fragments.
+- **Direct Download & Magnet Actions**: Single-click **Download** directly into the download pipeline or open magnet links in desktop clients without redundant copy buttons.
 
 ![Search Interface](docs/screenshots/search.webp)
 
@@ -90,11 +91,11 @@ Svorrent distributes outgoing peer connections across multiple local network int
 
 - **Throughput-Weighted Multi-Interface Bonding**: Once each active adapter establishes a baseline of 4 peers, new peer connections are weighted proportionally to each adapter's live download speed (`downSpeed`) rather than blind 50/50 round-robin, preventing a slower cellular link from bottlenecking a faster Wi-Fi/Ethernet link.
 - **Harmonized Download & Upload Telemetry**: Both incoming and outgoing torrent protocol traffic (piece payloads, piece requests, HAVE notifications, keepalives) are harmonized across active interfaces, keeping per-adapter download/upload speeds, traffic share percentages, and session counters accurate.
-- **Responsive 2x2 KPI Grid & Interface Row Priority**: Clean quadrant symmetry across all viewport dimensions with column-prioritized layout for compact and mobile screens.
+- **Responsive 2x2 KPI Grid & Interface Row Priority**: Clean quadrant symmetry across all viewport dimensions with dual download and upload sparkline telemetry.
 - **Self-Healing Desktop Launchers**: Native macOS (`launcher_mac.m`) and Windows (`launcher.c`) launchers inspect port 3001 on startup, querying `/api/updater/status` against `build-info.json`. If a stale, mismatched, or hung process from an older build is running, the launcher automatically terminates it with SIGTERM + SIGKILL fallback and launches the fresh bundled backend.
 - **iOS Hotspot UDP Keepalive**: Proactive background UDP heartbeats prevent iOS cellular hotspots from dropping during active peer connections.
 - **Android USB Tethering (macOS)**: Native `svorrent-tetherd` service automatically manages RNDIS virtual interface binding and DHCP configuration.
-- **Per-Adapter Controls & Live Telemetry**: Toggle routing per interface on the fly with live download sparklines, peak speed tracking, traffic share percentages, and session data counters.
+- **Per-Adapter Controls & Live Telemetry**: Toggle routing per interface on the fly with live download and upload sparklines, peak speed tracking, traffic share percentages, and session data counters.
 - **In-App Updates & Continuous Code Integration**: The **Application** section checks for both tagged GitHub Releases and recent commits on `main`, verifies new code in a background staging directory (`node --check` + automated test suite), and prompts **Restart & Integrate** when verified.
 
 #### iPhone USB tethering on macOS

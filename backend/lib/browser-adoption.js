@@ -253,6 +253,35 @@ export function closeStoreFiles(torrent) {
   });
 }
 
+export function reopenTorrentStore(torrent) {
+  if (!torrent || !torrent.store || !torrent._store) return;
+  const ImmediateCtor = torrent.store.constructor;
+  const CacheCtor = torrent.store.store ? torrent.store.store.constructor : null;
+  const RawCtor = torrent._store;
+
+  try {
+    let rawStore = new RawCtor(torrent.pieceLength, {
+      ...torrent.storeOpts,
+      torrent: torrent,
+      path: torrent.path,
+      files: torrent.files,
+      length: torrent.length,
+      name: torrent.name + ' - ' + torrent.infoHash.slice(0, 8),
+      addUID: torrent.addUID,
+      rootDir: torrent.rootDir,
+      max: torrent._storeCacheSlots || 20,
+    });
+
+    if (CacheCtor && (torrent._storeCacheSlots || 20) > 0) {
+      rawStore = new CacheCtor(rawStore, { max: torrent._storeCacheSlots || 20 });
+    }
+
+    torrent.store = new ImmediateCtor(rawStore);
+  } catch (err) {
+    console.warn('[browser-adoption] Reopening store warning:', err.message);
+  }
+}
+
 export function transferCandidateFile(sourcePath, targetPath, options = {}) {
   const mode = options.mode || 'auto'; // 'auto', 'clone', 'move', 'copy'
 
@@ -317,7 +346,10 @@ export async function adoptBrowserDownload(torrent, candidate, options = {}) {
   // 3. Transfer file into Svorrent target location
   const transferMethod = transferCandidateFile(candidate.path, targetPath, options);
 
-  // 4. Rescan and verify piece SHA-1 hashes
+  // 4. Reopen chunk store with fresh file descriptors on the newly adopted file
+  reopenTorrentStore(torrent);
+
+  // 5. Rescan and verify piece SHA-1 hashes
   return new Promise((resolve, reject) => {
     if (typeof torrent.rescanFiles === 'function') {
       torrent.rescanFiles((err) => {

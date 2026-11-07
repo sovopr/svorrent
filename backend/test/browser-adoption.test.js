@@ -10,6 +10,7 @@ import {
   adoptBrowserDownload,
   transferCandidateFile,
   closeStoreFiles,
+  reopenTorrentStore,
 } from '../lib/browser-adoption.js';
 
 test('normalizeMediaName normalizes punctuation, delimiters, and browser suffixes', () => {
@@ -179,4 +180,45 @@ test('closeStoreFiles safely handles null or open RAF descriptors', async () => 
 
   await closeStoreFiles(mockTorrent);
   assert.equal(closedCount, 1);
+});
+
+test('reopenTorrentStore safely reconstructs store hierarchy', () => {
+  reopenTorrentStore(null);
+  reopenTorrentStore({});
+
+  class FakeRawStore {
+    constructor(pieceLength, opts) {
+      this.pieceLength = pieceLength;
+      this.opts = opts;
+    }
+  }
+
+  class FakeCacheStore {
+    constructor(store, opts) {
+      this.store = store;
+      this.opts = opts;
+    }
+  }
+
+  class FakeImmediateStore {
+    constructor(store) {
+      this.store = store;
+    }
+  }
+
+  const mockTorrent = {
+    pieceLength: 16384,
+    length: 32768,
+    name: 'test',
+    infoHash: 'abcd1234abcd1234abcd1234abcd1234abcd1234',
+    files: [],
+    _store: FakeRawStore,
+    _storeCacheSlots: 10,
+    store: new FakeImmediateStore(new FakeCacheStore(new FakeRawStore(16384, {}), {})),
+  };
+
+  reopenTorrentStore(mockTorrent);
+  assert.equal(mockTorrent.store instanceof FakeImmediateStore, true);
+  assert.equal(mockTorrent.store.store instanceof FakeCacheStore, true);
+  assert.equal(mockTorrent.store.store.store instanceof FakeRawStore, true);
 });

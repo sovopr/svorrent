@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
 import { execFileSync } from 'node:child_process';
 
 const KNOWN_BROWSER_SUFFIXES = ['.crdownload', '.part', '.download', '.fdownload', '.tmp'];
@@ -283,7 +284,7 @@ export function reopenTorrentStore(torrent) {
   }
 }
 
-export function stitchSplitDownload(sourcePath, targetPath, torrent, targetLength) {
+export async function stitchSplitDownload(sourcePath, targetPath, torrent, targetLength) {
   if (!fs.existsSync(sourcePath)) return null;
   const stat = fs.statSync(sourcePath);
   if (stat.size >= targetLength || !torrent.pieceLength || !torrent._hashes) return null;
@@ -367,42 +368,29 @@ export function stitchSplitDownload(sourcePath, targetPath, torrent, targetLengt
       fs.copyFileSync(sourcePath, targetPath);
     }
 
-    // Expand target to full length
-    const fdDst = fs.openSync(targetPath, 'r+');
-    try {
-      fs.ftruncateSync(fdDst, targetLength);
+    const headEndOffset = headValid * pieceLen;
+    const tailSrcOffset = tailStart * pieceLen - missingMiddle;
+    const tailDstOffset = tailStart * pieceLen;
+    const tailBytes = targetLength - tailDstOffset;
 
-      // Copy tail from sourcePath to targetPath at proper offset
-      const tailSrcOffset = tailStart * pieceLen - missingMiddle;
-      const tailDstOffset = tailStart * pieceLen;
-      const tailBytes = targetLength - tailDstOffset;
-      const bufSize = 32 * 1024 * 1024;
-      const copyBuf = Buffer.alloc(bufSize);
-      let copied = 0;
+    // 1. Truncate target to headEndOffset to discard old tail immediately in 0ms
+    // 2. Expand target to targetLength creating a sparse hole for the middle gap in 0ms
+    fs.truncateSync(targetPath, headEndOffset);
+    fs.truncateSync(targetPath, targetLength);
 
-      while (copied < tailBytes) {
-        const toRead = Math.min(bufSize, tailBytes - copied);
-        const n = fs.readSync(fdSrc, copyBuf, 0, toRead, tailSrcOffset + copied);
-        if (n <= 0) break;
-        fs.writeSync(fdDst, copyBuf, 0, n, tailDstOffset + copied);
-        copied += n;
-      }
+    // 3. Asynchronously stream the tail pieces without blocking the event loop
+    const readStream = fs.createReadStream(sourcePath, {
+      start: tailSrcOffset,
+      end: tailSrcOffset + tailBytes - 1,
+      highWaterMark: 16 * 1024 * 1024,
+    });
+    const writeStream = fs.createWriteStream(targetPath, {
+      start: tailDstOffset,
+      flags: 'r+',
+      highWaterMark: 16 * 1024 * 1024,
+    });
 
-      // Zero-out middle gap
-      const headEndOffset = headValid * pieceLen;
-      const gapBytes = tailDstOffset - headEndOffset;
-      if (gapBytes > 0) {
-        const zeroBuf = Buffer.alloc(Math.min(gapBytes, 16 * 1024 * 1024));
-        let cleared = 0;
-        while (cleared < gapBytes) {
-          const toWrite = Math.min(zeroBuf.length, gapBytes - cleared);
-          fs.writeSync(fdDst, zeroBuf, 0, toWrite, headEndOffset + cleared);
-          cleared += toWrite;
-        }
-      }
-    } finally {
-      fs.closeSync(fdDst);
-    }
+    await pipeline(readStream, writeStream);
 
     return {
       stitched: true,
@@ -482,7 +470,7 @@ export async function adoptBrowserDownload(torrent, candidate, options = {}) {
   let splitResult = null;
   if (candidate.size < targetLength && torrent.pieceLength && torrent._hashes) {
     try {
-      splitResult = stitchSplitDownload(candidate.path, targetPath, torrent, targetLength);
+      splitResult = await stitchSplitDownload(candidate.path, targetPath, torrent, targetLength);
       if (splitResult) {
         transferMethod = 'stitch';
       }

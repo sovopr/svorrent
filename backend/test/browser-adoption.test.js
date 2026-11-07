@@ -225,7 +225,7 @@ test('reopenTorrentStore safely reconstructs store hierarchy', () => {
   assert.equal(mockTorrent.store.store.store instanceof FakeRawStore, true);
 });
 
-test('stitchSplitDownload dynamically detects split boundaries and stitches sparse target file', () => {
+test('stitchSplitDownload dynamically detects split boundaries and stitches sparse target file', async () => {
   const tmpDir = path.join(os.tmpdir(), `svorrent-test-stitch-${Date.now()}`);
   fs.mkdirSync(tmpDir, { recursive: true });
 
@@ -263,7 +263,7 @@ test('stitchSplitDownload dynamically detects split boundaries and stitches spar
       pieces: new Array(numPieces).fill(null),
     };
 
-    const res = stitchSplitDownload(srcFile, dstFile, mockTorrent, targetLength);
+    const res = await stitchSplitDownload(srcFile, dstFile, mockTorrent, targetLength);
     assert.ok(res);
     assert.equal(res.stitched, true);
     assert.equal(res.headPieces, headPieces);
@@ -294,7 +294,7 @@ test('stitchSplitDownload dynamically detects split boundaries and stitches spar
     // Negative case: mismatched last piece returns null
     const corruptFile = path.join(tmpDir, 'corrupt.mkv');
     fs.writeFileSync(corruptFile, crypto.randomBytes(1024 * 1024));
-    const corruptRes = stitchSplitDownload(corruptFile, dstFile, mockTorrent, targetLength);
+    const corruptRes = await stitchSplitDownload(corruptFile, dstFile, mockTorrent, targetLength);
     assert.equal(corruptRes, null);
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });

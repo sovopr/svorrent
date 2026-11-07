@@ -58,6 +58,7 @@ The downloads dashboard manages active and completed transfers, supports an **Au
 - **Fast MP4 Head/Tail Inspection**: Inspects MP4 `ftyp`/`moov` atoms (`hasMoovAtBeginning`) so non-faststart MP4 containers automatically verify tail pieces before enabling playback.
 - **Instant Pause / Resume Swarm Recovery**: Preserves known peer addresses (`remoteAddress:remotePort`) across manual pauses, clears stale pending queues, and immediately redials known peers and re-announces to trackers on resume.
 - **Atomic Session Checkpointing & Orphan Scanner**: Stores torrent metadata and verified-piece bitfields in `~/.svorrent/session.json` and scans `~/Downloads/Svorrent` to detect halfway downloads for one-click resumption.
+- **Seamless Browser Download Adoption**: Automatically detects in-progress or interrupted browser downloads across all major web browsers (Safari `.download` bundle packages, Chrome/Chromium/Edge/Brave `.crdownload`, Firefox `.part`, and direct files in `~/Downloads/`). When adding matching magnet links or torrent files, Svorrent leverages instant Copy-on-Write (CoW) APFS/reflink cloning (< 15 ms, 0 additional disk space) to adopt existing bytes, verifies SHA-1 piece hashes via WebTorrent's bitfield rescan, and seamlessly downloads only the missing pieces from the BitTorrent swarm.
 
 #### 2.2 In-App Storage & File Deletion
 - Custom in-app confirmation modal prevents accidental deletions.

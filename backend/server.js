@@ -26,6 +26,10 @@ import {
   installSwarmPipelineAccelerator,
   updateCriticalFrontier,
 } from './lib/torrents.js';
+import {
+  findBestCandidateForTorrent,
+  adoptBrowserDownload,
+} from './lib/browser-adoption.js';
 import { createSettingsManager } from './lib/settings.js';
 import { localAccess } from './lib/local-access.js';
 import { childPath, hasSafeParent } from './lib/safe-path.js';
@@ -546,6 +550,41 @@ function setupTorrentHooks(torrent) {
         } catch {}
       });
     }
+
+    // Automatic seamless adoption:
+    // If torrent was just added and has not downloaded much (< 5%), check if user has an existing partial browser download
+    if (torrent.progress < 0.05 && !torrent.done && !torrent._adoptingBrowser && !torrent._adoptedFromBrowser) {
+      try {
+        const candidate = findBestCandidateForTorrent(torrent, {
+          downloadDir: torrent.path || DOWNLOAD_DIR,
+        });
+        if (candidate && candidate.size > 5 * 1024 * 1024) {
+          console.log(`[browser-adoption] Seamlessly adopting ${candidate.browser} download (${(candidate.size / (1024 * 1024 * 1024)).toFixed(2)} GB, ${candidate.percent}%) into torrent ${torrent.name || torrent.infoHash}`);
+          torrent._adoptingBrowser = true;
+          adoptBrowserDownload(torrent, candidate, {
+            downloadDir: torrent.path || DOWNLOAD_DIR,
+            mode: 'auto',
+          }).then(() => {
+            torrent._adoptingBrowser = false;
+            torrent._adoptedFromBrowser = {
+              browser: candidate.browser,
+              size: candidate.size,
+              percent: candidate.percent,
+            };
+            console.log(`[browser-adoption] Successfully adopted ${candidate.browser} download: ${(torrent.downloaded / (1024 * 1024 * 1024)).toFixed(2)} GB verified (${(torrent.progress * 100).toFixed(1)}%)`);
+            applyPriorities();
+            archive.save(torrent);
+            saveSession();
+          }).catch((err) => {
+            torrent._adoptingBrowser = false;
+            console.error(`[browser-adoption] Auto-adoption error:`, err.message);
+          });
+        }
+      } catch (err) {
+        console.warn(`[browser-adoption] Candidate detection error:`, err.message);
+      }
+    }
+
     archive.save(torrent);
     saveSession();
   };
@@ -741,6 +780,7 @@ app.get('/api/torrents', (req, res) => {
 
     const isPaused = !!(t.paused || t._pausedManually);
     const playability = assessTorrentPlayability(t, DOWNLOAD_DIR);
+    const candidate = findBestCandidateForTorrent(t, { downloadDir: t.path || DOWNLOAD_DIR });
 
     return {
       infoHash: t.infoHash,
@@ -762,6 +802,15 @@ app.get('/api/torrents', (req, res) => {
       filesCount: t.files ? t.files.length : 0,
       isFolderFile: false,
       playability,
+      browserCandidate: candidate ? {
+        browser: candidate.browser,
+        type: candidate.type,
+        name: candidate.name,
+        size: candidate.size,
+        percent: candidate.percent,
+      } : null,
+      adoptingBrowser: !!t._adoptingBrowser,
+      adoptedFromBrowser: t._adoptedFromBrowser || null,
     };
   });
 
@@ -1350,6 +1399,53 @@ app.post('/api/torrent/:id/recheck', async (req, res) => {
     });
   } else {
     res.json({ success: true, progress: torrent.progress || 0 });
+  }
+});
+
+// 5. Adopt matching browser download (Safari, Chrome, Firefox, etc.)
+app.post('/api/torrent/:id/adopt-download', async (req, res) => {
+  const torrent = await client.get(req.params.id);
+  if (!torrent) return res.status(404).json({ error: 'Torrent not found' });
+
+  const candidate = findBestCandidateForTorrent(torrent, {
+    downloadDir: torrent.path || DOWNLOAD_DIR,
+  });
+
+  if (!candidate) {
+    return res.status(400).json({ error: 'No compatible browser download found in Downloads directory' });
+  }
+
+  try {
+    torrent._adoptingBrowser = true;
+    const result = await adoptBrowserDownload(torrent, candidate, {
+      downloadDir: torrent.path || DOWNLOAD_DIR,
+      mode: req.body?.mode || 'auto',
+    });
+    torrent._adoptingBrowser = false;
+    torrent._adoptedFromBrowser = {
+      browser: candidate.browser,
+      size: candidate.size,
+      percent: candidate.percent,
+    };
+    if (typeof torrent._applyPriorities === 'function') {
+      torrent._applyPriorities();
+    }
+    archive.save(torrent);
+    saveSession();
+    res.json({
+      success: true,
+      adopted: {
+        browser: candidate.browser,
+        size: candidate.size,
+        percent: candidate.percent,
+      },
+      progress: torrent.progress || 0,
+      downloaded: torrent.downloaded || 0,
+      method: result.method,
+    });
+  } catch (err) {
+    torrent._adoptingBrowser = false;
+    res.status(500).json({ error: `Adoption failed: ${err.message}` });
   }
 });
 

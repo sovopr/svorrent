@@ -1049,6 +1049,45 @@ main:focus-visible,
   color: var(--text-2);
 }
 
+.btn-adopt-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(59, 130, 246, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(59, 130, 246, 0.3);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.btn-adopt-inline:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.22);
+  border-color: var(--accent);
+}
+
+.btn-adopt-inline:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.adopted-tag {
+  font-size: 11px;
+  color: var(--accent);
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.2);
+  padding: 1px 6px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.is-adopting .bar-fill {
+  background: var(--accent);
+  opacity: 0.8;
+}
+
 .dl-actions-row {
   display: flex;
   align-items: center;

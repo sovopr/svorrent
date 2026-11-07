@@ -1,0 +1,114 @@
+name: Continuous Android main APK
+
+on:
+  push:
+    branches: ['main']
+    paths:
+      - 'android/**'
+      - '.github/workflows/android-main.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-main-apk
+  cancel-in-progress: true
+
+jobs:
+  build-and-publish-main-apk:
+    name: Build & Publish Rolling main APK
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Accept Android SDK Licenses
+        run: |
+          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -name sdkmanager | head -n 1)
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Run Unit Tests and Compile Signed Rolling APK
+        working-directory: android
+        env:
+          SVORRENT_GIT_SHA: ${{ github.sha }}
+          SVORRENT_KEYSTORE_PATH: svorrent-release.keystore
+          SVORRENT_KEYSTORE_PASS: svorrent123
+          SVORRENT_KEY_ALIAS: svorrent
+          SVORRENT_KEY_PASS: svorrent123
+        run: |
+          set -euo pipefail
+          APP_VER="$(node -p "require('../backend/package.json').version")"
+          COMMIT_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SVORRENT_VERSION="$APP_VER"
+          export SVORRENT_VERSION_CODE="$(( COMMIT_EPOCH - 1700000000 ))"
+          gradle testReleaseUnitTest assembleRelease --no-daemon
+          cp app/build/outputs/apk/release/app-release.apk Svorrent.apk
+          ls -lh Svorrent.apk
+
+      - name: Publish rolling main-latest APK and manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          COMMIT_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="${COMMIT_SHA:0:7}"
+          APP_VER="$(node -p "require('./backend/package.json').version")"
+          COMMIT_EPOCH="$(git show -s --format=%ct HEAD)"
+          VER_CODE="$(( COMMIT_EPOCH - 1700000000 ))"
+          COMMIT_MSG="$(git log -1 --pretty=%s HEAD)"
+          UPDATED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+          COMMIT_SHA="$COMMIT_SHA" \
+          SHORT_SHA="$SHORT_SHA" \
+          APP_VER="$APP_VER" \
+          VER_CODE="$VER_CODE" \
+          COMMIT_MSG="$COMMIT_MSG" \
+          UPDATED_AT="$UPDATED_AT" \
+          node -e '
+            const fs = require("node:fs");
+            const manifest = {
+              version: process.env.APP_VER,
+              sha: process.env.COMMIT_SHA,
+              shortSha: process.env.SHORT_SHA,
+              versionCode: Number(process.env.VER_CODE),
+              message: process.env.COMMIT_MSG,
+              apkUrl: "https://github.com/sovopr/svorrent/releases/download/main-latest/Svorrent.apk",
+              updatedAt: process.env.UPDATED_AT
+            };
+            fs.writeFileSync("android/main-build.json", JSON.stringify(manifest, null, 2) + "\n");
+          '
+
+          cat android/main-build.json
+
+          git tag -f main-latest "$COMMIT_SHA"
+          git push -f origin refs/tags/main-latest
+
+          if gh release view main-latest --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload main-latest android/Svorrent.apk --clobber --repo "$GITHUB_REPOSITORY"
+            gh release upload main-latest android/main-build.json --clobber --repo "$GITHUB_REPOSITORY"
+            gh release edit main-latest \
+              --repo "$GITHUB_REPOSITORY" \
+              --prerelease \
+              --title "Android Rolling Main Build ($SHORT_SHA)" \
+              --notes "Automatic signed Android APK built from main commit $SHORT_SHA: $COMMIT_MSG"
+          else
+            gh release create main-latest \
+              android/Svorrent.apk \
+              android/main-build.json \
+              --repo "$GITHUB_REPOSITORY" \
+              --prerelease \
+              --verify-tag \
+              --title "Android Rolling Main Build ($SHORT_SHA)" \
+              --notes "Automatic signed Android APK built from main commit $SHORT_SHA: $COMMIT_MSG"
+          fi

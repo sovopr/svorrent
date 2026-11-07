@@ -204,4 +204,43 @@ class SvorrentAndroidTest {
         assertTrue("1080p ($s1080) should rank higher than 720p ($s720)", s1080 > s720)
         assertTrue("Scene BluRay REPACK ($sSceneRepack) must rank far above game repack ($sGameRepack)", sSceneRepack > sGameRepack + 7000)
     }
+
+    @Test
+    fun testIsMainBuildNewerDetectsRepoCommitsWithoutVersionBump() {
+        // New commit pushed to main with identical semver (1.0.11 -> 1.0.11) and higher monotonic versionCode
+        assertTrue(
+            AutoUpdater.isMainBuildNewer(
+                currentVersion = "1.0.11",
+                currentVersionCode = 94037500,
+                currentSha = "eb2ff5b",
+                remoteVersion = "1.0.11",
+                remoteVersionCode = 94038100,
+                remoteShortSha = "a1b2c3d"
+            )
+        )
+
+        // Exact same commit SHA is NOT treated as an update even if versionCode differs slightly
+        assertFalse(
+            AutoUpdater.isMainBuildNewer(
+                currentVersion = "1.0.11",
+                currentVersionCode = 94037500,
+                currentSha = "a1b2c3d",
+                remoteVersion = "1.0.11",
+                remoteVersionCode = 94037505,
+                remoteShortSha = "a1b2c3d"
+            )
+        )
+
+        // Older remote versionCode is never offered as a downgrade
+        assertFalse(
+            AutoUpdater.isMainBuildNewer(
+                currentVersion = "1.0.11",
+                currentVersionCode = 94039000,
+                currentSha = "f9e8d7c",
+                remoteVersion = "1.0.11",
+                remoteVersionCode = 94038100,
+                remoteShortSha = "a1b2c3d"
+            )
+        )
+    }
 }

@@ -12,10 +12,12 @@ android {
         applicationId = "com.svorrent.app"
         minSdk = 26
         targetSdk = 35
-        val appVersion = (System.getenv("SVORRENT_VERSION") ?: "1.0.10").removePrefix("v")
+        val appVersion = (System.getenv("SVORRENT_VERSION") ?: "1.0.11").removePrefix("v")
         versionName = appVersion
         val parts = appVersion.split(".").mapNotNull { it.toIntOrNull() }
-        versionCode = if (parts.size >= 3) parts[0] * 10000 + parts[1] * 100 + parts[2] else 10010
+        val semverCode = if (parts.size >= 3) parts[0] * 10000 + parts[1] * 100 + parts[2] else 10011
+        val envVersionCode = System.getenv("SVORRENT_VERSION_CODE")?.toIntOrNull()
+        versionCode = if (envVersionCode != null && envVersionCode > semverCode) envVersionCode else semverCode
 
         val gitSha = (System.getenv("SVORRENT_GIT_SHA") ?: "local").take(7)
         buildConfigField("String", "GIT_SHA", "\"$gitSha\"")

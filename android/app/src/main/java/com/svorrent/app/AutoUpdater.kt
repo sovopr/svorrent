@@ -32,6 +32,8 @@ data class UpdateState(
 
 object AutoUpdater {
     const val PUBLIC_LATEST_APK_URL = "https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.apk"
+    const val MAIN_LATEST_APK_URL = "https://github.com/sovopr/svorrent/releases/download/main-latest/Svorrent.apk"
+    const val MAIN_BUILD_MANIFEST_URL = "https://github.com/sovopr/svorrent/releases/download/main-latest/main-build.json"
     private val TAG_REDIRECT_REGEX = Regex("""/releases/tag/[vV]?([0-9]+\.[0-9]+\.[0-9]+[^\s/?#]*)""")
 
     private val _state = MutableStateFlow(UpdateState())
@@ -72,6 +74,79 @@ object AutoUpdater {
         return false
     }
 
+    fun isMainBuildNewer(
+        currentVersion: String,
+        currentVersionCode: Int,
+        currentSha: String,
+        remoteVersion: String,
+        remoteVersionCode: Int,
+        remoteShortSha: String
+    ): Boolean {
+        val cleanRemoteSha = remoteShortSha.trim().take(7)
+        val cleanCurrentSha = currentSha.trim().take(7)
+        if (cleanRemoteSha.isNotEmpty() &&
+            cleanCurrentSha.isNotEmpty() &&
+            !cleanCurrentSha.equals("local", ignoreCase = true) &&
+            cleanRemoteSha.equals(cleanCurrentSha, ignoreCase = true)
+        ) {
+            return false
+        }
+        if (remoteVersionCode > 0 && currentVersionCode > 0 && remoteVersionCode < currentVersionCode) {
+            return false
+        }
+        if (remoteVersion.isNotBlank() && isNewerSemver(currentVersion, remoteVersion)) {
+            return true
+        }
+        if (cleanRemoteSha.isNotEmpty() &&
+            cleanCurrentSha.isNotEmpty() &&
+            !cleanCurrentSha.equals("local", ignoreCase = true) &&
+            remoteVersionCode > currentVersionCode
+        ) {
+            return true
+        }
+        return false
+    }
+
+    private fun fetchTextFollowingRedirects(initialUrl: String): String {
+        var currentUrl = initialUrl
+        var hops = 0
+        while (hops < 6) {
+            val conn = (URL(currentUrl).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                instanceFollowRedirects = false
+                setRequestProperty("User-Agent", "Svorrent/${BuildConfig.VERSION_NAME} (Android)")
+                setRequestProperty("Cache-Control", "no-cache")
+                connectTimeout = 4000
+                readTimeout = 4000
+            }
+            val code = conn.responseCode
+            if (code in 300..399) {
+                val location = conn.getHeaderField("Location")
+                conn.disconnect()
+                if (location.isNullOrBlank()) {
+                    throw IllegalStateException("Redirect missing Location ($code)")
+                }
+                currentUrl = if (location.startsWith("http://") || location.startsWith("https://")) {
+                    location
+                } else {
+                    URL(URL(currentUrl), location).toString()
+                }
+                hops++
+                continue
+            }
+            if (code !in 200..299) {
+                conn.disconnect()
+                throw IllegalStateException("HTTP $code from $currentUrl")
+            }
+            return try {
+                conn.inputStream.bufferedReader().use { it.readText() }
+            } finally {
+                conn.disconnect()
+            }
+        }
+        throw IllegalStateException("Too many redirects")
+    }
+
     suspend fun checkForUpdatesIfStale(minIntervalMs: Long = 45_000L): UpdateState {
         val current = _state.value
         if (isChecking || current.status in listOf("available", "downloading", "ready")) {
@@ -95,17 +170,64 @@ object AutoUpdater {
         if (!silent) {
             _state.value = _state.value.copy(
                 status = "checking",
-                latestMessage = "Checking GitHub Releases for updates…"
+                latestMessage = "Checking repository for updates…"
             )
         }
 
         var checkedOk = false
+        var fallbackLatestApkUrl: String? = _state.value.apkDownloadUrl
         try {
+            // 1. Check rolling main-branch build manifest (updates on any Android commit merged to main, no version bump needed)
+            runCatching {
+                val cacheBuster = System.currentTimeMillis() / 20_000L
+                val rawManifest = fetchTextFollowingRedirects("$MAIN_BUILD_MANIFEST_URL?t=$cacheBuster")
+                val manifest = JSONObject(rawManifest)
+                val remoteVersion = manifest.optString("version", "").removePrefix("v").removePrefix("V")
+                val remoteShortSha = manifest.optString("shortSha", "").ifEmpty {
+                    manifest.optString("sha", "").take(7)
+                }
+                val remoteVersionCode = manifest.optInt("versionCode", 0)
+                val commitMsg = manifest.optString("message", "").trim()
+                val remoteApkUrl = manifest.optString("apkUrl", "").ifEmpty { MAIN_LATEST_APK_URL }
+
+                if (remoteShortSha.isNotEmpty()) {
+                    checkedOk = true
+                    fallbackLatestApkUrl = remoteApkUrl
+                    if (isMainBuildNewer(
+                            currentVersion = BuildConfig.VERSION_NAME,
+                            currentVersionCode = BuildConfig.VERSION_CODE,
+                            currentSha = BuildConfig.GIT_SHA,
+                            remoteVersion = remoteVersion,
+                            remoteVersionCode = remoteVersionCode,
+                            remoteShortSha = remoteShortSha
+                        )
+                    ) {
+                        lastCheckedAtMs = System.currentTimeMillis()
+                        val displayMsg = if (commitMsg.isNotEmpty()) {
+                            "New commit $remoteShortSha on main: $commitMsg"
+                        } else {
+                            "New build available from main ($remoteShortSha)"
+                        }
+                        val nextState = UpdateState(
+                            status = "available",
+                            currentVersion = BuildConfig.VERSION_NAME,
+                            currentSha = BuildConfig.GIT_SHA,
+                            latestSha = remoteShortSha,
+                            latestMessage = displayMsg,
+                            apkDownloadUrl = remoteApkUrl,
+                            browserReleaseApkUrl = remoteApkUrl
+                        )
+                        _state.value = nextState
+                        return@withContext nextState
+                    }
+                }
+            }
+
             var apkUrl: String? = null
             var releaseTag = ""
             var releaseBody = ""
 
-            // 1. Fast CDN 302 redirect check (immune to api.github.com 60/hr CGNAT IP rate limits)
+            // 2. Fast CDN 302 redirect check for tagged semver releases (immune to api.github.com 60/hr CGNAT IP rate limits)
             runCatching {
                 val latestConn = (URL("https://github.com/sovopr/svorrent/releases/latest").openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
@@ -148,7 +270,7 @@ object AutoUpdater {
                 }
             }
 
-            // 2. Fallback to GitHub REST API (with DoH resilience if carrier DNS interferes)
+            // 3. Fallback to GitHub REST API (with DoH resilience if carrier DNS interferes)
             if (!checkedOk) {
                 runCatching {
                     val rawJson = SearchRepository.fetchUrlWithDoHFallback(
@@ -186,7 +308,8 @@ object AutoUpdater {
                     currentSha = BuildConfig.GIT_SHA,
                     latestSha = releaseTag,
                     latestMessage = "New release v$releaseTag available ($releaseBody)",
-                    apkDownloadUrl = apkUrl
+                    apkDownloadUrl = apkUrl,
+                    browserReleaseApkUrl = apkUrl ?: PUBLIC_LATEST_APK_URL
                 )
                 _state.value = nextState
                 return@withContext nextState
@@ -200,7 +323,7 @@ object AutoUpdater {
             if (!silent) {
                 val errState = _state.value.copy(
                     status = "error",
-                    latestMessage = "Could not reach GitHub Releases. Check internet connection."
+                    latestMessage = "Could not reach GitHub. Check internet connection."
                 )
                 _state.value = errState
                 return@withContext errState
@@ -210,7 +333,8 @@ object AutoUpdater {
 
         val readyState = _state.value.copy(
             status = "up-to-date",
-            latestMessage = "Up to date · v${BuildConfig.VERSION_NAME} (${BuildConfig.GIT_SHA})"
+            latestMessage = "Up to date · v${BuildConfig.VERSION_NAME} (${BuildConfig.GIT_SHA})",
+            apkDownloadUrl = fallbackLatestApkUrl
         )
         _state.value = readyState
         readyState
@@ -218,9 +342,10 @@ object AutoUpdater {
 
     fun openPrivateReleaseApkDownload(context: Context) {
         try {
+            val targetUrl = _state.value.apkDownloadUrl ?: PUBLIC_LATEST_APK_URL
             val intent = Intent(
                 Intent.ACTION_VIEW,
-                Uri.parse(PUBLIC_LATEST_APK_URL)
+                Uri.parse(targetUrl)
             ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
         } catch (_: Throwable) {

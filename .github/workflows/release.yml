@@ -163,6 +163,8 @@ jobs:
           SVORRENT_KEY_ALIAS: svorrent
           SVORRENT_KEY_PASS: svorrent123
         run: |
+          COMMIT_EPOCH="$(git show -s --format=%ct HEAD)"
+          export SVORRENT_VERSION_CODE="$(( COMMIT_EPOCH - 1700000000 ))"
           gradle testReleaseUnitTest assembleRelease --no-daemon
           cp app/build/outputs/apk/release/app-release.apk Svorrent.apk
           ls -lh Svorrent.apk

@@ -58,6 +58,10 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.FileProvider
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.math.max
@@ -115,6 +119,16 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         SvorrentEngineService.isAppInForeground = true
+    }
+
+    override fun onResume() {
+        super.onResume()
+        lifecycleScope.launch {
+            AutoUpdater.checkForUpdatesIfStale()
+        }
+        lifecycleScope.launch {
+            SearchRepository.prewarmIndexers()
+        }
     }
 
     override fun onStop() {
@@ -269,7 +283,12 @@ fun SvorrentApp() {
     var showUpdateModal by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
-        AutoUpdater.checkForUpdates()
+        launch { SearchRepository.prewarmIndexers() }
+        val st = AutoUpdater.checkForUpdatesIfStale()
+        if (st.status == "idle") {
+            delay(6000L)
+            AutoUpdater.checkForUpdatesIfStale()
+        }
     }
 
     // Harmonize top-bar speeds with network snapshot so upload & download always match Networks tab
@@ -533,13 +552,17 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
     var currentPage by remember { mutableStateOf(1) }
     val pageSize = 20
     var loading by remember { mutableStateOf(false) }
+    var syncingMore by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var results by remember { mutableStateOf<List<SearchResultItem>>(emptyList()) }
+    var searchJob by remember { mutableStateOf<Job?>(null) }
+    var activeSearchGen by remember { mutableStateOf(0) }
+    val hexHashRegex = remember { Regex("^[0-9a-fA-F]{40}$") }
 
     fun triggerSearch() {
         val term = query.trim()
         if (term.isEmpty()) return
-        if (term.startsWith("magnet:?", ignoreCase = true) || term.matches(Regex("^[0-9a-fA-F]{40}$"))) {
+        if (term.startsWith("magnet:?", ignoreCase = true) || term.matches(hexHashRegex)) {
             SvorrentEngine.addMagnet(term).onSuccess {
                 Toast.makeText(context, "Added to Downloads", Toast.LENGTH_SHORT).show()
                 query = ""
@@ -550,19 +573,42 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
             return
         }
 
+        searchJob?.cancel()
+        val gen = activeSearchGen + 1
+        activeSearchGen = gen
+
         focusManager.clearFocus()
         loading = true
+        syncingMore = true
         error = null
         currentPage = 1
-        scope.launch {
+        results = emptyList()
+        searchedQuery = ""
+
+        searchJob = scope.launch {
             try {
-                val res = SearchRepository.search(term)
-                results = res
-                searchedQuery = term
+                val res = SearchRepository.searchStreaming(term) { partial ->
+                    if (activeSearchGen == gen && partial.isNotEmpty()) {
+                        results = partial
+                        searchedQuery = term
+                        loading = false
+                    }
+                }
+                if (activeSearchGen == gen) {
+                    results = res
+                    searchedQuery = term
+                }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                error = e.message ?: "Search failed"
+                if (activeSearchGen == gen && results.isEmpty()) {
+                    error = e.message ?: "Search failed"
+                }
             } finally {
-                loading = false
+                if (activeSearchGen == gen) {
+                    loading = false
+                    syncingMore = false
+                }
             }
         }
     }
@@ -679,10 +725,19 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
                 val startIdx = if (sortedResults.isEmpty()) 0 else (currentPage - 1) * pageSize + 1
                 val endIdx = minOf(currentPage * pageSize, sortedResults.size)
                 Text(
-                    text = "Showing $startIdx–$endIdx of ${sortedResults.size}",
+                    text = if (syncingMore) {
+                        "$startIdx–$endIdx of ${sortedResults.size} · Syncing…"
+                    } else {
+                        "Showing $startIdx–$endIdx of ${sortedResults.size}"
+                    },
                     color = TextSecondary,
                     fontSize = 11.5.sp,
-                    fontFamily = FontFamily.Monospace
+                    fontFamily = FontFamily.Monospace,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(end = 6.dp)
                 )
 
                 Row(
@@ -734,6 +789,20 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
         if (loading) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = AccentBlue, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
+            }
+        } else if (searchedQuery.isNotEmpty() && sortedResults.isEmpty() && !syncingMore) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 56.dp, start = 16.dp, end = 16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Nothing found for \"$searchedQuery\". Try fewer or different keywords.",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
             }
         } else if (searchedQuery.isNotEmpty()) {
             Column(

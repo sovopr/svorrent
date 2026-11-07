@@ -139,3 +139,30 @@ test('scoreSearchResult severely penalizes fragmented titles and non-matching sc
   const score = scoreSearchResult(fragment, query);
   assert.ok(score < 0, `Scraper fragment score (${score}) should be negative`);
 });
+
+test('scoreSearchResult ranks 1080p above 720p and preserves scene REPACK movies', () => {
+  const query = 'the batman';
+  const movie1080p = {
+    title: 'The Batman (2022) 1080p WEBRip x264',
+    size: '2.1 GB',
+    seeds: 900,
+  };
+  const movie720p = {
+    title: 'The Batman (2022) 720p WEBRip x264',
+    size: '1.3 GB',
+    seeds: 900,
+  };
+  const sceneRepack = {
+    title: 'The Batman (2022) REPACK 1080p BluRay x265',
+    size: '2.4 GB',
+    seeds: 850,
+  };
+  const gameRepack = {
+    title: 'Batman Arkham Knight FitGirl Repack',
+    size: '28.5 GB',
+    seeds: 1200,
+  };
+
+  assert.ok(scoreSearchResult(movie1080p, query) > scoreSearchResult(movie720p, query));
+  assert.ok(scoreSearchResult(sceneRepack, query) > scoreSearchResult(gameRepack, query) + 7000);
+});

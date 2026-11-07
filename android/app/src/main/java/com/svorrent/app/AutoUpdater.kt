@@ -32,9 +32,16 @@ data class UpdateState(
 
 object AutoUpdater {
     const val PUBLIC_LATEST_APK_URL = "https://github.com/sovopr/svorrent/releases/latest/download/Svorrent.apk"
+    private val TAG_REDIRECT_REGEX = Regex("""/releases/tag/[vV]?([0-9]+\.[0-9]+\.[0-9]+[^\s/?#]*)""")
 
     private val _state = MutableStateFlow(UpdateState())
     val state: StateFlow<UpdateState> = _state.asStateFlow()
+
+    @Volatile
+    private var lastCheckedAtMs: Long = 0L
+
+    @Volatile
+    private var isChecking: Boolean = false
 
     fun getDownloadedApkFile(context: Context): File {
         val dir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.cacheDir
@@ -43,6 +50,12 @@ object AutoUpdater {
 
     fun isDownloadedApkReady(context: Context): Boolean =
         getDownloadedApkFile(context).let { it.exists() && it.length() > 0 }
+
+    fun extractReleaseTagFromLocation(location: String?): String {
+        if (location.isNullOrBlank()) return ""
+        val match = TAG_REDIRECT_REGEX.find(location.trim()) ?: return ""
+        return match.groupValues[1].trim()
+    }
 
     fun isNewerSemver(currentVer: String, candidateVer: String): Boolean {
         fun parse(v: String): List<Int> =
@@ -59,23 +72,92 @@ object AutoUpdater {
         return false
     }
 
-    suspend fun checkForUpdates(): UpdateState = withContext(Dispatchers.IO) {
-        _state.value = _state.value.copy(status = "checking", latestMessage = "Checking GitHub Releases for updates…")
+    suspend fun checkForUpdatesIfStale(minIntervalMs: Long = 45_000L): UpdateState {
+        val current = _state.value
+        if (isChecking || current.status in listOf("available", "downloading", "ready")) {
+            return current
+        }
+        val now = System.currentTimeMillis()
+        if (current.status == "up-to-date" && lastCheckedAtMs > 0L && (now - lastCheckedAtMs) < minIntervalMs) {
+            return current
+        }
+        return checkForUpdates(silent = true)
+    }
+
+    suspend fun checkForUpdates(silent: Boolean = false): UpdateState = withContext(Dispatchers.IO) {
+        if (isChecking) return@withContext _state.value
+        val existingStatus = _state.value.status
+        if (existingStatus in listOf("downloading", "ready")) {
+            return@withContext _state.value
+        }
+
+        isChecking = true
+        if (!silent) {
+            _state.value = _state.value.copy(
+                status = "checking",
+                latestMessage = "Checking GitHub Releases for updates…"
+            )
+        }
+
+        var checkedOk = false
         try {
             var apkUrl: String? = null
             var releaseTag = ""
             var releaseBody = ""
+
+            // 1. Fast CDN 302 redirect check (immune to api.github.com 60/hr CGNAT IP rate limits)
             runCatching {
-                val relConn = (URL("https://api.github.com/repos/sovopr/svorrent/releases/latest").openConnection() as HttpURLConnection).apply {
+                val latestConn = (URL("https://github.com/sovopr/svorrent/releases/latest").openConnection() as HttpURLConnection).apply {
                     requestMethod = "GET"
+                    instanceFollowRedirects = false
                     setRequestProperty("User-Agent", "Svorrent/${BuildConfig.VERSION_NAME} (Android)")
-                    connectTimeout = 8000
-                    readTimeout = 8000
+                    connectTimeout = 4000
+                    readTimeout = 4000
                 }
-                if (relConn.responseCode == 200) {
-                    val relJson = JSONObject(relConn.inputStream.bufferedReader().use { it.readText() })
-                    releaseTag = relJson.optString("tag_name", "").removePrefix("v")
-                    releaseBody = relJson.optString("name", "")
+                val code = latestConn.responseCode
+                val location = latestConn.getHeaderField("Location")
+                latestConn.disconnect()
+
+                if (code in 300..399) {
+                    val tag = extractReleaseTagFromLocation(location)
+                    if (tag.isNotEmpty()) {
+                        if (!isNewerSemver(BuildConfig.VERSION_NAME, tag)) {
+                            checkedOk = true
+                        } else {
+                            val rawTagSegment = location?.substringAfter("/releases/tag/", "")
+                                ?.substringBefore("?")?.substringBefore("#")?.trim()
+                                .takeUnless { it.isNullOrEmpty() } ?: "v$tag"
+                            val candidateApk = "https://github.com/sovopr/svorrent/releases/download/$rawTagSegment/Svorrent.apk"
+                            val assetConn = (URL(candidateApk).openConnection() as HttpURLConnection).apply {
+                                requestMethod = "GET"
+                                instanceFollowRedirects = false
+                                setRequestProperty("User-Agent", "Svorrent/${BuildConfig.VERSION_NAME} (Android)")
+                                connectTimeout = 4000
+                                readTimeout = 4000
+                            }
+                            val assetCode = assetConn.responseCode
+                            assetConn.disconnect()
+                            if (assetCode in 200..399) {
+                                releaseTag = tag
+                                releaseBody = "v$tag"
+                                apkUrl = candidateApk
+                                checkedOk = true
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 2. Fallback to GitHub REST API (with DoH resilience if carrier DNS interferes)
+            if (!checkedOk) {
+                runCatching {
+                    val rawJson = SearchRepository.fetchUrlWithDoHFallback(
+                        "https://api.github.com/repos/sovopr/svorrent/releases/latest",
+                        mapOf("Accept" to "application/vnd.github+json")
+                    )
+                    val relJson = JSONObject(rawJson)
+                    releaseTag = relJson.optString("tag_name", "").removePrefix("v").removePrefix("V")
+                    releaseBody = relJson.optString("name", "").ifEmpty { "v$releaseTag" }
                     val assets = relJson.optJSONArray("assets")
                     if (assets != null) {
                         for (i in 0 until assets.length()) {
@@ -87,7 +169,14 @@ object AutoUpdater {
                             }
                         }
                     }
+                    if (releaseTag.isNotEmpty()) {
+                        checkedOk = true
+                    }
                 }
+            }
+
+            if (checkedOk) {
+                lastCheckedAtMs = System.currentTimeMillis()
             }
 
             if (apkUrl != null && releaseTag.isNotEmpty() && isNewerSemver(BuildConfig.VERSION_NAME, releaseTag)) {
@@ -103,6 +192,20 @@ object AutoUpdater {
                 return@withContext nextState
             }
         } catch (_: Throwable) {
+        } finally {
+            isChecking = false
+        }
+
+        if (!checkedOk) {
+            if (!silent) {
+                val errState = _state.value.copy(
+                    status = "error",
+                    latestMessage = "Could not reach GitHub Releases. Check internet connection."
+                )
+                _state.value = errState
+                return@withContext errState
+            }
+            return@withContext _state.value
         }
 
         val readyState = _state.value.copy(

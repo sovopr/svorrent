@@ -652,11 +652,11 @@ app.get('/api/search', async (req, res) => {
     const searchLimit = Number.isInteger(rawLimit) && rawLimit > 0 ? rawLimit : undefined;
 
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 7500);
+    const timeoutId = setTimeout(() => controller.abort(), 4200);
 
     const results = await searchFederated(query, {
       limit: searchLimit,
-      bitSearchPages: 4,
+      bitSearchPages: 2,
       signal: controller.signal,
     });
     clearTimeout(timeoutId);

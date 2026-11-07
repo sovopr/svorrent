@@ -1,19 +1,34 @@
 package com.svorrent.app
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.IOException
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.InetAddress
 import java.net.Socket
 import java.net.URL
 import java.net.URLEncoder
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import javax.net.ssl.HttpsURLConnection
 import javax.net.ssl.SNIHostName
 import javax.net.ssl.SSLParameters
@@ -31,8 +46,80 @@ object SearchRepository {
         "udp://tracker.cyberia.is:6969/announce"
     )
 
+    private val INDEXER_HOSTS = listOf(
+        "apibay.org",
+        "bitsearch.eu",
+        "torrents-csv.com",
+        "nyaa.si"
+    )
+
+    // Precompiled regular expressions to avoid per-item Pattern.compile overhead
+    private val NUM_ENTITY_REGEX = Regex("&#(\\d+);")
+    private val HTML_TAG_REGEX = Regex("<[^>]*>")
+    private val BTIH_REGEX = Regex("""xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})""", RegexOption.IGNORE_CASE)
+    private val SIZE_REGEX = Regex("""([\d.]+)\s*([KMGT]?i?B)""", RegexOption.IGNORE_CASE)
+    private val WHITESPACE_REGEX = Regex("\\s+")
+    private val SQUARE_BRACKET_REGEX = Regex("""\[[^\]]*]""")
+    private val PAREN_BRACKET_REGEX = Regex("""\([^\)]*\)""")
+    private val CURLY_BRACKET_REGEX = Regex("""\{[^\}]*\}""")
+    private val NON_ALNUM_REGEX = Regex("""[^a-z0-9]+""")
+
+    private val HIGH_RES_VIDEO_REGEX = Regex(
+        """\b(2160p|1080p|4k|uhd|remux|bluray|blu-ray)\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private val STD_VIDEO_REGEX = Regex(
+        """\b(720p|480p|web-dl|webrip|hdrip|bdrip|dvdrip|dvd|brrip|hdtv)\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private val VIDEO_CODEC_REGEX = Regex(
+        """\b(x264|x265|hevc|h264|h265|avc|truehd|atmos|dts|ac3|eac3|ddp5\.1|aac|yts|rarbg|yify|swtyblz|galaxyrg|proper|extended)\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private val RELEASE_YEAR_REGEX = Regex("""\b(19\d\d|20\d\d)\b""")
+    private val GAME_OR_SOFTWARE_REGEX = Regex(
+        """\b(fitgirl|dodi|codex|skidrow|flt|plaza|cpass|telltale|dlc|switch|nsp|xci|iso|rom|emulator|crack|keygen|patch|trainer|mod|apk|setup\.exe)\b""",
+        RegexOption.IGNORE_CASE
+    )
+    private val REPACK_WORD_REGEX = Regex("""\brepack\b""", RegexOption.IGNORE_CASE)
+
+    private val BS_TITLE_REGEX = Regex("""<h3[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)</a>""", RegexOption.IGNORE_CASE)
+    private val BS_MAGNET_REGEX = Regex("""href="(magnet:\?[^"]+)"""", RegexOption.IGNORE_CASE)
+    private val BS_SEED_REGEX = Regex("""text-green-600[\s\S]*?<span class="font-medium">(\d+)</span>""", RegexOption.IGNORE_CASE)
+    private val BS_LEECH_REGEX = Regex("""text-red-600[\s\S]*?<span class="font-medium">(\d+)</span>""", RegexOption.IGNORE_CASE)
+    private val BS_SIZE_REGEX = Regex("""fa-download[^>]*></i>[\s\S]*?<span>([\d.]+\s*[KMGT]?i?B)</span>""", RegexOption.IGNORE_CASE)
+
+    private val NYAA_ITEM_REGEX = Regex("""<item>([\s\S]*?)</item>""", RegexOption.IGNORE_CASE)
+    private val NYAA_TITLE_REGEX = Regex("""<title>([\s\S]*?)</title>""", RegexOption.IGNORE_CASE)
+    private val NYAA_CDATA_REGEX = Regex("""<!\[CDATA\[([\s\S]*?)\]\]>""")
+    private val NYAA_HASH_REGEX = Regex("""<nyaa:infoHash>([a-fA-F0-9]{40})</nyaa:infoHash>""", RegexOption.IGNORE_CASE)
+    private val NYAA_SEED_REGEX = Regex("""<nyaa:seeders>(\d+)</nyaa:seeders>""", RegexOption.IGNORE_CASE)
+    private val NYAA_LEECH_REGEX = Regex("""<nyaa:leechers>(\d+)</nyaa:leechers>""", RegexOption.IGNORE_CASE)
+    private val NYAA_SIZE_REGEX = Regex("""<nyaa:size>([\s\S]*?)</nyaa:size>""", RegexOption.IGNORE_CASE)
+
+    private data class CachedQueryEntry(
+        val timestampMs: Long,
+        val results: List<SearchResultItem>
+    )
+
+    private data class ScoredSearchItem(
+        val item: SearchResultItem,
+        val score: Long
+    )
+
+    private const val QUERY_CACHE_TTL_MS = 90_000L
+    private const val QUERY_CACHE_MAX_SIZE = 30
+    private val queryCache = ConcurrentHashMap<String, CachedQueryEntry>()
+
+    private val dnsCache = ConcurrentHashMap<String, String>()
+    private val inFlightDns = ConcurrentHashMap<String, CompletableFuture<String?>>()
+    private val blockedDirectHosts = ConcurrentHashMap.newKeySet<String>()
+    private val unreachableHostsUntil = ConcurrentHashMap<String, Long>()
+    private val networkRaceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
     fun decodeHtmlEntities(input: String?): String {
         if (input.isNullOrEmpty()) return ""
+        if (!input.contains('&')) return input
         var str = input
             .replace("&amp;", "&", ignoreCase = true)
             .replace("&lt;", "<", ignoreCase = true)
@@ -45,17 +132,19 @@ object SearchRepository {
             .replace("&#x3d;", "=", ignoreCase = true)
             .replace("&#61;", "=", ignoreCase = true)
 
-        val numRegex = Regex("&#(\\d+);")
-        str = numRegex.replace(str) { match ->
-            val code = match.groupValues[1].toIntOrNull()
-            if (code != null && code in 32..126) code.toChar().toString() else match.value
+        if (str.contains("&#")) {
+            str = NUM_ENTITY_REGEX.replace(str) { match ->
+                val code = match.groupValues[1].toIntOrNull()
+                if (code != null && code in 32..126) code.toChar().toString() else match.value
+            }
         }
         return str
     }
 
     fun stripHtmlTags(input: String?): String {
         if (input.isNullOrEmpty()) return ""
-        return input.replace(Regex("<[^>]*>"), "").trim()
+        if (!input.contains('<')) return input.trim()
+        return input.replace(HTML_TAG_REGEX, "").trim()
     }
 
     fun sanitizeSwarmCount(raw: Any?): Int {
@@ -75,7 +164,7 @@ object SearchRepository {
         if (trimmed.length == 40 && trimmed.all { it in '0'..'9' || it in 'a'..'f' || it in 'A'..'F' }) {
             return trimmed.lowercase()
         }
-        val match = Regex("""xt=urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})""", RegexOption.IGNORE_CASE).find(trimmed)
+        val match = BTIH_REGEX.find(trimmed)
         if (match != null) {
             return match.groupValues[1].lowercase()
         }
@@ -85,7 +174,7 @@ object SearchRepository {
     fun parseFormattedSize(sizeStr: String): Long {
         val clean = sizeStr.trim()
         if (clean.isEmpty()) return 0L
-        val match = Regex("""([\d.]+)\s*([KMGT]?i?B)""", RegexOption.IGNORE_CASE).find(clean) ?: return 0L
+        val match = SIZE_REGEX.find(clean) ?: return 0L
         val num = match.groupValues[1].toDoubleOrNull() ?: return 0L
         val unit = match.groupValues[2].uppercase()
         val multiplier = when {
@@ -104,7 +193,7 @@ object SearchRepository {
         val variants = LinkedHashSet<String>()
         variants.add(clean)
 
-        val words = clean.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val words = clean.split(WHITESPACE_REGEX).filter { it.isNotEmpty() }
         if (words.isNotEmpty()) {
             val wildcardWords = words.map { w ->
                 if (w.length >= 3 && !w.endsWith("*") && w.all { it.isLetterOrDigit() || it == '_' || it == '-' }) {
@@ -132,19 +221,31 @@ object SearchRepository {
 
     fun normalizeTitleForDedup(title: String): String {
         return title.lowercase()
-            .replace(Regex("""\[[^\]]*]"""), " ")
-            .replace(Regex("""\([^\)]*\)"""), " ")
-            .replace(Regex("""\{[^\}]*\}"""), " ")
-            .replace(Regex("""[^a-z0-9]+"""), " ")
+            .replace(SQUARE_BRACKET_REGEX, " ")
+            .replace(PAREN_BRACKET_REGEX, " ")
+            .replace(CURLY_BRACKET_REGEX, " ")
+            .replace(NON_ALNUM_REGEX, " ")
             .trim()
     }
 
     fun scoreSearchResult(item: SearchResultItem, query: String = ""): Long {
+        val lowerQuery = query.trim().lowercase()
+        val queryTokens = if (lowerQuery.isEmpty()) {
+            emptyList()
+        } else {
+            lowerQuery.split(NON_ALNUM_REGEX).filter { it.length >= 2 }
+        }
+        return scoreSearchResultTokens(item, lowerQuery, queryTokens)
+    }
+
+    private fun scoreSearchResultTokens(
+        item: SearchResultItem,
+        lowerQuery: String,
+        queryTokens: List<String>
+    ): Long {
         var score = 0L
         val title = item.title.trim()
         val lowerTitle = title.lowercase()
-        val lowerQuery = query.trim().lowercase()
-        val queryTokens = lowerQuery.split(Regex("[^a-z0-9]+")).filter { it.length >= 2 }
 
         // 1. Query matching
         if (lowerQuery.isNotEmpty() && lowerTitle.contains(lowerQuery)) {
@@ -158,15 +259,23 @@ object SearchRepository {
             score += ((matched.toDouble() / queryTokens.size) * 2000L).toLong()
         }
 
-        // 2. Video & Movie Indicators (Resolutions, rips, audio, years)
-        val isVideoResolution = Regex("""\b(2160p|1080p|720p|480p|4k|uhd|bluray|blu-ray|remux|web-dl|webrip|hdrip|bdrip|dvdrip|dvd|brrip|hdtv)\b""", RegexOption.IGNORE_CASE).containsMatchIn(lowerTitle)
-        if (isVideoResolution) score += 4500L
+        // 2. Video & Movie Indicators (1080p/4K preferred over 720p/SD)
+        val isHighResVideo = HIGH_RES_VIDEO_REGEX.containsMatchIn(lowerTitle)
+        val isStdVideo = !isHighResVideo && STD_VIDEO_REGEX.containsMatchIn(lowerTitle)
+        val hasVideoRes = isHighResVideo || isStdVideo
+        if (isHighResVideo) {
+            score += 4800L
+        } else if (isStdVideo) {
+            score += 4200L
+        }
 
-        val isVideoCodec = Regex("""\b(x264|x265|hevc|h264|h265|avc|truehd|atmos|dts|ac3|eac3|ddp5\.1|aac|yts|rarbg|yify|swtyblz|galaxyrg|proper|repack|extended)\b""", RegexOption.IGNORE_CASE).containsMatchIn(lowerTitle)
-        if (isVideoCodec) score += 2500L
+        if (VIDEO_CODEC_REGEX.containsMatchIn(lowerTitle)) {
+            score += 2500L
+        }
 
-        val hasReleaseYear = Regex("""\b(19\d\d|20\d\d)\b""").containsMatchIn(lowerTitle)
-        if (hasReleaseYear) score += 2000L
+        if (RELEASE_YEAR_REGEX.containsMatchIn(lowerTitle)) {
+            score += 2000L
+        }
 
         // 3. File size heuristics for Movies vs tiny patches / cracks
         val sizeBytes = item.sizeBytes
@@ -179,8 +288,9 @@ object SearchRepository {
             score -= 6000L
         }
 
-        // 4. Non-movie / Game / Software penalties
-        val isGameOrSoftware = Regex("""\b(repack|fitgirl|dodi|codex|skidrow|flt|plaza|cpass|telltale|dlc|switch|nsp|xci|iso|rom|emulator|crack|keygen|patch|trainer|mod|apk|setup\.exe)\b""", RegexOption.IGNORE_CASE).containsMatchIn(lowerTitle)
+        // 4. Non-movie / Game / Software penalties (do not penalize scene BluRay/1080p REPACK movies)
+        val isGameOrSoftware = GAME_OR_SOFTWARE_REGEX.containsMatchIn(lowerTitle) ||
+            (!hasVideoRes && REPACK_WORD_REGEX.containsMatchIn(lowerTitle))
         if (isGameOrSoftware) {
             score -= 7000L
         }
@@ -197,18 +307,14 @@ object SearchRepository {
         return score
     }
 
-    private val dnsCache = java.util.concurrent.ConcurrentHashMap<String, String>()
-    private val blockedDirectHosts = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
-
-    private fun resolveViaDoH(hostname: String): String? {
-        dnsCache[hostname]?.let { return it }
+    private fun queryDoHEndpoint(dohUrl: String): String? {
+        var conn: HttpsURLConnection? = null
         return try {
-            val url = URL("https://1.1.1.1/dns-query?name=${URLEncoder.encode(hostname, "UTF-8")}&type=A")
-            val conn = (url.openConnection() as HttpsURLConnection).apply {
+            conn = (URL(dohUrl).openConnection() as HttpsURLConnection).apply {
                 requestMethod = "GET"
                 setRequestProperty("Accept", "application/dns-json")
-                connectTimeout = 3500
-                readTimeout = 3500
+                connectTimeout = 2000
+                readTimeout = 2000
             }
             if (conn.responseCode != 200) return null
             val body = BufferedReader(InputStreamReader(conn.inputStream)).use { it.readText() }
@@ -219,7 +325,6 @@ object SearchRepository {
                 if (ans.optInt("type") == 1) {
                     val data = ans.optString("data")
                     if (data.isNotBlank()) {
-                        dnsCache[hostname] = data
                         return data
                     }
                 }
@@ -227,35 +332,89 @@ object SearchRepository {
             null
         } catch (_: Exception) {
             null
+        } finally {
+            runCatching { conn?.disconnect() }
         }
     }
 
-    fun fetchUrlWithDoHFallback(targetUrl: String, headers: Map<String, String> = emptyMap()): String {
-        val parsed = URL(targetUrl)
-        val host = parsed.host
+    private fun resolveViaDoH(hostname: String): String? {
+        dnsCache[hostname]?.let { return it }
 
-        if (!blockedDirectHosts.contains(host)) {
-            try {
-                val conn = (parsed.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "GET"
-                    setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile; Svorrent/${BuildConfig.VERSION_NAME})")
-                    for ((k, v) in headers) {
-                        setRequestProperty(k, v)
-                    }
-                    connectTimeout = 2000
-                    readTimeout = 4500
-                }
-                if (conn.responseCode in 200..299) {
-                    return BufferedReader(InputStreamReader(conn.inputStream)).use { it.readText() }
-                }
-            } catch (_: Exception) {
-                blockedDirectHosts.add(host)
-            }
+        val future = CompletableFuture<String?>()
+        val existing = inFlightDns.putIfAbsent(hostname, future)
+        if (existing != null) {
+            return runCatching { existing.get(3500, TimeUnit.MILLISECONDS) }.getOrNull()
         }
 
-        val resolvedIp = resolveViaDoH(parsed.host)
-            ?: throw Exception("Could not reach search index ($parsed.host). Check internet connection.")
+        return try {
+            val encodedHost = URLEncoder.encode(hostname, "UTF-8")
+            val ip = queryDoHEndpoint("https://1.1.1.1/dns-query?name=$encodedHost&type=A")
+                ?: queryDoHEndpoint("https://8.8.8.8/resolve?name=$encodedHost&type=A")
+            if (!ip.isNullOrBlank()) {
+                dnsCache[hostname] = ip
+            }
+            future.complete(ip)
+            ip
+        } catch (_: Throwable) {
+            future.complete(null)
+            null
+        } finally {
+            inFlightDns.remove(hostname, future)
+        }
+    }
 
+    suspend fun prewarmIndexers() = withContext(Dispatchers.IO) {
+        runCatching {
+            coroutineScope {
+                INDEXER_HOSTS
+                    .filter { !dnsCache.containsKey(it) }
+                    .map { host -> async { resolveViaDoH(host) } }
+                    .awaitAll()
+            }
+        }
+    }
+
+    private fun areAllIndexersMarkedUnreachable(nowMs: Long): Boolean {
+        return INDEXER_HOSTS.all { host ->
+            val until = unreachableHostsUntil[host]
+            until != null && nowMs < until
+        }
+    }
+
+    private fun fetchDirect(
+        parsed: URL,
+        headers: Map<String, String>,
+        connectMs: Int,
+        readMs: Int
+    ): String {
+        var conn: HttpURLConnection? = null
+        try {
+            conn = (parsed.openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile; Svorrent/${BuildConfig.VERSION_NAME})")
+                for ((k, v) in headers) {
+                    setRequestProperty(k, v)
+                }
+                connectTimeout = connectMs
+                readTimeout = readMs
+            }
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                throw IOException("HTTP $code from ${parsed.host}")
+            }
+            return BufferedReader(InputStreamReader(conn.inputStream)).use { it.readText() }
+        } finally {
+            runCatching { conn?.disconnect() }
+        }
+    }
+
+    private fun fetchViaDoHIp(
+        parsed: URL,
+        resolvedIp: String,
+        headers: Map<String, String>,
+        connectMs: Int,
+        readMs: Int
+    ): String {
         val sniHost = parsed.host
         val baseFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
         val sniFactory = object : SSLSocketFactory() {
@@ -280,28 +439,134 @@ object SearchRepository {
         }
 
         val ipUrl = URL(parsed.protocol, resolvedIp, if (parsed.port == -1) 443 else parsed.port, parsed.file)
-        val httpsConn = (ipUrl.openConnection() as HttpsURLConnection).apply {
-            sslSocketFactory = sniFactory
-            setRequestProperty("Host", sniHost)
-            setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile; Svorrent/${BuildConfig.VERSION_NAME})")
-            for ((k, v) in headers) {
-                setRequestProperty(k, v)
+        var httpsConn: HttpsURLConnection? = null
+        try {
+            httpsConn = (ipUrl.openConnection() as HttpsURLConnection).apply {
+                sslSocketFactory = sniFactory
+                setRequestProperty("Host", sniHost)
+                setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile; Svorrent/${BuildConfig.VERSION_NAME})")
+                for ((k, v) in headers) {
+                    setRequestProperty(k, v)
+                }
+                setHostnameVerifier { _, session ->
+                    HttpsURLConnection.getDefaultHostnameVerifier().verify(sniHost, session)
+                }
+                connectTimeout = connectMs
+                readTimeout = readMs
             }
-            setHostnameVerifier { _, session ->
-                HttpsURLConnection.getDefaultHostnameVerifier().verify(sniHost, session)
+            val code = httpsConn.responseCode
+            if (code !in 200..299) {
+                throw IOException("HTTP $code from $sniHost via DoH")
             }
-            connectTimeout = 8000
-            readTimeout = 8000
+            return BufferedReader(InputStreamReader(httpsConn.inputStream)).use { it.readText() }
+        } finally {
+            runCatching { httpsConn?.disconnect() }
         }
-        return BufferedReader(InputStreamReader(httpsConn.inputStream)).use { it.readText() }
+    }
+
+    fun fetchUrlWithDoHFallback(targetUrl: String, headers: Map<String, String> = emptyMap()): String {
+        val parsed = URL(targetUrl)
+        val host = parsed.host
+
+        if (!blockedDirectHosts.contains(host)) {
+            try {
+                return fetchDirect(parsed, headers, connectMs = 1800, readMs = 2800)
+            } catch (_: Exception) {
+                blockedDirectHosts.add(host)
+            }
+        }
+
+        val resolvedIp = resolveViaDoH(host)
+            ?: throw IOException("Could not reach search index ($host). Check internet connection.")
+
+        return fetchViaDoHIp(parsed, resolvedIp, headers, connectMs = 2200, readMs = 3200)
+    }
+
+    private suspend fun fetchUrlFast(
+        targetUrl: String,
+        headers: Map<String, String> = emptyMap()
+    ): String = withContext(Dispatchers.IO) {
+        val parsed = URL(targetUrl)
+        val host = parsed.host
+        val now = System.currentTimeMillis()
+
+        val blockedUntil = unreachableHostsUntil[host]
+        if (blockedUntil != null) {
+            if (now < blockedUntil && !areAllIndexersMarkedUnreachable(now)) {
+                throw IOException("Host $host temporarily unreachable")
+            } else if (now >= blockedUntil) {
+                unreachableHostsUntil.remove(host)
+            }
+        }
+
+        if (blockedDirectHosts.contains(host)) {
+            return@withContext try {
+                val ip = resolveViaDoH(host)
+                    ?: throw IOException("Could not resolve $host via DoH")
+                fetchViaDoHIp(parsed, ip, headers, connectMs = 2000, readMs = 2800)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                unreachableHostsUntil[host] = System.currentTimeMillis() + 60_000L
+                throw e
+            }
+        }
+
+        val outcome = Channel<Result<String>>(Channel.UNLIMITED)
+        val directFailed = CompletableDeferred<Unit>()
+
+        val directJob = networkRaceScope.launch {
+            val res = runCatching {
+                fetchDirect(parsed, headers, connectMs = 1500, readMs = 2500)
+            }
+            if (res.exceptionOrNull() is CancellationException) return@launch
+            if (res.isFailure) {
+                blockedDirectHosts.add(host)
+                directFailed.complete(Unit)
+            }
+            if (!isActive) return@launch
+            outcome.trySend(res)
+        }
+
+        val dohJob = networkRaceScope.launch {
+            withTimeoutOrNull(450L) {
+                directFailed.await()
+            }
+            if (!isActive) return@launch
+            val res = runCatching {
+                val ip = resolveViaDoH(host)
+                    ?: throw IOException("Could not resolve $host via DoH")
+                fetchViaDoHIp(parsed, ip, headers, connectMs = 2000, readMs = 2800)
+            }
+            if (!isActive || res.exceptionOrNull() is CancellationException) return@launch
+            outcome.trySend(res)
+        }
+
+        try {
+            val first = outcome.receive()
+            if (first.isSuccess) {
+                return@withContext first.getOrThrow()
+            }
+
+            val second = outcome.receive()
+            if (second.isSuccess) {
+                return@withContext second.getOrThrow()
+            }
+
+            unreachableHostsUntil[host] = System.currentTimeMillis() + 60_000L
+            throw second.exceptionOrNull()
+                ?: first.exceptionOrNull()
+                ?: IOException("Could not reach search index ($host)")
+        } finally {
+            directJob.cancel()
+            dohJob.cancel()
+        }
     }
 
     // 1. ThePirateBay (apibay.org JSON API)
-    fun searchThePirateBay(query: String): List<SearchResultItem> {
-        val encoded = URLEncoder.encode(query.trim(), "UTF-8")
-        val raw = fetchUrlWithDoHFallback("https://apibay.org/q.php?q=$encoded&cat=0")
+    private fun parseThePirateBayJson(raw: String): List<SearchResultItem> {
         val arr = JSONArray(raw)
-        val results = mutableListOf<SearchResultItem>()
+        val results = ArrayList<SearchResultItem>(arr.length())
 
         for (i in 0 until arr.length()) {
             val obj = arr.getJSONObject(i)
@@ -341,39 +606,45 @@ object SearchRepository {
         return results
     }
 
-    // 2. BitSearch (HTML Multi-page Scraper)
-    fun searchBitSearch(query: String, page: Int = 1): List<SearchResultItem> {
+    fun searchThePirateBay(query: String): List<SearchResultItem> {
         val encoded = URLEncoder.encode(query.trim(), "UTF-8")
-        val url = "https://bitsearch.eu/search?q=$encoded&page=$page"
-        val html = fetchUrlWithDoHFallback(url, mapOf("Accept" to "text/html,application/xhtml+xml"))
+        val raw = fetchUrlWithDoHFallback("https://apibay.org/q.php?q=$encoded&cat=0")
+        return parseThePirateBayJson(raw)
+    }
 
-        val cardRegex = Regex("""<div[^>]*class="[^"]*torrent-result-card[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]*class="[^"]*torrent-result-card[^"]*"|$)""", RegexOption.IGNORE_CASE)
-        val results = mutableListOf<SearchResultItem>()
+    private suspend fun searchThePirateBayFast(query: String): List<SearchResultItem> {
+        val encoded = URLEncoder.encode(query.trim(), "UTF-8")
+        val raw = fetchUrlFast("https://apibay.org/q.php?q=$encoded&cat=0")
+        return parseThePirateBayJson(raw)
+    }
 
-        for (match in cardRegex.findAll(html)) {
-            val card = match.groupValues[1]
+    // 2. BitSearch (Linear chunked HTML parser - avoids lookahead backtracking on 180 KB HTML)
+    private fun parseBitSearchHtml(html: String): List<SearchResultItem> {
+        val chunks = html.split("torrent-result-card", ignoreCase = true)
+        if (chunks.size <= 1) return emptyList()
+        val results = ArrayList<SearchResultItem>(chunks.size - 1)
 
-            val titleMatch = Regex("""<h3[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)</a>""", RegexOption.IGNORE_CASE).find(card)
-            val rawTitle = titleMatch?.groupValues?.get(1)?.let { stripHtmlTags(it) } ?: ""
-            val title = decodeHtmlEntities(rawTitle)
+        for (idx in 1 until chunks.size) {
+            val card = chunks[idx].take(12288)
+
+            val titleMatch = BS_TITLE_REGEX.find(card) ?: continue
+            val title = decodeHtmlEntities(stripHtmlTags(titleMatch.groupValues[1]))
             if (title.isBlank()) continue
 
-            val magnetMatch = Regex("""href="(magnet:\?[^"]+)"""", RegexOption.IGNORE_CASE).find(card)
-            var magnet = magnetMatch?.groupValues?.get(1)?.replace("&#x3D;", "=", ignoreCase = true)?.replace("&amp;", "&") ?: ""
+            val magnetMatch = BS_MAGNET_REGEX.find(card)
+            var magnet = magnetMatch?.groupValues?.get(1)
+                ?.replace("&#x3D;", "=", ignoreCase = true)
+                ?.replace("&amp;", "&")
+                ?: ""
             val infoHash = extractInfoHash(magnet)
             if (infoHash.isEmpty()) continue
             if (magnet.isEmpty()) {
                 magnet = buildMagnetUri(infoHash, title)
             }
 
-            val seedMatch = Regex("""text-green-600[\s\S]*?<span class="font-medium">(\d+)</span>""", RegexOption.IGNORE_CASE).find(card)
-            val seeds = sanitizeSwarmCount(seedMatch?.groupValues?.get(1))
-
-            val leechMatch = Regex("""text-red-600[\s\S]*?<span class="font-medium">(\d+)</span>""", RegexOption.IGNORE_CASE).find(card)
-            val leechers = sanitizeSwarmCount(leechMatch?.groupValues?.get(1))
-
-            val sizeMatch = Regex("""fa-download[^>]*></i>[\s\S]*?<span>([\d.]+\s*[KMGT]?i?B)</span>""", RegexOption.IGNORE_CASE).find(card)
-            val sizeFormatted = sizeMatch?.groupValues?.get(1)?.trim() ?: ""
+            val seeds = sanitizeSwarmCount(BS_SEED_REGEX.find(card)?.groupValues?.get(1))
+            val leechers = sanitizeSwarmCount(BS_LEECH_REGEX.find(card)?.groupValues?.get(1))
+            val sizeFormatted = BS_SIZE_REGEX.find(card)?.groupValues?.get(1)?.trim() ?: ""
             val sizeBytes = parseFormattedSize(sizeFormatted)
 
             val lowerTitle = title.lowercase()
@@ -401,13 +672,25 @@ object SearchRepository {
         return results
     }
 
-    // 3. Torrents.csv (Open JSON Torrent Index)
-    fun searchTorrentsCsv(query: String): List<SearchResultItem> {
+    fun searchBitSearch(query: String, page: Int = 1): List<SearchResultItem> {
         val encoded = URLEncoder.encode(query.trim(), "UTF-8")
-        val raw = fetchUrlWithDoHFallback("https://torrents-csv.com/service/search?q=$encoded", mapOf("Accept" to "application/json"))
+        val url = "https://bitsearch.eu/search?q=$encoded&page=$page"
+        val html = fetchUrlWithDoHFallback(url, mapOf("Accept" to "text/html,application/xhtml+xml"))
+        return parseBitSearchHtml(html)
+    }
+
+    private suspend fun searchBitSearchFast(query: String, page: Int = 1): List<SearchResultItem> {
+        val encoded = URLEncoder.encode(query.trim(), "UTF-8")
+        val url = "https://bitsearch.eu/search?q=$encoded&page=$page"
+        val html = fetchUrlFast(url, mapOf("Accept" to "text/html,application/xhtml+xml"))
+        return parseBitSearchHtml(html)
+    }
+
+    // 3. Torrents.csv (Open JSON Torrent Index)
+    private fun parseTorrentsCsvJson(raw: String): List<SearchResultItem> {
         val obj = JSONObject(raw)
         val arr = obj.optJSONArray("torrents") ?: return emptyList()
-        val results = mutableListOf<SearchResultItem>()
+        val results = ArrayList<SearchResultItem>(arr.length())
 
         for (i in 0 until arr.length()) {
             val item = arr.getJSONObject(i)
@@ -437,33 +720,36 @@ object SearchRepository {
         return results
     }
 
-    // 4. Nyaa (Anime & Media RSS Feed)
-    fun searchNyaa(query: String): List<SearchResultItem> {
+    fun searchTorrentsCsv(query: String): List<SearchResultItem> {
         val encoded = URLEncoder.encode(query.trim(), "UTF-8")
-        val xml = fetchUrlWithDoHFallback("https://nyaa.si/?page=rss&q=$encoded", mapOf("Accept" to "application/rss+xml, text/xml"))
-        val itemRegex = Regex("""<item>([\s\S]*?)</item>""", RegexOption.IGNORE_CASE)
+        val raw = fetchUrlWithDoHFallback("https://torrents-csv.com/service/search?q=$encoded", mapOf("Accept" to "application/json"))
+        return parseTorrentsCsvJson(raw)
+    }
+
+    private suspend fun searchTorrentsCsvFast(query: String): List<SearchResultItem> {
+        val encoded = URLEncoder.encode(query.trim(), "UTF-8")
+        val raw = fetchUrlFast("https://torrents-csv.com/service/search?q=$encoded", mapOf("Accept" to "application/json"))
+        return parseTorrentsCsvJson(raw)
+    }
+
+    // 4. Nyaa (Anime & Media RSS Feed)
+    private fun parseNyaaXml(xml: String): List<SearchResultItem> {
         val results = mutableListOf<SearchResultItem>()
 
-        for (match in itemRegex.findAll(xml)) {
+        for (match in NYAA_ITEM_REGEX.findAll(xml)) {
             val item = match.groupValues[1]
 
-            val titleMatch = Regex("""<title>([\s\S]*?)</title>""", RegexOption.IGNORE_CASE).find(item)
-            val rawTitle = titleMatch?.groupValues?.get(1)?.replace(Regex("""<!\[CDATA\[([\s\S]*?)\]\]>"""), "$1") ?: ""
+            val titleMatch = NYAA_TITLE_REGEX.find(item)
+            val rawTitle = titleMatch?.groupValues?.get(1)?.replace(NYAA_CDATA_REGEX, "$1") ?: ""
             val title = decodeHtmlEntities(stripHtmlTags(rawTitle))
             if (title.isBlank()) continue
 
-            val hashMatch = Regex("""<nyaa:infoHash>([a-fA-F0-9]{40})</nyaa:infoHash>""", RegexOption.IGNORE_CASE).find(item)
-            val infoHash = hashMatch?.groupValues?.get(1)?.lowercase() ?: ""
+            val infoHash = NYAA_HASH_REGEX.find(item)?.groupValues?.get(1)?.lowercase() ?: ""
             if (infoHash.isEmpty()) continue
 
-            val seedMatch = Regex("""<nyaa:seeders>(\d+)</nyaa:seeders>""", RegexOption.IGNORE_CASE).find(item)
-            val seeds = sanitizeSwarmCount(seedMatch?.groupValues?.get(1))
-
-            val leechMatch = Regex("""<nyaa:leechers>(\d+)</nyaa:leechers>""", RegexOption.IGNORE_CASE).find(item)
-            val leechers = sanitizeSwarmCount(leechMatch?.groupValues?.get(1))
-
-            val sizeMatch = Regex("""<nyaa:size>([\s\S]*?)</nyaa:size>""", RegexOption.IGNORE_CASE).find(item)
-            val sizeFormatted = sizeMatch?.groupValues?.get(1)?.trim() ?: ""
+            val seeds = sanitizeSwarmCount(NYAA_SEED_REGEX.find(item)?.groupValues?.get(1))
+            val leechers = sanitizeSwarmCount(NYAA_LEECH_REGEX.find(item)?.groupValues?.get(1))
+            val sizeFormatted = NYAA_SIZE_REGEX.find(item)?.groupValues?.get(1)?.trim() ?: ""
             val sizeBytes = parseFormattedSize(sizeFormatted)
 
             results.add(
@@ -484,41 +770,25 @@ object SearchRepository {
         return results
     }
 
-    suspend fun search(query: String): List<SearchResultItem> = withContext(Dispatchers.IO) {
-        val clean = query.trim()
-        if (clean.isEmpty()) return@withContext emptyList()
+    fun searchNyaa(query: String): List<SearchResultItem> {
+        val encoded = URLEncoder.encode(query.trim(), "UTF-8")
+        val xml = fetchUrlWithDoHFallback("https://nyaa.si/?page=rss&q=$encoded", mapOf("Accept" to "application/rss+xml, text/xml"))
+        return parseNyaaXml(xml)
+    }
 
-        val queries = buildSearchQueries(clean)
-        val rawResults = mutableListOf<SearchResultItem>()
-        val queryTokens = clean.lowercase().split(Regex("[^a-z0-9]+")).filter { it.length >= 2 }
+    private suspend fun searchNyaaFast(query: String): List<SearchResultItem> {
+        val encoded = URLEncoder.encode(query.trim(), "UTF-8")
+        val xml = fetchUrlFast("https://nyaa.si/?page=rss&q=$encoded", mapOf("Accept" to "application/rss+xml, text/xml"))
+        return parseNyaaXml(xml)
+    }
 
-        coroutineScope {
-            val tasks = mutableListOf<kotlinx.coroutines.Deferred<List<SearchResultItem>>>()
-
-            // 1. ThePirateBay (query original and prefix wildcard if different)
-            for (q in queries) {
-                tasks.add(async { runCatching { searchThePirateBay(q) }.getOrDefault(emptyList()) })
-            }
-
-            // 2. BitSearch (Pages 1 & 2)
-            tasks.add(async { runCatching { searchBitSearch(clean, page = 1) }.getOrDefault(emptyList()) })
-            tasks.add(async { runCatching { searchBitSearch(clean, page = 2) }.getOrDefault(emptyList()) })
-
-            // 3. Torrents.csv
-            tasks.add(async { runCatching { searchTorrentsCsv(clean) }.getOrDefault(emptyList()) })
-
-            // 4. Nyaa
-            tasks.add(async { runCatching { searchNyaa(clean) }.getOrDefault(emptyList()) })
-
-            val allLists = tasks.awaitAll()
-            for (list in allLists) {
-                rawResults.addAll(list)
-            }
-        }
-
-        // Deduplicate across indexers using both infoHash and normalized title + size
-        val seenByHash = mutableMapOf<String, SearchResultItem>()
-        val seenByTitle = mutableMapOf<String, SearchResultItem>()
+    private fun deduplicateAndRank(
+        rawResults: List<SearchResultItem>,
+        lowerQuery: String,
+        queryTokens: List<String>
+    ): List<SearchResultItem> {
+        val seenByHash = HashMap<String, SearchResultItem>(rawResults.size)
+        val seenByTitle = HashMap<String, SearchResultItem>(rawResults.size)
 
         for (item in rawResults) {
             val title = item.title.trim()
@@ -562,12 +832,174 @@ object SearchRepository {
             if (it.infoHash.isNotEmpty()) it.infoHash else it.title
         }
 
-        // Sort by intelligent movie-first score descending, then seeds descending
-        deduped.sortedWith { a, b ->
-            val scoreA = scoreSearchResult(a, clean)
-            val scoreB = scoreSearchResult(b, clean)
-            val diff = scoreB.compareTo(scoreA)
-            if (diff != 0) diff else b.seeds.compareTo(a.seeds)
+        // Precompute scores once in O(N) instead of recomputing inside O(N log N) comparator
+        val scored = ArrayList<ScoredSearchItem>(deduped.size)
+        for (item in deduped) {
+            scored.add(ScoredSearchItem(item, scoreSearchResultTokens(item, lowerQuery, queryTokens)))
+        }
+
+        scored.sortWith { a, b ->
+            val diff = b.score.compareTo(a.score)
+            if (diff != 0) diff else b.item.seeds.compareTo(a.item.seeds)
+        }
+
+        return scored.map { it.item }
+    }
+
+    private fun saveToQueryCache(cacheKey: String, results: List<SearchResultItem>) {
+        if (results.isEmpty()) return
+        val now = System.currentTimeMillis()
+        if (queryCache.size >= QUERY_CACHE_MAX_SIZE) {
+            val expiredKeys = queryCache.entries
+                .filter { now - it.value.timestampMs >= QUERY_CACHE_TTL_MS }
+                .map { it.key }
+            for (k in expiredKeys) {
+                queryCache.remove(k)
+            }
+            if (queryCache.size >= QUERY_CACHE_MAX_SIZE) {
+                val oldestKey = queryCache.entries.minByOrNull { it.value.timestampMs }?.key
+                if (oldestKey != null) queryCache.remove(oldestKey)
+            }
+        }
+        queryCache[cacheKey] = CachedQueryEntry(now, results)
+    }
+
+    suspend fun searchStreaming(
+        query: String,
+        onPartialResults: suspend (List<SearchResultItem>) -> Unit
+    ): List<SearchResultItem> {
+        val clean = query.trim()
+        if (clean.isEmpty()) return emptyList()
+
+        val lowerQuery = clean.lowercase()
+        val cached = queryCache[lowerQuery]
+        val now = System.currentTimeMillis()
+        if (cached != null && (now - cached.timestampMs) < QUERY_CACHE_TTL_MS && cached.results.isNotEmpty()) {
+            onPartialResults(cached.results)
+            return cached.results
+        }
+
+        val callerContext = currentCoroutineContext()
+        val queryTokens = lowerQuery.split(NON_ALNUM_REGEX).filter { it.length >= 2 }
+
+        return withContext(Dispatchers.IO) {
+            val rawResults = mutableListOf<SearchResultItem>()
+            var rankedResults: List<SearchResultItem> = emptyList()
+            val successfulProviders = AtomicInteger(0)
+
+            val batchChannel = Channel<List<SearchResultItem>>(Channel.UNLIMITED)
+            val remainingProviders = AtomicInteger(4)
+            val providerJobs = ArrayList<Job>(4)
+
+            fun markProviderFinished() {
+                if (remainingProviders.decrementAndGet() == 0) {
+                    batchChannel.close()
+                }
+            }
+
+            // 1. ThePirateBay (fast JSON API; only issue wildcard fallback when exact < 10)
+            providerJobs.add(networkRaceScope.launch {
+                try {
+                    val primary = runCatching {
+                        val list = searchThePirateBayFast(clean)
+                        successfulProviders.incrementAndGet()
+                        list
+                    }.getOrDefault(emptyList())
+
+                    if (isActive && primary.isNotEmpty()) {
+                        batchChannel.trySend(primary)
+                    }
+                    if (isActive && primary.size < 10) {
+                        val variants = buildSearchQueries(clean)
+                        if (variants.size > 1) {
+                            val extra = runCatching { searchThePirateBayFast(variants[1]) }.getOrDefault(emptyList())
+                            if (isActive && extra.isNotEmpty()) {
+                                batchChannel.trySend(extra)
+                            }
+                        }
+                    }
+                } finally {
+                    markProviderFinished()
+                }
+            })
+
+            // 2. Torrents.csv (compact JSON API)
+            providerJobs.add(networkRaceScope.launch {
+                try {
+                    val list = runCatching {
+                        val res = searchTorrentsCsvFast(clean)
+                        successfulProviders.incrementAndGet()
+                        res
+                    }.getOrDefault(emptyList())
+                    if (isActive && list.isNotEmpty()) {
+                        batchChannel.trySend(list)
+                    }
+                } finally {
+                    markProviderFinished()
+                }
+            })
+
+            // 3. Nyaa (lightweight RSS XML)
+            providerJobs.add(networkRaceScope.launch {
+                try {
+                    val list = runCatching {
+                        val res = searchNyaaFast(clean)
+                        successfulProviders.incrementAndGet()
+                        res
+                    }.getOrDefault(emptyList())
+                    if (isActive && list.isNotEmpty()) {
+                        batchChannel.trySend(list)
+                    }
+                } finally {
+                    markProviderFinished()
+                }
+            })
+
+            // 4. BitSearch (Page 1 only to avoid downloading 350 KB HTML on cellular)
+            providerJobs.add(networkRaceScope.launch {
+                try {
+                    val list = runCatching {
+                        val res = searchBitSearchFast(clean, page = 1)
+                        successfulProviders.incrementAndGet()
+                        res
+                    }.getOrDefault(emptyList())
+                    if (isActive && list.isNotEmpty()) {
+                        batchChannel.trySend(list)
+                    }
+                } finally {
+                    markProviderFinished()
+                }
+            })
+
+            try {
+                withTimeoutOrNull(3500L) {
+                    for (firstBatch in batchChannel) {
+                        rawResults.addAll(firstBatch)
+                        while (true) {
+                            val extraBatch = batchChannel.tryReceive().getOrNull() ?: break
+                            rawResults.addAll(extraBatch)
+                        }
+                        rankedResults = deduplicateAndRank(rawResults, lowerQuery, queryTokens)
+                        if (rankedResults.isNotEmpty()) {
+                            withContext(callerContext) {
+                                onPartialResults(rankedResults)
+                            }
+                        }
+                    }
+                }
+            } finally {
+                providerJobs.forEach { it.cancel() }
+                batchChannel.close()
+            }
+
+            if (rankedResults.isEmpty() && successfulProviders.get() == 0) {
+                throw IOException("Could not reach search indexers. Check your internet connection.")
+            }
+
+            saveToQueryCache(lowerQuery, rankedResults)
+            rankedResults
         }
     }
+
+    suspend fun search(query: String): List<SearchResultItem> = searchStreaming(query) {}
 }

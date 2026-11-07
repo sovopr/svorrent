@@ -148,4 +148,60 @@ class SvorrentAndroidTest {
         assertTrue("Movie score ($movieScore) must be higher than game score ($gameScore)", movieScore > gameScore)
         assertTrue("Fragment score ($fragmentScore) must be deeply penalized", fragmentScore < 0)
     }
+
+    @Test
+    fun testExtractReleaseTagAndSemverTen() {
+        assertEquals(
+            "1.0.10",
+            AutoUpdater.extractReleaseTagFromLocation("https://github.com/sovopr/svorrent/releases/tag/v1.0.10")
+        )
+        assertEquals(
+            "1.0.10",
+            AutoUpdater.extractReleaseTagFromLocation("/sovopr/svorrent/releases/tag/V1.0.10?foo=bar")
+        )
+        assertEquals("", AutoUpdater.extractReleaseTagFromLocation("https://github.com/sovopr/svorrent/releases"))
+        assertEquals("", AutoUpdater.extractReleaseTagFromLocation(null))
+        assertTrue(AutoUpdater.isNewerSemver("1.0.9", "1.0.10"))
+        assertFalse(AutoUpdater.isNewerSemver("1.0.10", "1.0.9"))
+        assertFalse(AutoUpdater.isNewerSemver("1.0.10", "1.0.10"))
+    }
+
+    @Test
+    fun testScoreSearchResultHighResAndSceneRepack() {
+        val query = "the batman"
+        val movie1080p = SearchResultItem(
+            id = "2222222222222222222222222222222222222222",
+            title = "The Batman (2022) 1080p WEBRip x264",
+            sizeBytes = 2254857830L,
+            sizeFormatted = "2.1 GB",
+            seeds = 900,
+            leechers = 120,
+            provider = "ThePirateBay",
+            infoHash = "2222222222222222222222222222222222222222",
+            magnet = "magnet:?xt=urn:btih:2222222222222222222222222222222222222222"
+        )
+        val movie720p = movie1080p.copy(
+            id = "3333333333333333333333333333333333333333",
+            title = "The Batman (2022) 720p WEBRip x264",
+            infoHash = "3333333333333333333333333333333333333333"
+        )
+        val sceneRepack = movie1080p.copy(
+            id = "4444444444444444444444444444444444444444",
+            title = "The Batman (2022) REPACK 1080p BluRay x265",
+            infoHash = "4444444444444444444444444444444444444444"
+        )
+        val gameRepack = movie1080p.copy(
+            id = "5555555555555555555555555555555555555555",
+            title = "Batman Arkham Knight FitGirl Repack",
+            infoHash = "5555555555555555555555555555555555555555"
+        )
+
+        val s1080 = SearchRepository.scoreSearchResult(movie1080p, query)
+        val s720 = SearchRepository.scoreSearchResult(movie720p, query)
+        val sSceneRepack = SearchRepository.scoreSearchResult(sceneRepack, query)
+        val sGameRepack = SearchRepository.scoreSearchResult(gameRepack, query)
+
+        assertTrue("1080p ($s1080) should rank higher than 720p ($s720)", s1080 > s720)
+        assertTrue("Scene BluRay REPACK ($sSceneRepack) must rank far above game repack ($sGameRepack)", sSceneRepack > sGameRepack + 7000)
+    }
 }

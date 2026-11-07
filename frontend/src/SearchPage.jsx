@@ -51,7 +51,7 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
   const [loading, setLoading] = useState(false);
   const [searchedTerm, setSearchedTerm] = useState('');
   const [error, setError] = useState('');
-  const [sort, setSort] = useState({ key: 'seeds', dir: 'desc' });
+  const [sort, setSort] = useState({ key: 'relevance', dir: 'desc' });
   const [source, setSource] = useState('all');
   const [rowState, setRowState] = useState({});
   const [page, setPage] = useState(1);
@@ -162,7 +162,7 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
     cancelSearch();
     setLoading(false);
     if (term.length < 2) return;
-    debounce.current = setTimeout(() => runSearch(term), 450);
+    debounce.current = setTimeout(() => runSearch(term), 280);
     return cancelSearch;
   }, [query, runSearch, cancelSearch]);
 
@@ -187,6 +187,8 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
     const list = results
       .map((r) => ({ ...r, _bytes: parseSize(r.size) }))
       .filter((r) => source === 'all' || r.provider === source);
+
+    if (sort.key === 'relevance') return list;
 
     const dir = sort.dir === 'asc' ? 1 : -1;
     list.sort((a, b) => {
@@ -218,9 +220,12 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
 
   const toggleSort = (key) => {
     setPage(1);
-    setSort((prev) =>
-      prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: key === 'title' || key === 'provider' ? 'asc' : 'desc' }
-    );
+    setSort((prev) => {
+      const defaultDir = key === 'title' || key === 'provider' ? 'asc' : 'desc';
+      if (prev.key !== key) return { key, dir: defaultDir };
+      if (prev.dir === defaultDir) return { key, dir: defaultDir === 'asc' ? 'desc' : 'asc' };
+      return { key: 'relevance', dir: 'desc' };
+    });
   };
 
   const isCurrent = (t, controller) => mounted.current && !controller.signal.aborted && resultId.current === t._generation;
@@ -281,6 +286,7 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
     setSearchedTerm('');
     setError('');
     setRowState({});
+    setSort({ key: 'relevance', dir: 'desc' });
     setSource('all');
     setPage(1);
     setLoading(false);

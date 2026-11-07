@@ -115,13 +115,34 @@ export function normalizeTitleForDedup(title) {
     .trim();
 }
 
+const HIGH_RES_VIDEO_RE = /\b(2160p|1080p|4k|uhd|remux|bluray|blu-ray)\b/i;
+const STD_VIDEO_RE = /\b(720p|480p|web-dl|webrip|hdrip|bdrip|dvdrip|dvd|brrip|hdtv)\b/i;
+const VIDEO_CODEC_RE = /\b(x264|x265|hevc|h264|h265|avc|truehd|atmos|dts|ac3|eac3|ddp5\.1|aac|yts|rarbg|yify|swtyblz|galaxyrg|proper|extended)\b/i;
+const RELEASE_YEAR_RE = /\b(19\d\d|20\d\d)\b/;
+const GAME_OR_SOFTWARE_RE = /\b(fitgirl|dodi|codex|skidrow|flt|plaza|cpass|telltale|dlc|switch|nsp|xci|iso|rom|emulator|crack|keygen|patch|trainer|mod|apk|setup\.exe)\b/i;
+const REPACK_WORD_RE = /\brepack\b/i;
+
+const FEDERATED_CACHE_TTL_MS = 90_000;
+const FEDERATED_CACHE_MAX_SIZE = 40;
+const federatedCache = new Map();
+
+function withProviderTimeout(signal, timeoutMs = 3500) {
+  const timerSignal = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timerSignal]) : timerSignal;
+}
+
 export function scoreSearchResult(item, query = '') {
+  if (!item || !item.title) return 0;
+  const lowerQuery = (query || '').trim().toLowerCase();
+  const queryTokens = lowerQuery ? lowerQuery.split(/[^a-z0-9]+/).filter((t) => t.length >= 2) : [];
+  return scoreSearchResultWithTokens(item, lowerQuery, queryTokens);
+}
+
+function scoreSearchResultWithTokens(item, lowerQuery, queryTokens) {
   if (!item || !item.title) return 0;
   let score = 0;
   const title = item.title.trim();
   const lowerTitle = title.toLowerCase();
-  const lowerQuery = (query || '').trim().toLowerCase();
-  const queryTokens = lowerQuery.split(/\s+/).filter(Boolean);
 
   // 1. Query matching
   if (lowerQuery && lowerTitle.includes(lowerQuery)) {
@@ -131,19 +152,25 @@ export function scoreSearchResult(item, query = '') {
     score += 1500;
   }
   if (queryTokens.length > 0) {
-    const matchedTokens = queryTokens.filter((t) => lowerTitle.includes(t));
-    score += (matchedTokens.length / queryTokens.length) * 2000;
+    let matchedCount = 0;
+    for (let i = 0; i < queryTokens.length; i++) {
+      if (lowerTitle.includes(queryTokens[i])) matchedCount++;
+    }
+    score += (matchedCount / queryTokens.length) * 2000;
   }
 
-  // 2. Video & Movie Indicators (Resolutions, rips, audio, years)
-  const isVideoResolution = /\b(2160p|1080p|720p|480p|4k|uhd|bluray|blu-ray|remux|web-dl|webrip|hdrip|bdrip|dvdrip|dvd|brrip|hdtv)\b/i.test(lowerTitle);
-  if (isVideoResolution) score += 4500;
+  // 2. Video & Movie Indicators (1080p/4K preferred over 720p/SD)
+  const isHighResVideo = HIGH_RES_VIDEO_RE.test(lowerTitle);
+  const isStdVideo = !isHighResVideo && STD_VIDEO_RE.test(lowerTitle);
+  const hasVideoRes = isHighResVideo || isStdVideo;
+  if (isHighResVideo) {
+    score += 4800;
+  } else if (isStdVideo) {
+    score += 4200;
+  }
 
-  const isVideoCodec = /\b(x264|x265|hevc|h264|h265|avc|truehd|atmos|dts|ac3|eac3|ddp5\.1|aac|yts|rarbg|yify|swtyblz|galaxyrg|proper|repack|extended)\b/i.test(lowerTitle);
-  if (isVideoCodec) score += 2500;
-
-  const hasReleaseYear = /\b(19\d\d|20\d\d)\b/.test(lowerTitle);
-  if (hasReleaseYear) score += 2000;
+  if (VIDEO_CODEC_RE.test(lowerTitle)) score += 2500;
+  if (RELEASE_YEAR_RE.test(lowerTitle)) score += 2000;
 
   // 3. File Size heuristics for Movies vs Tiny patches / cracks
   const sizeBytes = parseSizeToBytes(item.size);
@@ -156,13 +183,18 @@ export function scoreSearchResult(item, query = '') {
     score -= 6000;
   }
 
-  // 4. Non-movie / Game / Software penalties
-  const isGameOrSoftware = /\b(repack|fitgirl|dodi|codex|skidrow|flt|plaza|cpass|telltale|dlc|switch|nsp|xci|iso|rom|emulator|crack|keygen|patch|trainer|mod|apk|setup\.exe)\b/i.test(lowerTitle);
+  // 4. Non-movie / Game / Software penalties (do not penalize scene 1080p/BluRay REPACK movies)
+  const isGameOrSoftware = GAME_OR_SOFTWARE_RE.test(lowerTitle) || (!hasVideoRes && REPACK_WORD_RE.test(lowerTitle));
   if (isGameOrSoftware) {
     score -= 7000;
   }
 
-  // 5. Seed count (capped influence so spam seeds cannot overpower true movies)
+  // 5. Penalize fragmented / bracket-only titles
+  if (title.startsWith('(') && title.endsWith(')')) {
+    score -= 8000;
+  }
+
+  // 6. Seed count (capped influence so spam seeds cannot overpower true movies)
   const seeds = Math.max(0, item.seeds || 0);
   score += Math.min(seeds, 2500);
 
@@ -240,12 +272,12 @@ export async function scrapeBitSearchPage(query, page = 1, { signal } = {}) {
   }
 
   const html = await res.text();
-  const cardRegex = /<div[^>]*class="[^"]*torrent-result-card[^"]*"[^>]*>([\s\S]*?)(?=<div[^>]*class="[^"]*torrent-result-card[^"]*"|$)/gi;
+  const chunks = html.split(/torrent-result-card/i);
+  if (chunks.length <= 1) return [];
   const results = [];
-  let m;
 
-  while ((m = cardRegex.exec(html)) !== null) {
-    const card = m[1];
+  for (let i = 1; i < chunks.length; i++) {
+    const card = chunks[i].slice(0, 12288);
 
     // Title
     const titleMatch = card.match(/<h3[^>]*>[\s\S]*?<a[^>]*>([\s\S]*?)<\/a>/i);
@@ -420,17 +452,27 @@ export async function searchFederated(
   {
     limit,
     providers = ['ThePirateBay', 'BitSearch', 'Torrents.csv', 'Nyaa'],
-    bitSearchPages = 3,
+    bitSearchPages = 2,
     signal,
   } = {}
 ) {
   if (!query || typeof query !== 'string' || !query.trim()) return [];
+  const cleanQuery = query.trim();
+  const lowerQuery = cleanQuery.toLowerCase();
+  const cacheKey = `${lowerQuery}|${providers.join(',')}|${bitSearchPages}`;
+  const now = Date.now();
+
+  const cached = federatedCache.get(cacheKey);
+  if (cached && now - cached.timestampMs < FEDERATED_CACHE_TTL_MS && cached.items.length > 0) {
+    const cloned = cached.items.map((it) => ({ ...it }));
+    return limit && Number.isInteger(limit) && limit > 0 ? cloned.slice(0, limit) : cloned;
+  }
 
   const tasks = [];
 
   if (providers.includes('ThePirateBay')) {
     tasks.push(
-      searchThePirateBay(query, { signal }).catch((err) => {
+      searchThePirateBay(cleanQuery, { signal: withProviderTimeout(signal, 3500) }).catch((err) => {
         console.warn('[search:ThePirateBay] Scraper error:', err.message);
         return [];
       })
@@ -439,7 +481,7 @@ export async function searchFederated(
 
   if (providers.includes('BitSearch')) {
     tasks.push(
-      scrapeBitSearch(query, { maxPages: bitSearchPages, signal }).catch((err) => {
+      scrapeBitSearch(cleanQuery, { maxPages: bitSearchPages, signal: withProviderTimeout(signal, 3500) }).catch((err) => {
         console.warn('[search:BitSearch] Scraper error:', err.message);
         return [];
       })
@@ -448,7 +490,7 @@ export async function searchFederated(
 
   if (providers.includes('Torrents.csv')) {
     tasks.push(
-      searchTorrentsCsv(query, { signal }).catch((err) => {
+      searchTorrentsCsv(cleanQuery, { signal: withProviderTimeout(signal, 3500) }).catch((err) => {
         console.warn('[search:Torrents.csv] Scraper error:', err.message);
         return [];
       })
@@ -457,7 +499,7 @@ export async function searchFederated(
 
   if (providers.includes('Nyaa')) {
     tasks.push(
-      searchNyaa(query, { signal }).catch((err) => {
+      searchNyaa(cleanQuery, { signal: withProviderTimeout(signal, 3500) }).catch((err) => {
         console.warn('[search:Nyaa] Scraper error:', err.message);
         return [];
       })
@@ -470,7 +512,7 @@ export async function searchFederated(
   // Deduplicate across indexers using both infoHash and normalized title + size
   const seenByHash = new Map();
   const seenByTitle = new Map();
-  const tokens = (query || '').toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 2);
+  const tokens = lowerQuery.split(/[^a-z0-9]+/).filter((t) => t.length >= 2);
 
   for (const item of rawResults) {
     if (!item || typeof item.title !== 'string') continue;
@@ -513,22 +555,43 @@ export async function searchFederated(
 
   const deduped = Array.from(new Set([...seenByHash.values(), ...seenByTitle.values()]));
 
-  // Sort by intelligent movie-first score descending, with seeds as secondary tiebreaker
-  deduped.sort((a, b) => {
-    const scoreA = scoreSearchResult(a, query);
-    const scoreB = scoreSearchResult(b, query);
-    const diff = scoreB - scoreA;
+  // Precompute scores once in O(N), then sort descending with seeds/peers tiebreakers
+  const scored = deduped.map((item) => ({
+    item,
+    score: scoreSearchResultWithTokens(item, lowerQuery, tokens),
+  }));
+
+  scored.sort((a, b) => {
+    const diff = b.score - a.score;
     if (diff !== 0) return diff;
-    const sDiff = (b.seeds || 0) - (a.seeds || 0);
+    const sDiff = (b.item.seeds || 0) - (a.item.seeds || 0);
     if (sDiff !== 0) return sDiff;
-    return (b.peers || 0) - (a.peers || 0);
+    return (b.item.peers || 0) - (a.item.peers || 0);
   });
 
-  if (limit && Number.isInteger(limit) && limit > 0) {
-    return deduped.slice(0, limit);
+  const ranked = scored.map((entry) => entry.item);
+
+  if (ranked.length > 0) {
+    if (federatedCache.size >= FEDERATED_CACHE_MAX_SIZE) {
+      for (const [k, v] of federatedCache.entries()) {
+        if (now - v.timestampMs >= FEDERATED_CACHE_TTL_MS) federatedCache.delete(k);
+      }
+      if (federatedCache.size >= FEDERATED_CACHE_MAX_SIZE) {
+        const oldestKey = federatedCache.keys().next().value;
+        if (oldestKey !== undefined) federatedCache.delete(oldestKey);
+      }
+    }
+    federatedCache.set(cacheKey, {
+      timestampMs: now,
+      items: ranked.map((it) => ({ ...it })),
+    });
   }
 
-  return deduped;
+  if (limit && Number.isInteger(limit) && limit > 0) {
+    return ranked.slice(0, limit);
+  }
+
+  return ranked;
 }
 
 // ---------------------------------------------------------------------------

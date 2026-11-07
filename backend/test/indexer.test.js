@@ -8,6 +8,9 @@ import {
   searchFederated,
   sanitizeSwarmCount,
   decodeHtmlEntities,
+  parseSizeToBytes,
+  normalizeTitleForDedup,
+  scoreSearchResult,
 } from '../lib/indexer.js';
 
 test('extractInfoHash extracts 40-char hex hash from magnet URI or raw string', () => {
@@ -87,4 +90,52 @@ test('searchFederated returns empty array when query is empty or whitespace', as
   assert.deepEqual(await searchFederated(''), []);
   assert.deepEqual(await searchFederated('   '), []);
   assert.deepEqual(await searchFederated(null), []);
+});
+
+test('scoreSearchResult prioritizes movies and video releases over game repacks and small files', () => {
+  const query = 'the batman';
+  const movie = {
+    title: 'The Batman (2022) [1080p] [WEBRip] [5.1] [YTS.LT]',
+    size: '2.1 GB',
+    seeds: 1400,
+  };
+  const game = {
+    title: 'Batman: The Enemy Within -The Telltale Series (Episode 1-3)',
+    size: '7.93 MB',
+    seeds: 5000,
+  };
+
+  const movieScore = scoreSearchResult(movie, query);
+  const gameScore = scoreSearchResult(game, query);
+
+  assert.ok(movieScore > gameScore, `Movie score (${movieScore}) should exceed game score (${gameScore})`);
+});
+
+test('normalizeTitleForDedup removes brackets and punctuation for deduplication', () => {
+  assert.equal(
+    normalizeTitleForDedup('Batman: The Enemy Within -The Telltale Series (Episode 1-3)'),
+    'batman the enemy within the telltale series'
+  );
+  assert.equal(
+    normalizeTitleForDedup('The.Batman.2022.1080p.BluRay.x264-[YTS]'),
+    'the batman 2022 1080p bluray x264'
+  );
+});
+
+test('parseSizeToBytes correctly calculates byte values', () => {
+  assert.equal(parseSizeToBytes('7.93 MB'), 8315208);
+  assert.equal(parseSizeToBytes('2.1 GB'), 2254857830);
+  assert.equal(parseSizeToBytes('400 KB'), 409600);
+  assert.equal(parseSizeToBytes(''), 0);
+});
+
+test('scoreSearchResult severely penalizes fragmented titles and non-matching scraps', () => {
+  const query = 'the batman';
+  const fragment = {
+    title: '(Episode 1-3)',
+    size: '7.93 MB',
+    seeds: 5000,
+  };
+  const score = scoreSearchResult(fragment, query);
+  assert.ok(score < 0, `Scraper fragment score (${score}) should be negative`);
 });

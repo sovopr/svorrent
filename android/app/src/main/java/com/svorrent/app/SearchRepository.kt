@@ -130,14 +130,85 @@ object SearchRepository {
         return "magnet:?xt=urn:btih:$cleanHash&dn=$encodedName$trackersPart"
     }
 
+    fun normalizeTitleForDedup(title: String): String {
+        return title.lowercase()
+            .replace(Regex("""\[[^\]]*]"""), " ")
+            .replace(Regex("""\([^\)]*\)"""), " ")
+            .replace(Regex("""\{[^\}]*\}"""), " ")
+            .replace(Regex("""[^a-z0-9]+"""), " ")
+            .trim()
+    }
+
+    fun scoreSearchResult(item: SearchResultItem, query: String = ""): Long {
+        var score = 0L
+        val title = item.title.trim()
+        val lowerTitle = title.lowercase()
+        val lowerQuery = query.trim().lowercase()
+        val queryTokens = lowerQuery.split(Regex("[^a-z0-9]+")).filter { it.length >= 2 }
+
+        // 1. Query matching
+        if (lowerQuery.isNotEmpty() && lowerTitle.contains(lowerQuery)) {
+            score += 4000L
+        }
+        if (lowerQuery.isNotEmpty() && lowerTitle.startsWith(lowerQuery)) {
+            score += 1500L
+        }
+        if (queryTokens.isNotEmpty()) {
+            val matched = queryTokens.count { lowerTitle.contains(it) }
+            score += ((matched.toDouble() / queryTokens.size) * 2000L).toLong()
+        }
+
+        // 2. Video & Movie Indicators (Resolutions, rips, audio, years)
+        val isVideoResolution = Regex("""\b(2160p|1080p|720p|480p|4k|uhd|bluray|blu-ray|remux|web-dl|webrip|hdrip|bdrip|dvdrip|dvd|brrip|hdtv)\b""", RegexOption.IGNORE_CASE).containsMatchIn(lowerTitle)
+        if (isVideoResolution) score += 4500L
+
+        val isVideoCodec = Regex("""\b(x264|x265|hevc|h264|h265|avc|truehd|atmos|dts|ac3|eac3|ddp5\.1|aac|yts|rarbg|yify|swtyblz|galaxyrg|proper|repack|extended)\b""", RegexOption.IGNORE_CASE).containsMatchIn(lowerTitle)
+        if (isVideoCodec) score += 2500L
+
+        val hasReleaseYear = Regex("""\b(19\d\d|20\d\d)\b""").containsMatchIn(lowerTitle)
+        if (hasReleaseYear) score += 2000L
+
+        // 3. File size heuristics for Movies vs tiny patches / cracks
+        val sizeBytes = item.sizeBytes
+        if (sizeBytes in (700L * 1024L * 1024L)..(90L * 1024L * 1024L * 1024L)) {
+            score += 3000L
+            if (sizeBytes in (1200L * 1024L * 1024L)..(35L * 1024L * 1024L * 1024L)) {
+                score += 1500L
+            }
+        } else if (sizeBytes in 1L until (60L * 1024L * 1024L)) {
+            score -= 6000L
+        }
+
+        // 4. Non-movie / Game / Software penalties
+        val isGameOrSoftware = Regex("""\b(repack|fitgirl|dodi|codex|skidrow|flt|plaza|cpass|telltale|dlc|switch|nsp|xci|iso|rom|emulator|crack|keygen|patch|trainer|mod|apk|setup\.exe)\b""", RegexOption.IGNORE_CASE).containsMatchIn(lowerTitle)
+        if (isGameOrSoftware) {
+            score -= 7000L
+        }
+
+        // 5. Penalize fragmented / bracket-only titles
+        if (title.startsWith("(") && title.endsWith(")")) {
+            score -= 8000L
+        }
+
+        // 6. Capped seed count so fake seeds cannot overpower genuine movie releases
+        val seeds = item.seeds.coerceAtLeast(0)
+        score += seeds.coerceAtMost(2500)
+
+        return score
+    }
+
+    private val dnsCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+    private val blockedDirectHosts = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
     private fun resolveViaDoH(hostname: String): String? {
+        dnsCache[hostname]?.let { return it }
         return try {
             val url = URL("https://1.1.1.1/dns-query?name=${URLEncoder.encode(hostname, "UTF-8")}&type=A")
             val conn = (url.openConnection() as HttpsURLConnection).apply {
                 requestMethod = "GET"
                 setRequestProperty("Accept", "application/dns-json")
-                connectTimeout = 5000
-                readTimeout = 5000
+                connectTimeout = 3500
+                readTimeout = 3500
             }
             if (conn.responseCode != 200) return null
             val body = BufferedReader(InputStreamReader(conn.inputStream)).use { it.readText() }
@@ -147,7 +218,10 @@ object SearchRepository {
                 val ans = answers.getJSONObject(i)
                 if (ans.optInt("type") == 1) {
                     val data = ans.optString("data")
-                    if (data.isNotBlank()) return data
+                    if (data.isNotBlank()) {
+                        dnsCache[hostname] = data
+                        return data
+                    }
                 }
             }
             null
@@ -158,21 +232,25 @@ object SearchRepository {
 
     fun fetchUrlWithDoHFallback(targetUrl: String, headers: Map<String, String> = emptyMap()): String {
         val parsed = URL(targetUrl)
-        try {
-            val conn = (parsed.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile; Svorrent/${BuildConfig.VERSION_NAME})")
-                for ((k, v) in headers) {
-                    setRequestProperty(k, v)
+        val host = parsed.host
+
+        if (!blockedDirectHosts.contains(host)) {
+            try {
+                val conn = (parsed.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile; Svorrent/${BuildConfig.VERSION_NAME})")
+                    for ((k, v) in headers) {
+                        setRequestProperty(k, v)
+                    }
+                    connectTimeout = 2000
+                    readTimeout = 4500
                 }
-                connectTimeout = 7000
-                readTimeout = 8000
+                if (conn.responseCode in 200..299) {
+                    return BufferedReader(InputStreamReader(conn.inputStream)).use { it.readText() }
+                }
+            } catch (_: Exception) {
+                blockedDirectHosts.add(host)
             }
-            if (conn.responseCode in 200..299) {
-                return BufferedReader(InputStreamReader(conn.inputStream)).use { it.readText() }
-            }
-        } catch (_: Exception) {
-            // Fall through to Cloudflare DoH resolution if ISP/carrier blocks DNS
         }
 
         val resolvedIp = resolveViaDoH(parsed.host)
@@ -411,8 +489,8 @@ object SearchRepository {
         if (clean.isEmpty()) return@withContext emptyList()
 
         val queries = buildSearchQueries(clean)
-        val results = mutableListOf<SearchResultItem>()
-        val seenHashes = mutableSetOf<String>()
+        val rawResults = mutableListOf<SearchResultItem>()
+        val queryTokens = clean.lowercase().split(Regex("[^a-z0-9]+")).filter { it.length >= 2 }
 
         coroutineScope {
             val tasks = mutableListOf<kotlinx.coroutines.Deferred<List<SearchResultItem>>>()
@@ -434,14 +512,62 @@ object SearchRepository {
 
             val allLists = tasks.awaitAll()
             for (list in allLists) {
-                for (item in list) {
-                    if (item.infoHash.length == 40 && seenHashes.add(item.infoHash)) {
-                        results.add(item)
-                    }
-                }
+                rawResults.addAll(list)
             }
         }
 
-        results.sortedByDescending { it.seeds }
+        // Deduplicate across indexers using both infoHash and normalized title + size
+        val seenByHash = mutableMapOf<String, SearchResultItem>()
+        val seenByTitle = mutableMapOf<String, SearchResultItem>()
+
+        for (item in rawResults) {
+            val title = item.title.trim()
+            val lowerTitle = title.lowercase()
+
+            // Filter out placeholders, broken scrapes, and non-matching fragments
+            if (title.length < 3 || lowerTitle == "no results returned" || lowerTitle == "no results found") continue
+            if (title.startsWith("(") && title.endsWith(")")) continue
+            if (queryTokens.isNotEmpty() && !queryTokens.any { lowerTitle.contains(it) }) continue
+
+            val infoHash = item.infoHash.lowercase()
+            val normTitle = normalizeTitleForDedup(title)
+            val sizeMb = item.sizeBytes / (1024L * 1024L)
+            val titleKey = if (normTitle.isNotEmpty()) "$normTitle|$sizeMb" else ""
+
+            var existing: SearchResultItem? = null
+            if (infoHash.isNotEmpty() && seenByHash.containsKey(infoHash)) {
+                existing = seenByHash[infoHash]
+            } else if (titleKey.isNotEmpty() && seenByTitle.containsKey(titleKey)) {
+                existing = seenByTitle[titleKey]
+            }
+
+            if (existing != null) {
+                if (item.seeds > existing.seeds) {
+                    val merged = if (item.magnet.isEmpty() && existing.magnet.isNotEmpty()) {
+                        item.copy(magnet = existing.magnet)
+                    } else {
+                        item
+                    }
+                    if (infoHash.isNotEmpty()) seenByHash[infoHash] = merged
+                    if (titleKey.isNotEmpty()) seenByTitle[titleKey] = merged
+                }
+                continue
+            }
+
+            if (infoHash.isNotEmpty()) seenByHash[infoHash] = item
+            if (titleKey.isNotEmpty()) seenByTitle[titleKey] = item
+        }
+
+        val deduped = (seenByHash.values + seenByTitle.values).distinctBy {
+            if (it.infoHash.isNotEmpty()) it.infoHash else it.title
+        }
+
+        // Sort by intelligent movie-first score descending, then seeds descending
+        deduped.sortedWith { a, b ->
+            val scoreA = scoreSearchResult(a, clean)
+            val scoreB = scoreSearchResult(b, clean)
+            val diff = scoreB.compareTo(scoreA)
+            if (diff != 0) diff else b.seeds.compareTo(a.seeds)
+        }
     }
 }

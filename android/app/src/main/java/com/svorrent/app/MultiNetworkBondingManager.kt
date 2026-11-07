@@ -14,8 +14,9 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 class MultiNetworkBondingManager(context: Context) {
+    private val appContext: Context = context.applicationContext
     private val connectivityManager: ConnectivityManager? = try {
-        context.applicationContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
+        appContext.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
     } catch (_: Throwable) {
         null
     }
@@ -31,8 +32,36 @@ class MultiNetworkBondingManager(context: Context) {
     private val disabledAdapterIds = ConcurrentHashMap.newKeySet<String>()
     private val historyMap = ConcurrentHashMap<String, ArrayDeque<Long>>()
     private val aggregateHistory = ArrayDeque<Long>()
+    private val aggregateUpHistory = ArrayDeque<Long>()
     private val sessionDownloadedMap = ConcurrentHashMap<String, Long>()
     private val sessionUploadedMap = ConcurrentHashMap<String, Long>()
+
+    private fun detectCellularLabel(): String {
+        val tm = try {
+            appContext.getSystemService(Context.TELEPHONY_SERVICE) as? android.telephony.TelephonyManager
+        } catch (_: Throwable) {
+            null
+        }
+
+        if (tm != null) {
+            val netType = runCatching {
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                    tm.dataNetworkType
+                } else {
+                    @Suppress("DEPRECATION")
+                    tm.networkType
+                }
+            }.getOrDefault(android.telephony.TelephonyManager.NETWORK_TYPE_UNKNOWN)
+
+            if (android.os.Build.VERSION.SDK_INT >= 29 && netType == android.telephony.TelephonyManager.NETWORK_TYPE_NR) {
+                return "Mobile Data (5G)"
+            }
+            if (netType == android.telephony.TelephonyManager.NETWORK_TYPE_LTE) {
+                return "Mobile Data (4G)"
+            }
+        }
+        return "Mobile Data"
+    }
 
     @Volatile
     private var peakDownSpeed: Long = 0L
@@ -180,7 +209,7 @@ class MultiNetworkBondingManager(context: Context) {
                 result.add(
                     DiscoveredAdapter(
                         id = "cellular",
-                        name = "Mobile Data (5G / LTE)",
+                        name = detectCellularLabel(),
                         device = info.first,
                         type = "cellular",
                         ip = info.second,
@@ -228,7 +257,7 @@ class MultiNetworkBondingManager(context: Context) {
                         result.add(
                             DiscoveredAdapter(
                                 id = "cellular",
-                                name = "Mobile Data (5G / LTE)",
+                                name = detectCellularLabel(),
                                 device = dev,
                                 type = "cellular",
                                 ip = ipv4,
@@ -273,7 +302,7 @@ class MultiNetworkBondingManager(context: Context) {
             result.add(
                 DiscoveredAdapter(
                     id = "cellular",
-                    name = "Mobile Data (5G / LTE)",
+                    name = "Mobile Data",
                     device = "rmnet_data0",
                     type = "cellular",
                     ip = "Standby (Enable Mobile Data)",
@@ -363,6 +392,11 @@ class MultiNetworkBondingManager(context: Context) {
             while (aggregateHistory.size > 24) aggregateHistory.removeFirst()
         }
 
+        synchronized(aggregateUpHistory) {
+            aggregateUpHistory.addLast(totalUp)
+            while (aggregateUpHistory.size > 24) aggregateUpHistory.removeFirst()
+        }
+
         val items = discovered.map { adapter ->
             val enabled = isAdapterEnabled(adapter.id)
             val active = adapter.connected && enabled
@@ -417,7 +451,8 @@ class MultiNetworkBondingManager(context: Context) {
             peakSpeed = peakDownSpeed,
             bondedCount = items.count { it.active },
             connectedCount = items.count { it.connected },
-            aggregateHistory = synchronized(aggregateHistory) { aggregateHistory.toList() }
+            aggregateHistory = synchronized(aggregateHistory) { aggregateHistory.toList() },
+            aggregateUpHistory = synchronized(aggregateUpHistory) { aggregateUpHistory.toList() }
         )
     }
 

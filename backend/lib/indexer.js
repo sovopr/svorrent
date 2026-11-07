@@ -85,6 +85,90 @@ export function formatBytes(bytes) {
   return `${val >= 100 || i === 0 ? Math.round(val) : val.toFixed(1)} ${units[i]}`;
 }
 
+export function parseSizeToBytes(str) {
+  if (!str || typeof str !== 'string') return 0;
+  const match = str.trim().match(/^([\d.]+)\s*([KMGT]?i?B)$/i);
+  if (!match) return 0;
+  const val = parseFloat(match[1]);
+  if (!Number.isFinite(val)) return 0;
+  const unit = match[2].toUpperCase();
+  const mult = unit.startsWith('T')
+    ? 1024 ** 4
+    : unit.startsWith('G')
+      ? 1024 ** 3
+      : unit.startsWith('M')
+        ? 1024 ** 2
+        : unit.startsWith('K')
+          ? 1024
+          : 1;
+  return Math.round(val * mult);
+}
+
+export function normalizeTitleForDedup(title) {
+  if (!title || typeof title !== 'string') return '';
+  return title
+    .toLowerCase()
+    .replace(/\[[^\]]*\]/g, ' ')
+    .replace(/\([^\)]*\)/g, ' ')
+    .replace(/\{[^\}]*\}/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+export function scoreSearchResult(item, query = '') {
+  if (!item || !item.title) return 0;
+  let score = 0;
+  const title = item.title.trim();
+  const lowerTitle = title.toLowerCase();
+  const lowerQuery = (query || '').trim().toLowerCase();
+  const queryTokens = lowerQuery.split(/\s+/).filter(Boolean);
+
+  // 1. Query matching
+  if (lowerQuery && lowerTitle.includes(lowerQuery)) {
+    score += 4000;
+  }
+  if (lowerQuery && lowerTitle.startsWith(lowerQuery)) {
+    score += 1500;
+  }
+  if (queryTokens.length > 0) {
+    const matchedTokens = queryTokens.filter((t) => lowerTitle.includes(t));
+    score += (matchedTokens.length / queryTokens.length) * 2000;
+  }
+
+  // 2. Video & Movie Indicators (Resolutions, rips, audio, years)
+  const isVideoResolution = /\b(2160p|1080p|720p|480p|4k|uhd|bluray|blu-ray|remux|web-dl|webrip|hdrip|bdrip|dvdrip|dvd|brrip|hdtv)\b/i.test(lowerTitle);
+  if (isVideoResolution) score += 4500;
+
+  const isVideoCodec = /\b(x264|x265|hevc|h264|h265|avc|truehd|atmos|dts|ac3|eac3|ddp5\.1|aac|yts|rarbg|yify|swtyblz|galaxyrg|proper|repack|extended)\b/i.test(lowerTitle);
+  if (isVideoCodec) score += 2500;
+
+  const hasReleaseYear = /\b(19\d\d|20\d\d)\b/.test(lowerTitle);
+  if (hasReleaseYear) score += 2000;
+
+  // 3. File Size heuristics for Movies vs Tiny patches / cracks
+  const sizeBytes = parseSizeToBytes(item.size);
+  if (sizeBytes >= 700 * 1024 * 1024 && sizeBytes <= 90 * 1024 * 1024 * 1024) {
+    score += 3000;
+    if (sizeBytes >= 1.2 * 1024 * 1024 * 1024 && sizeBytes <= 35 * 1024 * 1024 * 1024) {
+      score += 1500;
+    }
+  } else if (sizeBytes > 0 && sizeBytes < 60 * 1024 * 1024) {
+    score -= 6000;
+  }
+
+  // 4. Non-movie / Game / Software penalties
+  const isGameOrSoftware = /\b(repack|fitgirl|dodi|codex|skidrow|flt|plaza|cpass|telltale|dlc|switch|nsp|xci|iso|rom|emulator|crack|keygen|patch|trainer|mod|apk|setup\.exe)\b/i.test(lowerTitle);
+  if (isGameOrSoftware) {
+    score -= 7000;
+  }
+
+  // 5. Seed count (capped influence so spam seeds cannot overpower true movies)
+  const seeds = Math.max(0, item.seeds || 0);
+  score += Math.min(seeds, 2500);
+
+  return score;
+}
+
 // ---------------------------------------------------------------------------
 // 1. ThePirateBay (apibay.org JSON API)
 // ---------------------------------------------------------------------------
@@ -383,38 +467,58 @@ export async function searchFederated(
   const resultsNested = await Promise.all(tasks);
   const rawResults = resultsNested.flat();
 
-  // Deduplicate across indexers
-  const seen = new Map();
+  // Deduplicate across indexers using both infoHash and normalized title + size
+  const seenByHash = new Map();
+  const seenByTitle = new Map();
+  const tokens = (query || '').toLowerCase().split(/[^a-z0-9]+/).filter((t) => t.length >= 2);
+
   for (const item of rawResults) {
     if (!item || typeof item.title !== 'string') continue;
     const title = item.title.trim();
     const lowerTitle = title.toLowerCase();
 
-    // Skip empty placeholder rows
+    // Skip empty placeholder rows or broken scrapes
     if (!title || lowerTitle === 'no results returned' || lowerTitle === 'no results found') continue;
+    if (title.length < 3 || (title.startsWith('(') && title.endsWith(')'))) continue;
+    if (tokens.length > 0 && !tokens.some((tok) => lowerTitle.includes(tok))) continue;
     if (item.id === '0' && (item.size === '0 B' || !item.size)) continue;
 
     const infoHash = item.infoHash || extractInfoHash(item.magnet);
-    const key = infoHash ? `hash:${infoHash}` : `title:${lowerTitle}|${(item.size || '').toLowerCase()}`;
+    const normTitle = normalizeTitleForDedup(title);
+    const sizeBytes = parseSizeToBytes(item.size);
+    const sizeMb = Math.round(sizeBytes / (1024 * 1024));
+    const titleKey = normTitle ? `${normTitle}|${sizeMb}` : '';
 
-    if (seen.has(key)) {
-      const existing = seen.get(key);
-      // Keep entry with higher seeds or richer magnet URI
+    let existing = null;
+    if (infoHash && seenByHash.has(infoHash)) {
+      existing = seenByHash.get(infoHash);
+    } else if (titleKey && seenByTitle.has(titleKey)) {
+      existing = seenByTitle.get(titleKey);
+    }
+
+    if (existing) {
       if ((item.seeds || 0) > (existing.seeds || 0)) {
-        seen.set(key, item);
+        if (!item.magnet && existing.magnet) item.magnet = existing.magnet;
+        if (infoHash) seenByHash.set(infoHash, item);
+        if (titleKey) seenByTitle.set(titleKey, item);
       } else if (!existing.magnet && item.magnet) {
         existing.magnet = item.magnet;
       }
       continue;
     }
 
-    seen.set(key, item);
+    if (infoHash) seenByHash.set(infoHash, item);
+    if (titleKey) seenByTitle.set(titleKey, item);
   }
 
-  const deduped = Array.from(seen.values());
+  const deduped = Array.from(new Set([...seenByHash.values(), ...seenByTitle.values()]));
 
-  // Sort globally by seeds descending, then peers descending
+  // Sort by intelligent movie-first score descending, with seeds as secondary tiebreaker
   deduped.sort((a, b) => {
+    const scoreA = scoreSearchResult(a, query);
+    const scoreB = scoreSearchResult(b, query);
+    const diff = scoreB - scoreA;
+    if (diff !== 0) return diff;
     const sDiff = (b.seeds || 0) - (a.seeds || 0);
     if (sDiff !== 0) return sDiff;
     return (b.peers || 0) - (a.peers || 0);

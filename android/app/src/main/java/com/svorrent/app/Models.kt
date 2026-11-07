@@ -105,7 +105,8 @@ data class NetworkSnapshot(
     val peakSpeed: Long = 0L,
     val bondedCount: Int = 0,
     val connectedCount: Int = 0,
-    val aggregateHistory: List<Long> = emptyList()
+    val aggregateHistory: List<Long> = emptyList(),
+    val aggregateUpHistory: List<Long> = emptyList()
 )
 
 object Formatters {

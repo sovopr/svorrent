@@ -446,9 +446,6 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
                           <button className="icon-btn" disabled={busy} onClick={() => handleAction(t, 'opening')} title="Open magnet in desktop client" aria-label={`Open magnet for ${t.title}`}>
                             <Icon name="magnet" />
                           </button>
-                          <button className="icon-btn" disabled={busy} onClick={() => handleAction(t, 'copying')} title="Copy magnet link" aria-label={`Copy magnet link for ${t.title}`}>
-                            <Icon name="copy" />
-                          </button>
                           {t.link ? (
                             <a className="icon-btn" href={t.link} target="_blank" rel="noreferrer" download title="Download .torrent file" aria-label="Download .torrent file">
                               <Icon name="file" />

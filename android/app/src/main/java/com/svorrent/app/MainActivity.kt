@@ -231,9 +231,10 @@ fun MiniSparkline(
     data: List<Long>,
     color: Color,
     width: Dp = 64.dp,
-    height: Dp = 18.dp
+    height: Dp = 18.dp,
+    modifier: Modifier = Modifier.size(width, height)
 ) {
-    Canvas(modifier = Modifier.size(width, height)) {
+    Canvas(modifier = modifier) {
         if (data.size < 2 || size.width <= 0f || size.height <= 0f) return@Canvas
         val maxVal = (data.maxOrNull() ?: 1024L).coerceAtLeast(1024L).toFloat()
         val hasSignal = data.any { it > 0L }
@@ -528,8 +529,9 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
 
     var query by remember { mutableStateOf("") }
     var searchedQuery by remember { mutableStateOf("") }
-    var selectedCategory by remember { mutableStateOf("All") }
-    var sortBy by remember { mutableStateOf("seeds") }
+    var sortBy by remember { mutableStateOf("relevance") }
+    var currentPage by remember { mutableStateOf(1) }
+    val pageSize = 20
     var loading by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var results by remember { mutableStateOf<List<SearchResultItem>>(emptyList()) }
@@ -551,6 +553,7 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
         focusManager.clearFocus()
         loading = true
         error = null
+        currentPage = 1
         scope.launch {
             try {
                 val res = SearchRepository.search(term)
@@ -564,16 +567,18 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
         }
     }
 
-    val filteredResults = remember(results, selectedCategory, sortBy) {
-        val byCat = if (selectedCategory == "All") {
-            results
-        } else {
-            results.filter { it.category.equals(selectedCategory, ignoreCase = true) }
-        }
+    val sortedResults = remember(results, sortBy) {
         when (sortBy) {
-            "size" -> byCat.sortedByDescending { it.sizeBytes }
-            else -> byCat.sortedByDescending { it.seeds }
+            "size" -> results.sortedByDescending { it.sizeBytes }
+            "seeds" -> results.sortedByDescending { it.seeds }
+            else -> results
         }
+    }
+
+    val totalPages = maxOf(1, kotlin.math.ceil(sortedResults.size / pageSize.toDouble()).toInt())
+    val pagedResults = remember(sortedResults, currentPage) {
+        val start = (currentPage - 1) * pageSize
+        sortedResults.drop(start).take(pageSize)
     }
 
     Column(
@@ -667,51 +672,46 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
         if (searchedQuery.isNotEmpty() || results.isNotEmpty()) {
             Spacer(modifier = Modifier.height(10.dp))
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
+                modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                listOf("All", "Video", "Audio", "Apps", "Games").forEach { cat ->
-                    val active = selectedCategory == cat
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(5.dp))
-                            .border(1.dp, if (active) BorderStrong else BorderDark, RoundedCornerShape(5.dp))
-                            .background(if (active) Surface2Dark else SurfaceDark)
-                            .clickable { selectedCategory = cat }
-                            .padding(horizontal = 10.dp, vertical = 5.dp)
-                    ) {
-                        Text(
-                            text = cat,
-                            color = if (active) TextPrimary else TextSecondary,
-                            fontSize = 11.5.sp,
-                            fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
-                            maxLines = 1,
-                            softWrap = false
-                        )
-                    }
-                }
+                val startIdx = if (sortedResults.isEmpty()) 0 else (currentPage - 1) * pageSize + 1
+                val endIdx = minOf(currentPage * pageSize, sortedResults.size)
+                Text(
+                    text = "Showing $startIdx–$endIdx of ${sortedResults.size}",
+                    color = TextSecondary,
+                    fontSize = 11.5.sp,
+                    fontFamily = FontFamily.Monospace
+                )
 
-                Spacer(modifier = Modifier.width(4.dp))
-
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(5.dp))
-                        .border(1.dp, BorderDark, RoundedCornerShape(5.dp))
-                        .background(SurfaceDark)
-                        .clickable { sortBy = if (sortBy == "seeds") "size" else "seeds" }
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Text(
-                        text = if (sortBy == "seeds") "Sort: Seeds ▼" else "Sort: Size ▼",
-                        color = TextSecondary,
-                        fontSize = 11.5.sp,
-                        fontFamily = FontFamily.Monospace,
-                        maxLines = 1,
-                        softWrap = false
-                    )
+                    listOf("relevance" to "Top Match", "seeds" to "Seeds", "size" to "Size").forEach { (key, label) ->
+                        val active = sortBy == key
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(5.dp))
+                                .border(1.dp, if (active) BorderStrong else BorderDark, RoundedCornerShape(5.dp))
+                                .background(if (active) Surface2Dark else SurfaceDark)
+                                .clickable {
+                                    sortBy = key
+                                    currentPage = 1
+                                }
+                                .padding(horizontal = 9.dp, vertical = 5.dp)
+                        ) {
+                            Text(
+                                text = label,
+                                color = if (active) TextPrimary else TextSecondary,
+                                fontSize = 11.sp,
+                                fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -736,106 +736,71 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
                 CircularProgressIndicator(color = AccentBlue, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
             }
         } else if (searchedQuery.isNotEmpty()) {
-            Text(
-                text = "${filteredResults.size} results for “$searchedQuery”",
-                color = TextSecondary,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(bottom = 8.dp)
-            )
-
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .border(1.dp, BorderDark, RoundedCornerShape(6.dp))
-                    .background(SurfaceDark, RoundedCornerShape(6.dp))
+            Column(
+                modifier = Modifier.fillMaxSize()
             ) {
-                items(filteredResults, key = { it.id }) { item ->
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 10.dp)
-                    ) {
-                        Text(
-                            text = item.title,
-                            color = TextPrimary,
-                            fontSize = 13.5.sp,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
+                LazyColumn(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .border(1.dp, BorderDark, RoundedCornerShape(6.dp))
+                        .background(SurfaceDark, RoundedCornerShape(6.dp))
+                ) {
+                    items(pagedResults, key = { it.id }) { item ->
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
                         ) {
-                            Row(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .padding(end = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp)
-                            ) {
-                                Text(
-                                    text = item.sizeFormatted,
-                                    color = TextSecondary,
-                                    fontSize = 11.5.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
-                                Text(
-                                    text = "▲ ${item.seeds}",
-                                    color = when {
-                                        item.seeds >= 50 -> OkGreen
-                                        item.seeds >= 5 -> TextPrimary
-                                        else -> TextMuted
-                                    },
-                                    fontSize = 11.5.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
-                                Text(
-                                    text = "▼ ${item.leechers}",
-                                    color = TextMuted,
-                                    fontSize = 11.5.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
-                                Text(
-                                    text = item.category,
-                                    color = TextMuted,
-                                    fontSize = 11.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
+                            Text(
+                                text = item.title,
+                                color = TextPrimary,
+                                fontSize = 13.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
 
                             Row(
+                                modifier = Modifier.fillMaxWidth(),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                horizontalArrangement = Arrangement.SpaceBetween
                             ) {
-                                Box(
+                                Row(
                                     modifier = Modifier
-                                        .size(28.dp)
-                                        .clip(RoundedCornerShape(5.dp))
-                                        .border(1.dp, BorderDark, RoundedCornerShape(5.dp))
-                                        .background(Surface2Dark)
-                                        .clickable {
-                                            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                                            cm.setPrimaryClip(ClipData.newPlainText("magnet", item.magnet))
-                                            Toast.makeText(context, "Copied magnet link", Toast.LENGTH_SHORT).show()
-                                        },
-                                    contentAlignment = Alignment.Center
+                                        .weight(1f)
+                                        .padding(end = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Outlined.ContentCopy,
-                                        contentDescription = "Copy Magnet",
-                                        tint = TextSecondary,
-                                        modifier = Modifier.size(14.dp)
+                                    Text(
+                                        text = item.sizeFormatted,
+                                        color = TextSecondary,
+                                        fontSize = 11.5.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                    Text(
+                                        text = "▲ ${item.seeds}",
+                                        color = when {
+                                            item.seeds >= 50 -> OkGreen
+                                            item.seeds >= 5 -> TextPrimary
+                                            else -> TextMuted
+                                        },
+                                        fontSize = 11.5.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                    Text(
+                                        text = "▼ ${item.leechers}",
+                                        color = Color(0xFFE57373),
+                                        fontSize = 11.5.sp,
+                                        fontFamily = FontFamily.Monospace,
+                                        maxLines = 1,
+                                        softWrap = false
                                     )
                                 }
 
@@ -846,7 +811,6 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
                                         .border(1.dp, BorderStrong, RoundedCornerShape(5.dp))
                                         .background(Surface2Dark)
                                         .clickable {
-                                            // Pass exact item.title so Downloads tab never shows Magnet-<hex>
                                             SvorrentEngine.addMagnet(item.magnet, preferredTitle = item.title).onSuccess {
                                                 Toast.makeText(context, "Added to Downloads", Toast.LENGTH_SHORT).show()
                                                 onMagnetAdded()
@@ -854,7 +818,7 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
                                                 Toast.makeText(context, err.message ?: "Failed to add magnet", Toast.LENGTH_SHORT).show()
                                             }
                                         }
-                                        .padding(horizontal = 10.dp),
+                                        .padding(horizontal = 12.dp),
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
@@ -868,8 +832,36 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
                                 }
                             }
                         }
+                        HorizontalDivider(color = BorderDark, thickness = 1.dp)
                     }
-                    HorizontalDivider(color = BorderDark, thickness = 1.dp)
+                }
+
+                if (totalPages > 1) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        CompactActionBtn(
+                            label = "‹ Prev",
+                            enabled = currentPage > 1,
+                            onClick = { if (currentPage > 1) currentPage-- }
+                        )
+                        Text(
+                            text = "Page $currentPage of $totalPages",
+                            color = TextSecondary,
+                            fontSize = 11.5.sp,
+                            fontFamily = FontFamily.Monospace
+                        )
+                        CompactActionBtn(
+                            label = "Next ›",
+                            enabled = currentPage < totalPages,
+                            onClick = { if (currentPage < totalPages) currentPage++ }
+                        )
+                    }
                 }
             }
         } else {
@@ -1102,8 +1094,21 @@ fun DownloadsScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
+                            val leftText = when {
+                                !t.ready -> "Fetching metadata…"
+                                t.paused -> "${String.format(java.util.Locale.US, "%.1f", pct)}% · Paused"
+                                t.done -> "100% · ${if (t.paused) "Stopped" else "Seeding"}"
+                                else -> "${String.format(java.util.Locale.US, "%.1f", pct)}% · ${Formatters.formatBytes(t.downloaded)} / ${Formatters.formatBytes(t.length)}"
+                            }
+                            val rightText = when {
+                                !t.ready -> "${t.numPeers}p"
+                                t.paused -> "${Formatters.formatBytes(t.downloaded)} / ${Formatters.formatBytes(t.length)}"
+                                t.done -> "${Formatters.formatBytes(t.length)} · ↑ ${Formatters.formatSpeed(t.uploadSpeed)}"
+                                else -> "↓ ${Formatters.formatSpeed(t.downloadSpeed)} · ${t.numPeers}p · ${Formatters.formatEta(t.timeRemainingSec)}"
+                            }
+
                             Text(
-                                text = "${String.format("%.1f", pct)}% · $statusLabel · ${Formatters.formatBytes(t.downloaded)} / ${Formatters.formatBytes(t.length)}",
+                                text = leftText,
                                 color = TextSecondary,
                                 fontSize = 11.sp,
                                 fontFamily = FontFamily.Monospace,
@@ -1114,16 +1119,14 @@ fun DownloadsScreen(
                                     .padding(end = 6.dp)
                             )
 
-                            if (!t.done && !t.paused) {
-                                Text(
-                                    text = "↓ ${Formatters.formatSpeed(t.downloadSpeed)} · ${t.numPeers}p · ${Formatters.formatEta(t.timeRemainingSec)}",
-                                    color = TextPrimary,
-                                    fontSize = 11.sp,
-                                    fontFamily = FontFamily.Monospace,
-                                    maxLines = 1,
-                                    softWrap = false
-                                )
-                            }
+                            Text(
+                                text = rightText,
+                                color = TextPrimary,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace,
+                                maxLines = 1,
+                                softWrap = false
+                            )
                         }
 
                         Spacer(modifier = Modifier.height(8.dp))
@@ -1392,23 +1395,22 @@ fun NetworksScreen(
                         .padding(12.dp)
                 ) {
                     Text("Download", color = TextMuted, fontSize = 11.5.sp)
+                    Spacer(modifier = Modifier.height(3.dp))
+                    Text(
+                        text = if (snapshot.totalDownSpeed > 0) Formatters.formatSpeed(snapshot.totalDownSpeed) else "—",
+                        color = TextPrimary,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1
+                    )
                     Spacer(modifier = Modifier.height(4.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Text(
-                            text = if (snapshot.totalDownSpeed > 0) Formatters.formatSpeed(snapshot.totalDownSpeed) else "—",
-                            color = TextPrimary,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            fontFamily = FontFamily.Monospace,
-                            maxLines = 1
-                        )
-                        MiniSparkline(data = snapshot.aggregateHistory, color = AccentBlue, width = 50.dp, height = 16.dp)
-                    }
-                    Spacer(modifier = Modifier.height(2.dp))
+                    MiniSparkline(
+                        data = snapshot.aggregateHistory,
+                        color = AccentBlue,
+                        modifier = Modifier.fillMaxWidth().height(14.dp)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "Peak ${Formatters.formatSpeed(snapshot.peakSpeed)}",
                         color = TextMuted,
@@ -1417,7 +1419,7 @@ fun NetworksScreen(
                     )
                 }
 
-                Box(modifier = Modifier.width(1.dp).height(76.dp).background(BorderDark))
+                Box(modifier = Modifier.width(1.dp).height(88.dp).background(BorderDark))
 
                 Column(
                     modifier = Modifier
@@ -1425,15 +1427,22 @@ fun NetworksScreen(
                         .padding(12.dp)
                 ) {
                     Text("Upload", color = TextMuted, fontSize = 11.5.sp)
-                    Spacer(modifier = Modifier.height(4.dp))
+                    Spacer(modifier = Modifier.height(3.dp))
                     Text(
                         text = if (snapshot.totalUpSpeed > 0) Formatters.formatSpeed(snapshot.totalUpSpeed) else "—",
                         color = TextPrimary,
                         fontSize = 15.sp,
                         fontWeight = FontWeight.SemiBold,
-                        fontFamily = FontFamily.Monospace
+                        fontFamily = FontFamily.Monospace,
+                        maxLines = 1
                     )
-                    Spacer(modifier = Modifier.height(2.dp))
+                    Spacer(modifier = Modifier.height(4.dp))
+                    MiniSparkline(
+                        data = snapshot.aggregateUpHistory,
+                        color = OkGreen,
+                        modifier = Modifier.fillMaxWidth().height(14.dp)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = "$totalPeers active peers",
                         color = TextMuted,
@@ -1508,10 +1517,10 @@ fun NetworksScreen(
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "Interfaces  ·  Toggle routing per interface (Wi-Fi + 5G/LTE)",
-            color = TextSecondary,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium
+            text = "Interfaces",
+            color = TextPrimary,
+            fontSize = 13.5.sp,
+            fontWeight = FontWeight.SemiBold
         )
 
         Spacer(modifier = Modifier.height(8.dp))
@@ -1557,13 +1566,6 @@ fun NetworksScreen(
                                 color = TextPrimary,
                                 fontSize = 13.5.sp,
                                 fontWeight = FontWeight.Medium,
-                                maxLines = 1
-                            )
-                            Text(
-                                text = iface.device,
-                                color = TextMuted,
-                                fontSize = 11.sp,
-                                fontFamily = FontFamily.Monospace,
                                 maxLines = 1
                             )
                         }

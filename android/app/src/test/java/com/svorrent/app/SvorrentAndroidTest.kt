@@ -91,4 +91,61 @@ class SvorrentAndroidTest {
         assertEquals(listOf("project hail mary", "project* hail* mary*"), SearchRepository.buildSearchQueries("project hail mary"))
         assertEquals(emptyList<String>(), SearchRepository.buildSearchQueries("   "))
     }
+
+    @Test
+    fun testNormalizeTitleForDedup() {
+        assertEquals(
+            "batman the enemy within the telltale series",
+            SearchRepository.normalizeTitleForDedup("Batman: The Enemy Within -The Telltale Series (Episode 1-3)")
+        )
+        assertEquals(
+            "the batman 2022 1080p bluray x264",
+            SearchRepository.normalizeTitleForDedup("The.Batman.2022.1080p.BluRay.x264-[YTS]")
+        )
+    }
+
+    @Test
+    fun testScoreSearchResultPrioritizesMoviesOverGames() {
+        val query = "the batman"
+        val movie = SearchResultItem(
+            id = "0123456789abcdef0123456789abcdef01234567",
+            title = "The Batman (2022) [1080p] [WEBRip] [5.1] [YTS.LT]",
+            sizeBytes = 2254857830L,
+            sizeFormatted = "2.1 GB",
+            seeds = 1400,
+            leechers = 300,
+            provider = "ThePirateBay",
+            infoHash = "0123456789abcdef0123456789abcdef01234567",
+            magnet = "magnet:?xt=urn:btih:0123456789abcdef0123456789abcdef01234567"
+        )
+        val game = SearchResultItem(
+            id = "abcdef0123456789abcdef0123456789abcdef01",
+            title = "Batman: The Enemy Within -The Telltale Series (Episode 1-3)",
+            sizeBytes = 8315208L,
+            sizeFormatted = "7.93 MB",
+            seeds = 5000,
+            leechers = 3000,
+            provider = "BitSearch",
+            infoHash = "abcdef0123456789abcdef0123456789abcdef01",
+            magnet = "magnet:?xt=urn:btih:abcdef0123456789abcdef0123456789abcdef01"
+        )
+        val fragment = SearchResultItem(
+            id = "1111111111111111111111111111111111111111",
+            title = "(Episode 1-3)",
+            sizeBytes = 8315208L,
+            sizeFormatted = "7.93 MB",
+            seeds = 5000,
+            leechers = 3000,
+            provider = "BitSearch",
+            infoHash = "1111111111111111111111111111111111111111",
+            magnet = "magnet:?xt=urn:btih:1111111111111111111111111111111111111111"
+        )
+
+        val movieScore = SearchRepository.scoreSearchResult(movie, query)
+        val gameScore = SearchRepository.scoreSearchResult(game, query)
+        val fragmentScore = SearchRepository.scoreSearchResult(fragment, query)
+
+        assertTrue("Movie score ($movieScore) must be higher than game score ($gameScore)", movieScore > gameScore)
+        assertTrue("Fragment score ($fragmentScore) must be deeply penalized", fragmentScore < 0)
+    }
 }

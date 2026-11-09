@@ -286,7 +286,13 @@ function App() {
         aria-label={route === 'search' ? 'Search' : route === 'downloads' ? 'Downloads' : 'Networks'}
       >
         <div style={{ display: route === 'search' ? 'block' : 'none' }}>
-          <SearchPage initialQuery={searchTerm} isActive={route === 'search'} notify={notify} onDownloadAdded={refreshTorrents} />
+          <SearchPage
+            initialQuery={searchTerm}
+            isActive={route === 'search'}
+            notify={notify}
+            onDownloadAdded={refreshTorrents}
+            downloads={torrents}
+          />
         </div>
         <div style={{ display: route === 'downloads' ? 'block' : 'none' }}>
           <DownloadsManager

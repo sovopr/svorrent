@@ -45,7 +45,7 @@ function formatSwarmCount(val) {
   return val;
 }
 
-export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = true }) {
+export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = true, downloads = [] }) {
   const [query, setQuery] = useState(initialQuery || '');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -56,6 +56,18 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
   const [rowState, setRowState] = useState({});
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
+
+  const activeCompletedHashes = useMemo(() => {
+    const set = new Set();
+    if (Array.isArray(downloads)) {
+      for (const d of downloads) {
+        if (d && d.infoHash && (d.done || d.progress === 1)) {
+          set.add(d.infoHash.toLowerCase());
+        }
+      }
+    }
+    return set;
+  }, [downloads]);
 
   const inputRef = useRef(null);
   const tableRef = useRef(null);
@@ -252,7 +264,18 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
     setRow(t, controller, action);
     try {
       if (action === 'adding') {
-        const data = await apiPost('/torrent/download', { magnet: t.magnet, provider: t.provider, desc: t.desc, link: t.link }, { signal: controller.signal });
+        const data = await apiPost(
+          '/torrent/download',
+          {
+            magnet: t.magnet,
+            provider: t.provider,
+            desc: t.desc,
+            link: t.link,
+            infoHash: t.infoHash,
+            title: t.title,
+          },
+          { signal: controller.signal }
+        );
         if (data.success !== true || typeof data.infoHash !== 'string') throw new Error('The server did not confirm the download. Check Downloads before retrying.');
         setRow(t, controller, 'added');
         if (mounted.current && !controller.signal.aborted) {
@@ -411,12 +434,23 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
                 {paginatedRows.map((t) => {
                   const state = rowState[t._id];
                   const busy = state === 'adding' || state === 'opening';
+                  const isDownloaded = Boolean(
+                    t.downloaded ||
+                    (t.infoHash && activeCompletedHashes.has(t.infoHash.toLowerCase()))
+                  );
                   return (
                     <tr key={t._id}>
                       <td className="col-name">
-                        <span className="cell-title" title={t.title}>
-                          {t.title}
-                        </span>
+                        <div className="title-with-badge">
+                          <span className="cell-title" title={t.title}>
+                            {t.title}
+                          </span>
+                          {isDownloaded && (
+                            <span className="downloaded-badge" title="Previously downloaded">
+                              <Icon name="check" size={11} /> Downloaded
+                            </span>
+                          )}
+                        </div>
                       </td>
                       <td className="col-num mono">{t.size || '—'}</td>
                       <td className={`col-num mono ${seedClass(formatSwarmCount(t.seeds))}`}>{formatSwarmCount(t.seeds)}</td>
@@ -427,10 +461,22 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
                       <td className="col-actions">
                         <div className="row-actions">
                           <button
-                            className={`btn btn-sm ${state === 'added' ? 'btn-done' : 'btn-outline'}`}
+                            className={`btn btn-sm ${
+                              state === 'added'
+                                ? 'btn-done'
+                                : isDownloaded
+                                ? 'btn-download-again'
+                                : 'btn-outline'
+                            }`}
                             onClick={() => handleAction(t, 'adding')}
                             disabled={busy || state === 'added'}
-                            aria-label={`${state === 'added' ? 'Added' : 'Download'} ${t.title}`}
+                            aria-label={`${
+                              state === 'added'
+                                ? 'Added'
+                                : isDownloaded
+                                ? 'Download again'
+                                : 'Download'
+                            } ${t.title}`}
                           >
                             {state === 'added' ? (
                               <>
@@ -438,6 +484,10 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
                               </>
                             ) : state === 'adding' ? (
                               'Adding…'
+                            ) : isDownloaded ? (
+                              <>
+                                <Icon name="refresh" size={13} /> Download again
+                              </>
                             ) : (
                               <>
                                 <Icon name="download" size={14} /> Download

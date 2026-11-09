@@ -525,7 +525,8 @@ export async function searchFederated(
     if (tokens.length > 0 && !tokens.some((tok) => lowerTitle.includes(tok))) continue;
     if (item.id === '0' && (item.size === '0 B' || !item.size)) continue;
 
-    const infoHash = item.infoHash || extractInfoHash(item.magnet);
+    const infoHash = (item.infoHash || extractInfoHash(item.magnet) || '').toLowerCase();
+    item.infoHash = infoHash;
     const normTitle = normalizeTitleForDedup(title);
     const sizeBytes = parseSizeToBytes(item.size);
     const sizeMb = Math.round(sizeBytes / (1024 * 1024));
@@ -541,10 +542,12 @@ export async function searchFederated(
     if (existing) {
       if ((item.seeds || 0) > (existing.seeds || 0)) {
         if (!item.magnet && existing.magnet) item.magnet = existing.magnet;
+        if (!item.infoHash && existing.infoHash) item.infoHash = existing.infoHash;
         if (infoHash) seenByHash.set(infoHash, item);
         if (titleKey) seenByTitle.set(titleKey, item);
-      } else if (!existing.magnet && item.magnet) {
-        existing.magnet = item.magnet;
+      } else {
+        if (!existing.magnet && item.magnet) existing.magnet = item.magnet;
+        if (!existing.infoHash && item.infoHash) existing.infoHash = item.infoHash;
       }
       continue;
     }

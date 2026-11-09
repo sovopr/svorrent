@@ -806,6 +806,48 @@ main:focus-visible,
   white-space: nowrap;
 }
 
+.title-with-badge {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.title-with-badge .cell-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.downloaded-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  color: var(--ok);
+  background: rgba(87, 171, 114, 0.12);
+  border: 1px solid rgba(87, 171, 114, 0.32);
+  border-radius: 9999px;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.btn-download-again {
+  background: rgba(87, 171, 114, 0.08);
+  border-color: rgba(87, 171, 114, 0.38);
+  color: var(--ok);
+  white-space: nowrap;
+}
+
+.btn-download-again:hover:not(:disabled) {
+  background: rgba(87, 171, 114, 0.18);
+  border-color: var(--ok);
+  color: #6edb91;
+}
+
 .wrap {
   word-break: break-all;
 }
@@ -834,7 +876,9 @@ main:focus-visible,
 }
 
 .results-table .col-actions {
-  width: 160px;
+  width: 172px;
+  min-width: 172px;
+  white-space: nowrap;
 }
 
 .seeds-good {

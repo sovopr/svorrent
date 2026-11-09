@@ -16,6 +16,7 @@ import { createTrackerList } from './lib/trackers.js';
 import { createSession } from './lib/session.js';
 import { NetworkManager } from './lib/networks.js';
 import { TorrentArchive } from './lib/archive.js';
+import { DownloadHistory } from './lib/history.js';
 import { FolderScanner } from './lib/scanner.js';
 import { resolveDoH } from './lib/doh.js';
 import {
@@ -210,6 +211,8 @@ if (!Wire.nativeRC4) {
 
 const networkManager = new NetworkManager(() => client);
 const archive = new TorrentArchive(DATA_DIR);
+const downloadHistory = new DownloadHistory(DATA_DIR);
+downloadHistory.seedFromArchive(archive);
 const settingsManager = createSettingsManager(DATA_DIR);
 const folderScanner = new FolderScanner(DOWNLOAD_DIR, () => client, () => archive);
 
@@ -305,6 +308,10 @@ async function restoreSession() {
     } catch (err) {
       console.warn(`[session] Failed to restore ${entry.name || entry.infoHash}:`, err.message);
     }
+  }
+
+  if (client.torrents) {
+    downloadHistory.seedFromTorrents(client.torrents);
   }
 }
 
@@ -591,6 +598,9 @@ function setupTorrentHooks(torrent) {
       }
     }
 
+    if (torrent.done || torrent.progress === 1) {
+      downloadHistory.record(torrent);
+    }
     archive.save(torrent);
     saveSession();
   };
@@ -608,6 +618,7 @@ function setupTorrentHooks(torrent) {
 
   torrent.on('done', () => {
     console.log(`[torrent done] Download completed: ${torrent.name || torrent.infoHash}`);
+    downloadHistory.record(torrent);
     archive.save(torrent);
     if (settingsManager.get().autoStopSeeding) {
       console.log(`[torrent done] autoStopSeeding enabled - stopping seeding for: ${torrent.name || torrent.infoHash}`);
@@ -706,11 +717,40 @@ app.get('/api/search', async (req, res) => {
     });
     clearTimeout(timeoutId);
 
-    res.json(results);
+    const completedHashes = new Set();
+    if (client && client.torrents) {
+      for (const t of client.torrents) {
+        if (t.infoHash && (t.done || t.progress === 1)) {
+          completedHashes.add(t.infoHash.toLowerCase());
+        }
+      }
+    }
+
+    const enriched = results.map((item) => {
+      const hash = (item.infoHash || extractInfoHash(item.magnet) || '').toLowerCase();
+      const isDownloaded = Boolean(
+        (hash && completedHashes.has(hash)) ||
+        downloadHistory.has(hash, item.title, item.size)
+      );
+      return {
+        ...item,
+        infoHash: hash,
+        downloaded: isDownloaded,
+      };
+    });
+
+    res.json(enriched);
   } catch (error) {
     console.error('Search error:', error);
     res.status(500).json({ error: 'Failed to search torrents' });
   }
+});
+
+app.get('/api/history', (_req, res) => {
+  res.json({
+    hashes: downloadHistory.getHashes(),
+    items: downloadHistory.getAll(),
+  });
 });
 
 app.get('/api/search/doh-check', async (req, res) => {
@@ -748,13 +788,22 @@ app.get('/api/magnet', async (req, res) => {
 
 // 3. Add & start download to disk
 app.post('/api/torrent/download', async (req, res) => {
-  let { magnet, provider, desc, link } = req.body;
+  let { magnet, provider, desc, link, infoHash, title } = req.body;
 
   if (!magnet && (desc || link)) {
     try {
       magnet = await resolveMagnet({ provider, desc, link });
     } catch (err) {
       return res.status(400).json({ error: 'Failed to resolve magnet: ' + err.message });
+    }
+  }
+
+  if (!magnet && infoHash) {
+    const historical = downloadHistory.get(infoHash);
+    if (historical?.magnetURI) {
+      magnet = historical.magnetURI;
+    } else {
+      magnet = `magnet:?xt=urn:btih:${String(infoHash).toLowerCase()}${title ? `&dn=${encodeURIComponent(title)}` : ''}`;
     }
   }
 

@@ -44,6 +44,7 @@ The search interface aggregates results across multiple indexers and scrapers wi
 - **Un-Capped Exhaustive Results**: Search results are un-capped; queries return comprehensive result sets with pagination controls (20, 25, 50, 100 per page) and windowed page selectors.
 - **Title & Release Deduplication**: Duplicate releases across indexers are merged by info hash and normalized titles, keeping the highest seed/leech counts while filtering scraper fragments.
 - **Direct Download & Magnet Actions**: Single-click **Download** directly into the download pipeline or open magnet links in desktop clients without redundant copy buttons.
+- **Persistent Downloaded Status & One-Click Re-Download**: Tracks completed downloads indefinitely in `~/.svorrent/download-history.json`, surviving app restarts and file deletions. Search results automatically tag previously downloaded releases with a dedicated **Downloaded** badge and provide a single-click **Download again** button with automatic magnet and hash recovery.
 
 ![Search Interface](docs/screenshots/search.webp)
 

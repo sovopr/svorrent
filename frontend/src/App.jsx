@@ -9,7 +9,9 @@ import { apiGet, apiPost, formatSpeed, prefetchDiscoverFeed } from './lib';
 const routeFromPath = () => {
   const p = window.location.pathname.replace(/\/+$/, '') || '/';
   const h = window.location.hash.replace(/^#\/?/, '').split(/[?&]/)[0];
-  if (p === '/discover' || (p === '/' && h === 'discover')) return 'discover';
+  if (p === '/homepage' || p === '/discover' || (p === '/' && (h === 'homepage' || h === 'discover'))) {
+    return 'homepage';
+  }
   if (p === '/downloads' || (p === '/' && h === 'downloads')) return 'downloads';
   if (p === '/networks' || (p === '/' && h === 'networks')) return 'networks';
   return 'search';
@@ -88,8 +90,8 @@ function App() {
 
   useEffect(() => {
     document.title =
-      route === 'discover'
-        ? 'Discover · Svorrent'
+      route === 'homepage'
+        ? 'Homepage · Svorrent'
         : route === 'downloads'
         ? 'Downloads · Svorrent'
         : route === 'networks'
@@ -121,8 +123,8 @@ function App() {
   const navigate = (next) => {
     if (next === route) return;
     const path =
-      next === 'discover'
-        ? '/discover'
+      next === 'homepage'
+        ? '/homepage'
         : next === 'downloads'
         ? '/downloads'
         : next === 'networks'
@@ -209,18 +211,26 @@ function App() {
       <header className="topbar">
         <div className="topbar-inner">
           <a
-            id="nav-discover"
-            href="/discover"
-            aria-current={route === 'discover' ? 'page' : undefined}
-            className={`wordmark ${route === 'discover' ? 'is-active' : ''}`}
-            title="Discover trending movies and torrents"
-            onClick={(e) => followRoute(e, 'discover')}
+            id="brand-homepage"
+            href="/homepage"
+            className="wordmark"
+            title="Go to Homepage"
+            onClick={(e) => followRoute(e, 'homepage')}
           >
             <img src="/favicon.svg" alt="" className="brand-logo" width="20" height="20" />
             <span>svorrent</span>
           </a>
 
           <nav className="tabs" aria-label="Primary">
+            <a
+              id="nav-homepage"
+              href="/homepage"
+              aria-current={route === 'homepage' ? 'page' : undefined}
+              className={`tab ${route === 'homepage' ? 'is-active' : ''}`}
+              onClick={(e) => followRoute(e, 'homepage')}
+            >
+              Homepage
+            </a>
             <a
               id="nav-search"
               href="/"
@@ -319,8 +329,8 @@ function App() {
         tabIndex={-1}
         style={{ outline: 'none' }}
         aria-label={
-          route === 'discover'
-            ? 'Discover'
+          route === 'homepage'
+            ? 'Homepage'
             : route === 'search'
             ? 'Search'
             : route === 'downloads'
@@ -328,9 +338,9 @@ function App() {
             : 'Networks'
         }
       >
-        <div style={{ display: route === 'discover' ? 'block' : 'none' }}>
+        <div style={{ display: route === 'homepage' ? 'block' : 'none' }}>
           <DiscoverPage
-            isActive={route === 'discover'}
+            isActive={route === 'homepage'}
             notify={notify}
             onDownloadAdded={refreshTorrents}
             onGoSearch={handleGoSearch}

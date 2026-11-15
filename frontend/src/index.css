@@ -175,16 +175,6 @@ main:focus-visible,
   opacity: 0.88;
 }
 
-.wordmark.is-active::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  bottom: -1px;
-  height: 2px;
-  background: var(--accent);
-}
-
 .brand-logo {
   display: block;
   width: 18px;

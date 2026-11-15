@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import test from 'node:test';
-import { parseSemver, isNewerVersion, AutoUpdater } from '../lib/updater.js';
+import { parseSemver, isNewerVersion, AutoUpdater, resolveTarBinary } from '../lib/updater.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -276,7 +276,9 @@ test('integrateRepoCommit recreates missing cacheDir, deduplicates concurrent ru
     );
 
     const tarballFile = path.join(baseDir, 'snapshot.tar.gz');
-    execFileSync('tar', ['-czf', tarballFile, '-C', srcRoot, 'snap']);
+    execFileSync(resolveTarBinary(), ['-czf', 'snapshot.tar.gz', '-C', 'snapshot-src', 'snap'], {
+      cwd: baseDir,
+    });
     const tarballBytes = fs.readFileSync(tarballFile);
 
     const missingSuccessCacheDir = path.join(baseDir, 'missing-ok', 'updates');

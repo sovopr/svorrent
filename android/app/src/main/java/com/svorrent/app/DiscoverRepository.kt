@@ -543,7 +543,8 @@ object DiscoverRepository {
         maxPerWork: Int = 2,
         limit: Int = 85
     ): List<SearchResultItem> {
-        val merged = LinkedHashMap<String, MergedTrendingEntry>()
+        val entries = ArrayList<MergedTrendingEntry>()
+        val keyToIndex = HashMap<String, Int>()
         val workProviders = HashMap<String, MutableSet<String>>()
 
         for ((sourceName, items) in batches) {
@@ -559,23 +560,34 @@ object DiscoverRepository {
 
                 val normTitle = SearchRepository.normalizeTitleForDedup(item.title)
                 val sizeMb = Math.round(item.sizeBytes / (1024.0 * 1024.0))
-                val dedupKey = when {
-                    item.infoHash.isNotBlank() -> "hash:${item.infoHash.lowercase(Locale.US)}"
-                    normTitle.isNotEmpty() -> "title:$normTitle|$sizeMb"
-                    else -> "id:$provName|${item.title}"
-                }
+                val titleLookup = if (normTitle.isNotEmpty()) "title:$normTitle|$sizeMb" else ""
+                val hashKey = if (item.infoHash.isNotBlank()) "hash:${item.infoHash.lowercase(Locale.US)}" else ""
+                val fallbackKey = "id:$provName|${item.title}"
+                val existingIndex =
+                    (if (hashKey.isNotEmpty()) keyToIndex[hashKey] else null)
+                        ?: (if (titleLookup.isNotEmpty()) keyToIndex[titleLookup] else null)
+                        ?: (if (hashKey.isEmpty() && titleLookup.isEmpty()) keyToIndex[fallbackKey] else null)
 
                 val isExtto = provName == "extto.org" || sourceName == "extto"
-                val existing = merged[dedupKey]
-                if (existing == null) {
-                    merged[dedupKey] = MergedTrendingEntry(
-                        item = item,
-                        providers = linkedSetOf(provName),
-                        exttoRank = if (isExtto) idx else null,
-                        workKey = workKey
+                if (existingIndex == null) {
+                    val newIndex = entries.size
+                    entries.add(
+                        MergedTrendingEntry(
+                            item = item,
+                            providers = linkedSetOf(provName),
+                            exttoRank = if (isExtto) idx else null,
+                            workKey = workKey
+                        )
                     )
+                    if (hashKey.isNotEmpty()) keyToIndex[hashKey] = newIndex
+                    if (titleLookup.isNotEmpty()) keyToIndex.putIfAbsent(titleLookup, newIndex)
+                    if (hashKey.isEmpty() && titleLookup.isEmpty()) keyToIndex[fallbackKey] = newIndex
                     continue
                 }
+
+                val existing = entries[existingIndex]
+                if (hashKey.isNotEmpty()) keyToIndex.putIfAbsent(hashKey, existingIndex)
+                if (titleLookup.isNotEmpty()) keyToIndex.putIfAbsent(titleLookup, existingIndex)
 
                 existing.providers.add(provName)
                 if (isExtto && (existing.exttoRank == null || idx < existing.exttoRank!!)) {
@@ -590,7 +602,9 @@ object DiscoverRepository {
                         provider = if (dst.provider == "extto.org") item.provider else dst.provider
                     )
                 }
-                if (dst.infoHash.isEmpty() && item.infoHash.isNotEmpty()) dst = dst.copy(infoHash = item.infoHash)
+                if (dst.infoHash.isEmpty() && item.infoHash.isNotEmpty()) {
+                    dst = dst.copy(infoHash = item.infoHash)
+                }
                 if (dst.age.isEmpty() && item.age.isNotEmpty()) dst = dst.copy(age = item.age)
                 if (dst.imdbId.isEmpty() && item.imdbId.isNotEmpty()) dst = dst.copy(imdbId = item.imdbId)
                 if (item.seeds > dst.seeds) dst = dst.copy(seeds = item.seeds)
@@ -599,7 +613,7 @@ object DiscoverRepository {
             }
         }
 
-        val scored = merged.values.map { entry ->
+        val scored = entries.map { entry ->
             val workProvCount = if (entry.workKey.isNotEmpty()) (workProviders[entry.workKey]?.size ?: 1) else 1
             ScoredTrendingEntry(
                 entry = entry,

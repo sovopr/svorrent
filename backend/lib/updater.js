@@ -411,15 +411,15 @@ export class AutoUpdater {
 
     const tarballPath = path.join(this.cacheDir, `repo-${shortSha}.tar.gz`);
     const stageDir = path.join(this.cacheDir, `stage-${shortSha}`);
-    const isWin = this.platform === 'win32';
-    const npmBin = isWin ? 'npm.cmd' : 'npm';
-    const symlinkType = isWin ? 'junction' : 'dir';
-    const extraPaths = isWin
+    const hostIsWin = process.platform === 'win32';
+    const npmBin = hostIsWin ? 'npm.cmd' : 'npm';
+    const symlinkType = hostIsWin ? 'junction' : 'dir';
+    const extraPaths = hostIsWin
       ? [path.dirname(process.execPath)]
       : ['/opt/homebrew/bin', '/usr/local/bin', path.dirname(process.execPath)];
     const buildEnv = {
       ...process.env,
-      PATH: [...extraPaths, process.env.PATH || (isWin ? '' : '/usr/bin:/bin:/usr/sbin:/sbin')]
+      PATH: [...extraPaths, process.env.PATH || (hostIsWin ? '' : '/usr/bin:/bin:/usr/sbin:/sbin')]
         .filter(Boolean)
         .join(path.delimiter),
     };
@@ -496,7 +496,7 @@ export class AutoUpdater {
       await execFileAsync(npmBin, ['run', 'build'], {
         cwd: stagedFrontendDir,
         env: buildEnv,
-        shell: isWin,
+        shell: hostIsWin,
         timeout: 60000,
       });
 

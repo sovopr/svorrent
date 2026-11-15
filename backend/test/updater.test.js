@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import test from 'node:test';
 import { parseSemver, isNewerVersion, AutoUpdater } from '../lib/updater.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 
 test('parseSemver parses clean and prefixed versions correctly', () => {
   assert.deepEqual(parseSemver('1.0.1'), [1, 0, 1]);
@@ -207,5 +209,133 @@ test('Updater checks main branch commits when currentCommit is present and trigg
     assert.equal(integratedSha, null);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+});
+
+test('downloadUpdate recreates a missing cacheDir and computes SHA-256 cleanly', async () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'svorrent-updater-dl-'));
+  const cacheDir = path.join(baseDir, 'missing', 'updates');
+  const payload = Buffer.from('valid installer payload');
+  const expectedDigest = `sha256:${createHash('sha256').update(payload).digest('hex')}`;
+  const updater = new AutoUpdater({ platform: 'darwin', cacheDir, currentVersion: '1.0.11' });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(payload);
+  try {
+    await updater.downloadUpdate({
+      name: 'Svorrent-test.dmg',
+      digest: expectedDigest,
+      browser_download_url: 'https://example.invalid/build.dmg',
+    });
+    assert.equal(fs.existsSync(path.join(cacheDir, 'Svorrent-test.dmg')), true);
+    assert.equal(updater.getStatus().status, 'ready_to_install');
+    assert.equal(updater.getStatus().downloadProgress, 100);
+  } finally {
+    globalThis.fetch = originalFetch;
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test('integrateRepoCommit recreates missing cacheDir, deduplicates concurrent runs, and resets progress on error', async () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'svorrent-updater-repo-'));
+  const missingFailCacheDir = path.join(baseDir, 'missing-fail', 'updates');
+  const failUpdater = new AutoUpdater({ platform: 'darwin', cacheDir: missingFailCacheDir, currentVersion: '1.0.11' });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response('server error', { status: 500 });
+
+  try {
+    await assert.rejects(
+      failUpdater.integrateRepoCommit('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'),
+      /500/
+    );
+    assert.equal(fs.existsSync(missingFailCacheDir), true);
+    assert.equal(failUpdater.getStatus().status, 'error');
+    assert.equal(failUpdater.getStatus().downloadProgress, 0);
+
+    // Build a synthetic source snapshot tarball to verify full integration when cacheDir is absent
+    const srcRoot = path.join(baseDir, 'snapshot-src');
+    fs.mkdirSync(path.join(srcRoot, 'snap', 'backend', 'test'), { recursive: true });
+    fs.mkdirSync(path.join(srcRoot, 'snap', 'frontend'), { recursive: true });
+    fs.writeFileSync(
+      path.join(srcRoot, 'snap', 'backend', 'package.json'),
+      JSON.stringify({ name: 'backend', version: '1.0.12', type: 'module' })
+    );
+    fs.writeFileSync(path.join(srcRoot, 'snap', 'backend', 'server.js'), 'export const ok = true;\n');
+    fs.writeFileSync(
+      path.join(srcRoot, 'snap', 'backend', 'test', 'smoke.test.js'),
+      "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('smoke', () => assert.ok(true));\n"
+    );
+    fs.writeFileSync(
+      path.join(srcRoot, 'snap', 'frontend', 'package.json'),
+      JSON.stringify({
+        name: 'frontend',
+        private: true,
+        scripts: {
+          build: "node -e \"const fs=require('node:fs');fs.mkdirSync('dist',{recursive:true});fs.writeFileSync('dist/index.html','<html></html>')\"",
+        },
+      })
+    );
+
+    const tarballFile = path.join(baseDir, 'snapshot.tar.gz');
+    execFileSync('tar', ['-czf', tarballFile, '-C', srcRoot, 'snap']);
+    const tarballBytes = fs.readFileSync(tarballFile);
+
+    const missingSuccessCacheDir = path.join(baseDir, 'missing-ok', 'updates');
+    const okUpdater = new AutoUpdater({
+      platform: 'linux',
+      cacheDir: missingSuccessCacheDir,
+      currentVersion: '1.0.11',
+      currentCommit: '0000000000000000000000000000000000000000',
+    });
+
+    let fetchCount = 0;
+    globalThis.fetch = async () => {
+      fetchCount += 1;
+      return new Response(tarballBytes, {
+        status: 200,
+        headers: { 'content-length': String(tarballBytes.length) },
+      });
+    };
+
+    const sha = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+    await Promise.all([
+      okUpdater.integrateRepoCommit(sha),
+      okUpdater.integrateRepoCommit(sha),
+    ]);
+
+    const status = okUpdater.getStatus();
+    assert.equal(fetchCount, 1);
+    assert.equal(status.status, 'ready_to_install');
+    assert.equal(status.downloadProgress, 100);
+    assert.equal(status.latestVersion, '1.0.12 (bbbbbbb)');
+    assert.equal(fs.existsSync(path.join(status.stagedSourceDir, 'frontend', 'dist', 'index.html')), true);
+    const buildInfo = JSON.parse(
+      fs.readFileSync(path.join(status.stagedSourceDir, 'backend', 'build-info.json'), 'utf8')
+    );
+    assert.equal(buildInfo.commit, sha);
+  } finally {
+    globalThis.fetch = originalFetch;
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test('persistCurrentCommit updates backend build-info.json', () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'svorrent-updater-commit-'));
+  const backendDir = path.join(baseDir, 'backend');
+  fs.mkdirSync(backendDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(backendDir, 'build-info.json'),
+    JSON.stringify({ commit: '1111111111111111111111111111111111111111' })
+  );
+
+  const updater = new AutoUpdater({ currentVersion: '1.0.11' });
+  const nextSha = '9999999999999999999999999999999999999999';
+  try {
+    updater.persistCurrentCommit(nextSha, backendDir);
+    assert.equal(updater.currentCommit, nextSha);
+    const written = JSON.parse(fs.readFileSync(path.join(backendDir, 'build-info.json'), 'utf8'));
+    assert.equal(written.commit, nextSha);
+    assert.ok(written.updatedAt);
+  } finally {
+    fs.rmSync(baseDir, { recursive: true, force: true });
   }
 });

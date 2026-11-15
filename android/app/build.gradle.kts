@@ -12,10 +12,10 @@ android {
         applicationId = "com.svorrent.app"
         minSdk = 26
         targetSdk = 35
-        val appVersion = (System.getenv("SVORRENT_VERSION") ?: "1.0.11").removePrefix("v")
+        val appVersion = (System.getenv("SVORRENT_VERSION") ?: "1.0.12").removePrefix("v")
         versionName = appVersion
         val parts = appVersion.split(".").mapNotNull { it.toIntOrNull() }
-        val semverCode = if (parts.size >= 3) parts[0] * 10000 + parts[1] * 100 + parts[2] else 10011
+        val semverCode = if (parts.size >= 3) parts[0] * 10000 + parts[1] * 100 + parts[2] else 10012
         val envVersionCode = System.getenv("SVORRENT_VERSION_CODE")?.toIntOrNull()
         versionCode = if (envVersionCode != null && envVersionCode > semverCode) envVersionCode else semverCode
 
@@ -109,4 +109,5 @@ dependencies {
     implementation("org.libtorrent4j:libtorrent4j-android-x86_64:2.1.0-31")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.json:json:20240303")
 }

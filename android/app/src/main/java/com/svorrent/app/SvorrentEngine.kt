@@ -6,10 +6,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.libtorrent4j.AddTorrentParams
 import org.libtorrent4j.AlertListener
 import org.libtorrent4j.PeerInfo
@@ -67,7 +71,14 @@ object SvorrentEngine {
 
     private val pausedByUser = ConcurrentHashMap.newKeySet<String>()
     private val knownNames = ConcurrentHashMap<String, String>()
+    private val knownRelativePaths = ConcurrentHashMap<String, List<String>>()
+    private val hadFilesOnDisk = ConcurrentHashMap.newKeySet<String>()
+    private val removingHashes = ConcurrentHashMap.newKeySet<String>()
+    private val recordedHistoryInSession = ConcurrentHashMap.newKeySet<String>()
     private val swarmCache = ConcurrentHashMap<String, SwarmSnapshot>()
+
+    private val _reconcileMessages = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val reconcileMessages: SharedFlow<String> = _reconcileMessages.asSharedFlow()
 
     private val VIDEO_EXTENSIONS = setOf(".mp4", ".mkv", ".webm", ".avi", ".mov", ".m4v")
 
@@ -77,15 +88,34 @@ object SvorrentEngine {
             if (initialized) return
             appContext = context.applicationContext
             downloadDir = resolveWritableDownloadDir(appContext)
+            DownloadHistoryManager.init(appContext)
 
             val prefs = appContext.getSharedPreferences("svorrent_prefs", Context.MODE_PRIVATE)
             _autoStopSeeding.value = prefs.getBoolean("auto_stop_seeding", false)
 
-            // Restore saved torrent display names
+            // Restore saved torrent display names and disk presence flags
             val namePrefs = appContext.getSharedPreferences("svorrent_names", Context.MODE_PRIVATE)
             for ((k, v) in namePrefs.all) {
                 if (v is String && v.isNotBlank()) {
                     knownNames[k.lowercase(Locale.US)] = v
+                }
+            }
+            val seenPrefs = appContext.getSharedPreferences("svorrent_disk_seen", Context.MODE_PRIVATE)
+            for ((k, v) in seenPrefs.all) {
+                if (v == true) {
+                    hadFilesOnDisk.add(k.lowercase(Locale.US))
+                }
+            }
+            val pathsPrefs = appContext.getSharedPreferences("svorrent_disk_paths", Context.MODE_PRIVATE)
+            for ((k, v) in pathsPrefs.all) {
+                if (v is String && v.isNotBlank()) {
+                    runCatching {
+                        val arr = JSONArray(v)
+                        val parsed = (0 until arr.length()).mapNotNull { idx -> arr.optString(idx, "").takeIf { it.isNotBlank() } }
+                        if (parsed.isNotEmpty()) {
+                            knownRelativePaths[k.lowercase(Locale.US)] = parsed
+                        }
+                    }
                 }
             }
 
@@ -282,10 +312,22 @@ object SvorrentEngine {
                 ?: "Torrent-${hashHex.take(8)}"
 
             knownNames[hashHex] = displayName
+            hadFilesOnDisk.remove(hashHex)
+            knownRelativePaths.remove(hashHex)
+            removingHashes.remove(hashHex)
+            recordedHistoryInSession.remove(hashHex)
             if (::appContext.isInitialized) {
                 appContext.getSharedPreferences("svorrent_names", Context.MODE_PRIVATE)
                     .edit()
                     .putString(hashHex, displayName)
+                    .apply()
+                appContext.getSharedPreferences("svorrent_disk_seen", Context.MODE_PRIVATE)
+                    .edit()
+                    .remove(hashHex)
+                    .apply()
+                appContext.getSharedPreferences("svorrent_disk_paths", Context.MODE_PRIVATE)
+                    .edit()
+                    .remove(hashHex)
                     .apply()
             }
             pausedByUser.remove(hashHex)
@@ -363,21 +405,75 @@ object SvorrentEngine {
         }
     }
 
+    private fun clearTorrentDiskState(key: String) {
+        pausedByUser.remove(key)
+        hadFilesOnDisk.remove(key)
+        knownRelativePaths.remove(key)
+        recordedHistoryInSession.remove(key)
+        swarmCache.remove(key)
+        if (::appContext.isInitialized) {
+            appContext.getSharedPreferences("svorrent_disk_seen", Context.MODE_PRIVATE)
+                .edit()
+                .remove(key)
+                .apply()
+            appContext.getSharedPreferences("svorrent_disk_paths", Context.MODE_PRIVATE)
+                .edit()
+                .remove(key)
+                .apply()
+        }
+    }
+
+    private fun markDiskFilesSeen(key: String, relPaths: List<String>) {
+        if (relPaths.isNotEmpty() && knownRelativePaths[key] != relPaths) {
+            knownRelativePaths[key] = relPaths
+            if (::appContext.isInitialized) {
+                val arr = JSONArray()
+                relPaths.forEach { arr.put(it) }
+                appContext.getSharedPreferences("svorrent_disk_paths", Context.MODE_PRIVATE)
+                    .edit()
+                    .putString(key, arr.toString())
+                    .apply()
+            }
+        }
+    }
+
     fun removeTorrent(infoHash: String, deleteFiles: Boolean) {
         val key = infoHash.lowercase(Locale.US)
-        pausedByUser.remove(key)
-        swarmCache.remove(key)
+        val snapshotName = knownNames[key] ?: _torrents.value.find { it.infoHash == key }?.name ?: ""
+        val snapshotRelPaths = knownRelativePaths[key]
+            ?: _torrents.value.find { it.infoHash == key }?.files?.map { it.path }?.filter { it.isNotBlank() }
+            ?: emptyList()
+        removingHashes.add(key)
+        clearTorrentDiskState(key)
         _torrents.value = _torrents.value.filterNot { it.infoHash == key }
         scope.launch {
             try {
-                val handle = findHandle(key) ?: return@launch
+                val handle = findHandle(key)
+                if (handle != null) {
+                    if (deleteFiles) {
+                        sessionManager.remove(handle, session_handle.delete_files)
+                    } else {
+                        sessionManager.remove(handle)
+                    }
+                }
                 if (deleteFiles) {
-                    sessionManager.remove(handle, session_handle.delete_files)
-                } else {
-                    sessionManager.remove(handle)
+                    delay(150L)
+                    ReconcileHelper.deleteLeftoverPaths(
+                        TrackedDiskRecord(
+                            infoHash = key,
+                            name = snapshotName,
+                            savePath = downloadDir.absolutePath,
+                            relativePaths = snapshotRelPaths,
+                            hadFilesOnDisk = true,
+                            done = false
+                        ),
+                        downloadDir
+                    )
                 }
                 needsImmediateTick = true
             } catch (_: Throwable) {
+            } finally {
+                removingHashes.remove(key)
             }
         }
     }
@@ -496,7 +592,6 @@ object SvorrentEngine {
                     choked = false
                 )
             }
-            allPeers.addAll(torrentPeers)
 
             val peerDownSum = torrentPeers.sumOf { it.downloadSpeed }
             val peerUpSum = torrentPeers.sumOf { it.uploadSpeed }
@@ -506,8 +601,6 @@ object SvorrentEngine {
 
             val downRate = if (isPaused || isDone) 0L else max(statusDown, peerDownSum)
             val upRate = if (isPaused) 0L else max(statusUp, peerUpSum)
-            totalDown += downRate
-            totalUp += upRate
 
             val totalWanted = status.totalWanted().coerceAtLeast(0L)
             val totalDone = status.totalWantedDone().coerceAtLeast(0L)
@@ -589,6 +682,57 @@ object SvorrentEngine {
             if (!isHexHash(resolvedName, infoHash)) {
                 knownNames[infoHash] = resolvedName
             }
+
+            // Reconcile manual file deletion: only remove when we know files previously existed on disk
+            // (never on unmounted storage or magnets before pieces hit disk).
+            val liveRelPaths = fileItems.map { it.path }.filter { it.isNotBlank() }
+            if (liveRelPaths.isNotEmpty()) {
+                markDiskFilesSeen(infoHash, liveRelPaths)
+            }
+            val effectiveRelPaths = if (liveRelPaths.isNotEmpty()) liveRelPaths else (knownRelativePaths[infoHash] ?: emptyList())
+            val diskRecord = TrackedDiskRecord(
+                infoHash = infoHash,
+                name = resolvedName,
+                savePath = downloadDir.absolutePath,
+                relativePaths = effectiveRelPaths,
+                hadFilesOnDisk = hadFilesOnDisk.contains(infoHash),
+                done = isDone
+            )
+            val diskCheck = ReconcileHelper.checkFilesOnDisk(diskRecord, downloadDir)
+            if (diskCheck.anyPresent) {
+                if (hadFilesOnDisk.add(infoHash) && ::appContext.isInitialized) {
+                    appContext.getSharedPreferences("svorrent_disk_seen", Context.MODE_PRIVATE)
+                        .edit()
+                        .putBoolean(infoHash, true)
+                        .apply()
+                }
+            } else if (!removingHashes.contains(infoHash) &&
+                ReconcileHelper.shouldRemoveTorrentForMissingFiles(diskRecord, downloadDir)
+            ) {
+                clearTorrentDiskState(infoHash)
+                runCatching {
+                    handle.pause()
+                    sessionManager.remove(handle)
+                }
+                needsImmediateTick = true
+                _reconcileMessages.tryEmit("Removed manually deleted download: $resolvedName")
+                continue
+            }
+
+            if ((isDone || prog >= 0.999f) && !removingHashes.contains(infoHash)) {
+                if (recordedHistoryInSession.add(infoHash)) {
+                    DownloadHistoryManager.recordCompleted(
+                        infoHash = infoHash,
+                        name = resolvedName,
+                        magnetUri = SearchRepository.buildMagnetUri(infoHash, resolvedName),
+                        length = totalWanted
+                    )
+                }
+            }
+
+            allPeers.addAll(torrentPeers)
+            totalDown += downRate
+            totalUp += upRate
 
             items.add(
                 TorrentItem(

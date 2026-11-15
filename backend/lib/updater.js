@@ -18,6 +18,18 @@ function resolveBackendDir() {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 }
 
+/**
+ * Resolves a platform-safe `tar` executable (prefers Windows built-in bsdtar over GNU tar on PATH).
+ * @returns {string}
+ */
+export function resolveTarBinary() {
+  if (process.platform === 'win32') {
+    const winTar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+    if (fs.existsSync(winTar)) return winTar;
+  }
+  return 'tar';
+}
+
 function readBundledPackageVersion() {
   try {
     const pkgPath = path.join(resolveBackendDir(), 'package.json');
@@ -461,10 +473,15 @@ export class AutoUpdater {
 
       fs.rmSync(stageDir, { recursive: true, force: true });
       fs.mkdirSync(stageDir, { recursive: true });
-      await execFileAsync('tar', ['-xzf', tarballPath, '-C', stageDir, '--strip-components=1'], {
-        env: buildEnv,
-        timeout: 30000,
-      });
+      await execFileAsync(
+        resolveTarBinary(),
+        ['-xzf', path.basename(tarballPath), '-C', path.basename(stageDir), '--strip-components=1'],
+        {
+          cwd: this.cacheDir,
+          env: buildEnv,
+          timeout: 30000,
+        }
+      );
 
       const currentBackendDir = resolveBackendDir();
       const currentAppRoot = path.resolve(currentBackendDir, '..');

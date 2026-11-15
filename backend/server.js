@@ -33,6 +33,15 @@ import {
   closeStoreFiles,
   reopenTorrentStore,
 } from './lib/browser-adoption.js';
+import {
+  getTorrentDiskPaths,
+  checkTorrentFilesOnDisk,
+  markTorrentHadFilesIfPresent,
+  shouldSkipRestoredEntry,
+  shouldRemoveActiveTorrentForMissingFiles,
+  releaseStoreFileHandles,
+  releaseStoreFileHandlesAsync,
+} from './lib/reconcile.js';
 import { createSettingsManager } from './lib/settings.js';
 import { localAccess } from './lib/local-access.js';
 import { childPath, hasSafeParent } from './lib/safe-path.js';
@@ -235,12 +244,127 @@ const saveSession = () => {
   session.save(client.torrents);
   if (client.torrents) {
     for (const t of client.torrents) {
-      if (t.ready && t._isPermanentDownload) {
+      if (t.ready && t._isPermanentDownload && !t.destroyed && !t._deletedManually) {
         archive.save(t);
       }
     }
   }
 };
+
+function pauseTorrentAndReleaseHandles(torrent) {
+  if (!torrent || torrent.destroyed) return Promise.resolve(false);
+  setTorrentPaused(torrent, true);
+  return releaseStoreFileHandlesAsync(torrent);
+}
+
+function removeDeletedTorrent(torrent) {
+  if (!torrent || torrent.destroyed || torrent._deleting) return Promise.resolve();
+  torrent._deletedManually = true;
+  torrent._deleting = true;
+  console.log(`[reconcile] Files deleted manually on disk, removing torrent: ${torrent.name || torrent.infoHash}`);
+
+  if (torrent._doneReleaseTimer) {
+    clearTimeout(torrent._doneReleaseTimer);
+    torrent._doneReleaseTimer = null;
+  }
+
+  if (torrent.infoHash) {
+    archive.remove(torrent.infoHash);
+  }
+
+  pauseTorrentAndReleaseHandles(torrent);
+  try {
+    folderScanner?.invalidateCache();
+  } catch {}
+  saveSession();
+
+  return new Promise((resolve) => {
+    try {
+      torrent.destroy({ destroyStore: false }, () => {
+        try {
+          folderScanner?.invalidateCache();
+        } catch {}
+        saveSession();
+        resolve();
+      });
+    } catch {
+      resolve();
+    }
+  });
+}
+
+function reconcileDeletedDownloads() {
+  if (shuttingDown || restoringSession || !client?.torrents) return 0;
+  let removed = 0;
+  for (const t of [...client.torrents]) {
+    if (shouldRemoveActiveTorrentForMissingFiles(t, DOWNLOAD_DIR)) {
+      removeDeletedTorrent(t);
+      removed++;
+    }
+  }
+  return removed;
+}
+
+function releaseIdleStoreHandles() {
+  if (shuttingDown || !client?.torrents) return;
+  for (const t of client.torrents) {
+    if (t.destroyed || t._deleting || t._deletedManually) continue;
+    if (!t._storeMayHaveOpenHandles) continue;
+    const isPaused = Boolean(t._pausedManually || t.paused);
+    const isIdleSeeding = Boolean(t.done && (t.uploadSpeed || 0) === 0);
+    if (isPaused || isIdleSeeding) {
+      releaseStoreFileHandles(t);
+    }
+  }
+}
+
+let downloadDirWatcher = null;
+let downloadDirWatchTimer = null;
+
+function stopDownloadDirWatcher() {
+  if (downloadDirWatchTimer) {
+    clearTimeout(downloadDirWatchTimer);
+    downloadDirWatchTimer = null;
+  }
+  if (downloadDirWatcher) {
+    try {
+      downloadDirWatcher.close();
+    } catch {}
+    downloadDirWatcher = null;
+  }
+}
+
+function startDownloadDirWatcher() {
+  stopDownloadDirWatcher();
+  if (shuttingDown || !DOWNLOAD_DIR || !fs.existsSync(DOWNLOAD_DIR)) return;
+
+  const onFsEvent = () => {
+    if (shuttingDown) return;
+    if (downloadDirWatchTimer) clearTimeout(downloadDirWatchTimer);
+    downloadDirWatchTimer = setTimeout(() => {
+      downloadDirWatchTimer = null;
+      try {
+        folderScanner?.invalidateCache();
+      } catch {}
+      reconcileDeletedDownloads();
+    }, 60).unref();
+  };
+
+  try {
+    downloadDirWatcher = fs.watch(DOWNLOAD_DIR, { persistent: false, recursive: true }, onFsEvent);
+  } catch {
+    try {
+      downloadDirWatcher = fs.watch(DOWNLOAD_DIR, { persistent: false }, onFsEvent);
+    } catch {
+      downloadDirWatcher = null;
+      return;
+    }
+  }
+
+  downloadDirWatcher.on('error', () => {
+    stopDownloadDirWatcher();
+  });
+}
 
 let saveSessionTimer = null;
 const scheduleSaveSession = (delay = 2000) => {
@@ -252,20 +376,29 @@ const scheduleSaveSession = (delay = 2000) => {
 };
 
 const sessionInterval = setInterval(() => {
+  reconcileDeletedDownloads();
+  releaseIdleStoreHandles();
   saveSession();
-}, 5 * 1000).unref();
+}, 3 * 1000).unref();
+
+setTimeout(() => {
+  startDownloadDirWatcher();
+}, 0).unref();
 
 async function restoreSession() {
   let entries = session.load();
+  let restoredFromArchive = false;
   if (entries === null) {
     const archived = archive.getAll();
     if (archived && archived.length > 0) {
+      restoredFromArchive = true;
       console.log(`[session] Restoring ${archived.length} torrent(s) from persistent archive...`);
       entries = archived.map((a) => ({
         infoHash: a.infoHash,
         magnet: a.magnetURI,
         name: a.name,
         path: a.path || DOWNLOAD_DIR,
+        files: a.files,
         paused: false,
         addedAt: a.savedAt,
         torrentFile: archive.get(a.infoHash)?.torrentBuffer?.toString('base64'),
@@ -273,7 +406,36 @@ async function restoreSession() {
     }
   }
   if (!entries || !entries.length) return;
+
+  let skippedDeletedCount = 0;
+  const reconciledEntries = [];
+  for (const entry of entries) {
+    const archiveRecord = entry?.infoHash ? archive.get(entry.infoHash) : null;
+    if (shouldSkipRestoredEntry(entry, archiveRecord, DOWNLOAD_DIR, { fromArchive: restoredFromArchive })) {
+      console.log(`[reconcile] Skipping restored torrent (files deleted from disk): ${entry.name || entry.infoHash}`);
+      if (entry.infoHash) archive.remove(entry.infoHash);
+      skippedDeletedCount++;
+      continue;
+    }
+    const diskState = checkTorrentFilesOnDisk(entry, DOWNLOAD_DIR, fs.existsSync, archiveRecord);
+    reconciledEntries.push({
+      ...entry,
+      _diskAnyPresent: diskState.anyPresent,
+    });
+  }
+  entries = reconciledEntries;
+
+  if (!entries.length) {
+    if (skippedDeletedCount > 0) session.save([]);
+    return;
+  }
+
   console.log(`[session] Restoring ${entries.length} torrent(s) from persistent state...`);
+  if (skippedDeletedCount > 0) {
+    setTimeout(() => {
+      saveSession();
+    }, 200).unref();
+  }
 
   for (const entry of entries) {
     if (shuttingDown) break;
@@ -298,6 +460,16 @@ async function restoreSession() {
       const torrent = client.add(source, addOpts);
       if (torrent) {
         torrent._isPermanentDownload = true;
+        torrent._restoredHadFilesOnDisk = Boolean(entry._diskAnyPresent || entry.hadFilesOnDisk);
+        if (entry._diskAnyPresent) {
+          torrent._hadFilesOnDisk = true;
+        }
+        if (entry.done) {
+          torrent._restoredDone = true;
+        }
+        if (entry.bitfield) {
+          torrent._savedBitfield = entry.bitfield;
+        }
         torrent._addedAt = entry.addedAt || Date.now();
         if (entry.bitfield) torrent._savedBitfield = entry.bitfield;
         if (entry.torrentFile) torrent._savedTorrentFile = entry.torrentFile;
@@ -372,33 +544,37 @@ app.get('/api/settings', (_req, res) => {
   res.json(settingsManager.get());
 });
 
-app.post('/api/settings', (req, res) => {
+app.post('/api/settings', async (req, res) => {
   const { autoStopSeeding } = req.body || {};
   const updated = settingsManager.update({
     ...(typeof autoStopSeeding === 'boolean' ? { autoStopSeeding } : {}),
   });
 
   if (updated.autoStopSeeding && client?.torrents) {
+    const releases = [];
     for (const t of client.torrents) {
       if (t.done && !t.destroyed && !t._pausedManually) {
-        setTorrentPaused(t, true);
+        releases.push(pauseTorrentAndReleaseHandles(t));
       }
     }
+    await Promise.all(releases);
     saveSession();
   }
 
   res.json(updated);
 });
 
-app.post('/api/torrents/stop-all-seeding', (_req, res) => {
+app.post('/api/torrents/stop-all-seeding', async (_req, res) => {
   let count = 0;
   if (client?.torrents) {
+    const releases = [];
     for (const t of client.torrents) {
       if (t.done && !t.destroyed && !t._pausedManually) {
-        setTorrentPaused(t, true);
+        releases.push(pauseTorrentAndReleaseHandles(t));
         count++;
       }
     }
+    await Promise.all(releases);
     saveSession();
   }
   res.json({ success: true, count });
@@ -479,6 +655,17 @@ function setupTorrentHooks(torrent) {
     console.error(`[torrent error] [${torrent.name || torrent.infoHash}]:`, err.message);
   });
 
+  torrent.on('download', () => {
+    if (!torrent._storeMayHaveOpenHandles) torrent._storeMayHaveOpenHandles = true;
+    if (!torrent._hadFilesOnDisk) {
+      markTorrentHadFilesIfPresent(torrent, DOWNLOAD_DIR);
+    }
+  });
+
+  torrent.on('upload', () => {
+    if (!torrent._storeMayHaveOpenHandles) torrent._storeMayHaveOpenHandles = true;
+  });
+
   // Fast Ramp-Up: immediately unchoke and signal interest on connection
   torrent.on('wire', (wire) => {
     networkManager.trackWire(torrent, wire);
@@ -486,6 +673,7 @@ function setupTorrentHooks(torrent) {
       wire.destroy();
       return;
     }
+    if (!torrent._storeMayHaveOpenHandles) torrent._storeMayHaveOpenHandles = true;
     if (wire.remoteAddress && wire.remotePort) {
       if (!torrent._knownPeers) torrent._knownPeers = new Set();
       if (torrent._knownPeers.size < 150) {
@@ -605,11 +793,17 @@ function setupTorrentHooks(torrent) {
       }
     }
 
+    markTorrentHadFilesIfPresent(torrent, DOWNLOAD_DIR);
     if (torrent.done || torrent.progress === 1) {
       downloadHistory.record(torrent);
     }
-    archive.save(torrent);
+    if (!torrent.destroyed && !torrent._deletedManually) {
+      archive.save(torrent);
+    }
     saveSession();
+    if (torrent.done || torrent._pausedManually || torrent.paused) {
+      releaseStoreFileHandles(torrent);
+    }
   };
 
   if (torrent.ready) {
@@ -619,19 +813,30 @@ function setupTorrentHooks(torrent) {
   }
 
   torrent.on('verified', () => {
+    torrent._storeMayHaveOpenHandles = true;
+    markTorrentHadFilesIfPresent(torrent, DOWNLOAD_DIR);
     updateCriticalFrontier(torrent);
     scheduleSaveSession();
   });
 
   torrent.on('done', () => {
     console.log(`[torrent done] Download completed: ${torrent.name || torrent.infoHash}`);
+    if (torrent._deletedManually || torrent._deleting || torrent.destroyed) return;
+    markTorrentHadFilesIfPresent(torrent, DOWNLOAD_DIR);
     downloadHistory.record(torrent);
     archive.save(torrent);
     if (settingsManager.get().autoStopSeeding) {
       console.log(`[torrent done] autoStopSeeding enabled - stopping seeding for: ${torrent.name || torrent.infoHash}`);
-      setTorrentPaused(torrent, true);
+      pauseTorrentAndReleaseHandles(torrent);
     } else {
       torrent.maxConns = 15;
+      if (torrent._doneReleaseTimer) clearTimeout(torrent._doneReleaseTimer);
+      torrent._doneReleaseTimer = setTimeout(() => {
+        torrent._doneReleaseTimer = null;
+        if (!torrent.destroyed && !torrent._deletedManually && (torrent.uploadSpeed || 0) === 0) {
+          releaseStoreFileHandles(torrent);
+        }
+      }, 400).unref();
     }
     saveSession();
   });
@@ -902,9 +1107,12 @@ app.post('/api/torrent/download', async (req, res) => {
 
 // 4. List all downloads (active torrents + files directly in the downloads folder)
 app.get('/api/torrents', (req, res) => {
+  reconcileDeletedDownloads();
   const activeHashes = new Set();
-  const list = client.torrents.map((t) => {
-    activeHashes.add(t.infoHash);
+  const list = client.torrents
+    .filter((t) => !t.destroyed && !t._deletedManually && !t._deleting)
+    .map((t) => {
+      activeHashes.add(t.infoHash);
     const largestFile = t.files && t.files.length > 0
       ? t.files.reduce((a, b) => (a.length > b.length ? a : b))
       : null;
@@ -1272,7 +1480,7 @@ app.post('/api/torrent/:id/pause', async (req, res) => {
   const torrent = await client.get(req.params.id);
   if (!torrent) return res.status(404).json({ error: 'Torrent not found' });
 
-  setTorrentPaused(torrent, true);
+  await pauseTorrentAndReleaseHandles(torrent);
 
   saveSession();
   res.json({ success: true, paused: true });
@@ -1294,6 +1502,11 @@ app.post('/api/torrent/:id/delete', async (req, res) => {
   const torrent = await client.get(req.params.id);
   if (!torrent) return res.status(404).json({ error: 'Torrent not found' });
   const { deleteFiles } = req.body;
+  torrent._deleting = true;
+  if (deleteFiles) {
+    torrent._deletedManually = true;
+  }
+  await pauseTorrentAndReleaseHandles(torrent);
 
   const torrentName = torrent.name;
   const basePath = torrent.path ? torrent.path : DOWNLOAD_DIR;
@@ -1505,10 +1718,26 @@ app.post('/api/folder-files/resume', async (req, res) => {
 });
 
 // 3. Delete unwanted file or directory from DOWNLOAD_DIR
-app.post('/api/folder-files/delete', (req, res) => {
+app.post('/api/folder-files/delete', async (req, res) => {
   const { name } = req.body;
   try {
+    const targetPath = childPath(DOWNLOAD_DIR, name);
+    if (targetPath && Array.isArray(client?.torrents)) {
+      const matchingTorrents = client.torrents.filter((t) => {
+        if (!t || t.destroyed || t._deleting) return false;
+        const { targetPaths } = getTorrentDiskPaths(t, DOWNLOAD_DIR);
+        return targetPaths.some((p) => p === targetPath || p.startsWith(targetPath + path.sep));
+      });
+      for (const t of matchingTorrents) {
+        await removeDeletedTorrent(t);
+      }
+    }
     const result = folderScanner.deleteItem(name);
+    const archiveMatch = archive.findMatchForDiskItem(name);
+    if (archiveMatch?.infoHash) {
+      archive.remove(archiveMatch.infoHash);
+    }
+    reconcileDeletedDownloads();
     res.json(result);
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });

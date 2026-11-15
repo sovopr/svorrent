@@ -49,8 +49,8 @@ import {
   searchFederated,
   resolveMagnet,
   discoverTorrents,
-  fetchDiscoverPoster,
-  isAllowedPosterUrl,
+  registerDiscoverPoster,
+  fetchRegisteredPoster,
   warmDiscoverCache,
 } from './lib/indexer.js';
 
@@ -778,12 +778,13 @@ app.get('/api/discover', async (req, res) => {
     const payload = await discoverTorrents({ category, window, forceRefresh, signal: controller.signal });
     clearTimeout(timeoutId);
 
-    const spotlight = (Array.isArray(payload.spotlight) ? payload.spotlight : []).map((card) => ({
-      ...card,
-      poster: isAllowedPosterUrl(card.poster)
-        ? `/api/discover/poster?u=${encodeURIComponent(card.poster)}`
-        : '',
-    }));
+    const spotlight = (Array.isArray(payload.spotlight) ? payload.spotlight : []).map((card) => {
+      const posterId = registerDiscoverPoster(card.poster);
+      return {
+        ...card,
+        poster: posterId ? `/api/discover/poster?id=${posterId}` : '',
+      };
+    });
 
     res.json({
       category: payload.category,
@@ -797,10 +798,10 @@ app.get('/api/discover', async (req, res) => {
   }
 });
 
-// 1c. Cached Discover poster proxy (allowlisted CDNs only)
+// 1c. Cached Discover poster proxy (server-registered CDN tokens only)
 app.get('/api/discover/poster', async (req, res) => {
-  const url = typeof req.query.u === 'string' ? req.query.u : '';
-  if (!isAllowedPosterUrl(url)) {
+  const id = typeof req.query.id === 'string' && /^[a-f0-9]{24}$/.test(req.query.id) ? req.query.id : '';
+  if (!id) {
     return res.status(400).end();
   }
 
@@ -808,7 +809,7 @@ app.get('/api/discover/poster', async (req, res) => {
   req.on('close', () => controller.abort());
 
   try {
-    const result = await fetchDiscoverPoster(url, { signal: controller.signal });
+    const result = await fetchRegisteredPoster(id, { signal: controller.signal });
     if (!result) {
       return res.status(404).end();
     }

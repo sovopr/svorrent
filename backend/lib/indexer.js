@@ -4,6 +4,8 @@
 // Eliminates npm audit CVEs, un-caps 100-result limits, and aggregates hundreds
 // of deduplicated torrents across providers.
 
+import crypto from 'node:crypto';
+
 export const DEFAULT_TRACKERS = [
   'udp://tracker.opentrackr.org:1337/announce',
   'udp://open.stealth.si:80/announce',
@@ -1068,6 +1070,8 @@ const IMDB_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const IMDB_CACHE_MAX_ENTRIES = 320;
 const POSTER_CACHE_TTL_MS = 30 * 60 * 1000;
 const POSTER_CACHE_MAX_ENTRIES = 260;
+const POSTER_REGISTRY_MAX_ENTRIES = 1000;
+const POSTER_TOKEN_RE = /^[a-f0-9]{24}$/;
 const ALLOWED_POSTER_HOST_RE = /(?:^|\.)mzstatic\.com$|^(?:s\d+\.)?anilist\.co$|^i\.rar\.pics$|^m\.media-amazon\.com$/i;
 const NSFW_SPOTLIGHT_RE = /\b(hentai|xxx|porn|onlyfans|jav|brazzers|naughtyamerica|nsfw|uncensored|playboy|erotic|18\+)\b/i;
 
@@ -1077,9 +1081,10 @@ const spotlightCache = new Map();
 const imdbCardCache = new Map();
 const posterCache = new Map();
 const posterInFlight = new Map();
+const posterUrlRegistry = new Map();
 
 /**
- * Validates that a poster URL is HTTPS and hosted on an allowlisted CDN.
+ * Validates that a poster URL is HTTPS (default port, no credentials) and hosted on an allowlisted CDN.
  * @param {string} rawUrl
  * @returns {boolean}
  */
@@ -1088,6 +1093,7 @@ export function isAllowedPosterUrl(rawUrl) {
   try {
     const parsed = new URL(rawUrl.trim());
     if (parsed.protocol !== 'https:') return false;
+    if (parsed.username || parsed.password || parsed.port) return false;
     return ALLOWED_POSTER_HOST_RE.test(parsed.hostname);
   } catch {
     return false;
@@ -1095,12 +1101,38 @@ export function isAllowedPosterUrl(rawUrl) {
 }
 
 /**
- * Fetches and caches a Discover poster image in memory for instant local serving.
+ * Registers a server-discovered poster URL and returns its opaque 24-char token ID.
+ * Prevents arbitrary user-supplied URLs from reaching the poster proxy fetcher.
  * @param {string} rawUrl
+ * @returns {string}
+ */
+export function registerDiscoverPoster(rawUrl) {
+  if (!isAllowedPosterUrl(rawUrl)) return '';
+  const canonicalUrl = new URL(rawUrl.trim()).toString();
+  const token = crypto.createHash('sha256').update(canonicalUrl).digest('hex').slice(0, 24);
+  posterUrlRegistry.delete(token);
+  if (posterUrlRegistry.size >= POSTER_REGISTRY_MAX_ENTRIES) {
+    const oldestToken = posterUrlRegistry.keys().next().value;
+    if (oldestToken) posterUrlRegistry.delete(oldestToken);
+  }
+  posterUrlRegistry.set(token, canonicalUrl);
+  return token;
+}
+
+/**
+ * Fetches and caches a Discover poster image for a server-issued token ID.
+ * @param {string} token
  * @param {{ signal?: AbortSignal }} [opts]
  * @returns {Promise<{ contentType: string, buffer: Buffer } | null>}
  */
-export async function fetchDiscoverPoster(rawUrl, { signal } = {}) {
+export async function fetchRegisteredPoster(token, { signal } = {}) {
+  if (typeof token !== 'string' || !POSTER_TOKEN_RE.test(token)) return null;
+  const safeUrl = posterUrlRegistry.get(token);
+  if (!safeUrl) return null;
+  return fetchDiscoverPoster(safeUrl, { signal });
+}
+
+async function fetchDiscoverPoster(rawUrl, { signal } = {}) {
   if (!isAllowedPosterUrl(rawUrl)) return null;
   const normalizedUrl = rawUrl.trim();
   const now = Date.now();
@@ -1162,6 +1194,10 @@ async function warmPosterUrls(cards) {
       .filter((u) => isAllowedPosterUrl(u))
   ));
   if (urls.length === 0) return;
+
+  for (const url of urls) {
+    registerDiscoverPoster(url);
+  }
 
   const concurrency = 8;
   for (let i = 0; i < urls.length; i += concurrency) {
@@ -1931,13 +1967,13 @@ async function fetchAndStoreDiscover(catKey, winKey, forceRefresh, signal) {
       fetchExttoTrending(cfg.extto, winKey, withProviderTimeout(signal, 6500))
         .then((items) => ({ source: 'extto', items: orderTrendingByWindow(items, winKey) }))
         .catch((err) => {
-          console.warn(`[discover:extto.org] (${catKey}/${winKey}) error:`, err.message);
+          console.warn('[discover:extto.org] error:', `${catKey}/${winKey}`, err.message);
           return { source: 'extto', items: [] };
         }),
       fetchKnabenTrending(catKey, winKey, withProviderTimeout(signal, 5500))
         .then((items) => ({ source: 'knaben', items }))
         .catch((err) => {
-          console.warn(`[discover:Knaben] (${catKey}/${winKey}) error:`, err.message);
+          console.warn('[discover:Knaben] error:', `${catKey}/${winKey}`, err.message);
           return { source: 'knaben', items: [] };
         }),
     ];
@@ -1958,7 +1994,7 @@ async function fetchAndStoreDiscover(catKey, winKey, forceRefresh, signal) {
         fetchNyaaTrending(winKey, withProviderTimeout(signal, 5500))
           .then((items) => ({ source: 'nyaa', items }))
           .catch((err) => {
-            console.warn(`[discover:Nyaa] (${winKey}) error:`, err.message);
+            console.warn('[discover:Nyaa] error:', winKey, err.message);
             return { source: 'nyaa', items: [] };
           })
       );

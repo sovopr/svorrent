@@ -18,6 +18,8 @@ import {
   parseAppleSpotlightFeed,
   parseAniListSpotlight,
   isAllowedPosterUrl,
+  registerDiscoverPoster,
+  fetchRegisteredPoster,
   parseRelativeAgeHours,
   orderTrendingByWindow,
   extractSpotlightCandidates,
@@ -391,15 +393,23 @@ test('parseAniListSpotlight parses SFW trending anime cards and skips adult item
   assert.equal(cards[0].searchQuery, 'ONE PIECE');
 });
 
-test('isAllowedPosterUrl permits HTTPS allowlisted CDNs and blocks arbitrary URLs', () => {
+test('isAllowedPosterUrl permits HTTPS allowlisted CDNs and blocks arbitrary URLs', async () => {
   assert.equal(isAllowedPosterUrl('https://is1-ssl.mzstatic.com/image/thumb/x/240x360bb.webp'), true);
   assert.equal(isAllowedPosterUrl('https://s4.anilist.co/file/anilistcdn/media/anime/cover/medium/bx21.jpg'), true);
   assert.equal(isAllowedPosterUrl('https://i.rar.pics/poster.jpg'), true);
   assert.equal(isAllowedPosterUrl('https://m.media-amazon.com/images/M/test._V1_UX240_.jpg'), true);
   assert.equal(isAllowedPosterUrl('http://is1-ssl.mzstatic.com/image/thumb/x/240x360bb.webp'), false);
   assert.equal(isAllowedPosterUrl('https://notmzstatic.com/foo.webp'), false);
+  assert.equal(isAllowedPosterUrl('https://m.media-amazon.com:8443/images/M/test.jpg'), false);
+  assert.equal(isAllowedPosterUrl('https://user:pass@m.media-amazon.com/images/M/test.jpg'), false);
   assert.equal(isAllowedPosterUrl('http://127.0.0.1:3001/secret'), false);
   assert.equal(isAllowedPosterUrl('javascript:alert(1)'), false);
+
+  const token = registerDiscoverPoster('https://is1-ssl.mzstatic.com/image/thumb/x/240x360bb.webp');
+  assert.match(token, /^[a-f0-9]{24}$/);
+  assert.equal(registerDiscoverPoster('https://evil.example/poster.jpg'), '');
+  assert.equal(await fetchRegisteredPoster('not-a-token'), null);
+  assert.equal(await fetchRegisteredPoster('ffffffffffffffffffffffff'), null);
 });
 
 test('orderTrendingByWindow separates Day, Week, and Month freshness tiers cleanly', () => {

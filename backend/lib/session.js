@@ -32,7 +32,7 @@ export function createSession(dataDir) {
     } catch {}
 
     const entries = torrents
-      .filter((t) => t._isPermanentDownload && !t.destroyed)
+      .filter((t) => t._isPermanentDownload && !t.destroyed && !t._deletedManually && !t._deleting)
       .map((t) => {
         const hashKey = (t.infoHash || '').toLowerCase();
         const existing = existingMap.get(hashKey);
@@ -55,6 +55,17 @@ export function createSession(dataDir) {
           torrentFileStr = existing.torrentFile;
         }
 
+        const filePaths = (Array.isArray(t.files) && t.files.length > 0)
+          ? t.files.map((f) => f?.path || f?.name).filter(Boolean)
+          : (existing?.filePaths || []);
+        const done = Boolean(t.done || t._restoredDone);
+        const hadFilesOnDisk = Boolean(
+          t._hadFilesOnDisk
+          || t._restoredHadFilesOnDisk
+          || done
+          || existing?.hadFilesOnDisk
+        );
+
         return {
           infoHash: t.infoHash,
           magnet: t.magnetURI || existing?.magnet,
@@ -62,6 +73,9 @@ export function createSession(dataDir) {
           path: t.path || existing?.path,
           paused: !!t._pausedManually,
           addedAt: t._addedAt || existing?.addedAt || Date.now(),
+          done,
+          hadFilesOnDisk,
+          filePaths,
           torrentFile: torrentFileStr,
           bitfield: bitfieldStr,
           knownPeers: t._knownPeers ? Array.from(t._knownPeers).slice(-100) : (existing?.knownPeers || []),

@@ -271,11 +271,11 @@ export function reopenTorrentStore(torrent) {
       name: torrent.name + ' - ' + torrent.infoHash.slice(0, 8),
       addUID: torrent.addUID,
       rootDir: torrent.rootDir,
-      max: torrent._storeCacheSlots || 20,
+      max: torrent._storeCacheSlots ?? 20,
     });
 
-    if (CacheCtor && (torrent._storeCacheSlots || 20) > 0) {
-      rawStore = new CacheCtor(rawStore, { max: torrent._storeCacheSlots || 20 });
+    if (CacheCtor && (torrent._storeCacheSlots ?? 20) > 0) {
+      rawStore = new CacheCtor(rawStore, { max: torrent._storeCacheSlots ?? 20 });
     }
 
     torrent.store = new ImmediateCtor(rawStore);

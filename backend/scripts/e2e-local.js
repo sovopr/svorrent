@@ -23,6 +23,57 @@ let backend;
 let backendOutput = '';
 let infoHash;
 let base;
+let launchedVlcByTest = false;
+
+function isVlcRunning() {
+  try {
+    if (process.platform === 'darwin') {
+      return spawnSync('pgrep', ['-x', 'VLC'], { stdio: 'ignore' }).status === 0;
+    }
+    if (process.platform === 'linux') {
+      return spawnSync('pgrep', ['-x', 'vlc'], { stdio: 'ignore' }).status === 0;
+    }
+    if (process.platform === 'win32') {
+      const res = spawnSync('tasklist', ['/FI', 'IMAGENAME eq vlc.exe'], { encoding: 'utf8' });
+      return /vlc\.exe/i.test(res.stdout || '');
+    }
+  } catch {
+    // Ignore process lookup errors
+  }
+  return false;
+}
+
+async function closeTestVlc() {
+  if (!launchedVlcByTest) return;
+  try {
+    if (!isVlcRunning()) {
+      await delay(400);
+    }
+    if (process.platform === 'darwin') {
+      spawnSync('osascript', ['-e', 'tell application "VLC" to quit'], { timeout: 3000, stdio: 'ignore' });
+      for (let i = 0; i < 8 && isVlcRunning(); i += 1) {
+        await delay(250);
+      }
+      if (isVlcRunning()) {
+        spawnSync('pkill', ['-TERM', '-x', 'VLC'], { stdio: 'ignore' });
+      }
+      for (let i = 0; i < 4 && isVlcRunning(); i += 1) {
+        await delay(200);
+      }
+      if (isVlcRunning()) {
+        spawnSync('pkill', ['-KILL', '-x', 'VLC'], { stdio: 'ignore' });
+      }
+    } else if (process.platform === 'linux') {
+      spawnSync('pkill', ['-TERM', '-x', 'vlc'], { stdio: 'ignore' });
+    } else if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/IM', 'vlc.exe', '/F'], { stdio: 'ignore' });
+    }
+  } catch {
+    // Best-effort cleanup so local test runs do not leave VLC open
+  } finally {
+    launchedVlcByTest = false;
+  }
+}
 
 async function freePort() {
   const server = net.createServer();
@@ -146,9 +197,13 @@ try {
   await api(`/api/torrent/${infoHash}/resume`, { method: 'POST' });
   console.log('Details, network status, pause, and resume passed');
 
+  const vlcWasRunning = isVlcRunning();
   try {
     const playback = await api(`/api/torrent/${infoHash}/play`, { method: 'POST' });
     assert.equal(playback.success, true);
+    if (!vlcWasRunning && (playback.player === 'VLC' || isVlcRunning())) {
+      launchedVlcByTest = true;
+    }
     console.log(`Native player accepted the test clip: ${playback.player}`);
   } catch (err) {
     if (process.platform === 'linux' || process.platform === 'win32') {
@@ -162,6 +217,7 @@ try {
     console.log(`Holding the isolated test open for ${holdMs} ms for visual playback inspection`);
     await delay(holdMs);
   }
+  await closeTestVlc();
 
   await api(`/api/torrent/${infoHash}/delete`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -183,6 +239,7 @@ try {
       });
     } catch {}
   }
+  await closeTestVlc();
   await closeBackend();
   if (seeder) await new Promise((resolve) => seeder.destroy(resolve));
   if (tracker) await new Promise((resolve) => tracker.close(resolve));

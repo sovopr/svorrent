@@ -22,37 +22,53 @@ test.describe('Svorrent Web End-to-End Application Checks', () => {
 
     // 2. Verify header brand and primary navigation exist
     await expect(page.locator('.brand-logo')).toBeVisible();
+    await expect(page.locator('#brand-homepage')).toBeVisible();
+    await expect(page.locator('#nav-homepage')).toBeVisible();
     await expect(page.locator('#nav-search')).toBeVisible();
     await expect(page.locator('#nav-downloads')).toBeVisible();
     await expect(page.locator('#nav-networks')).toBeVisible();
     await expect(page.locator('#search-input')).toBeVisible();
 
-    // 3. Switch to Downloads tab
+    // 3. Switch to Homepage section via nav tab
+    await page.click('#nav-homepage');
+    await expect(page).toHaveURL(/.*homepage/);
+    await expect(page).toHaveTitle(/Homepage · Svorrent/);
+    await expect(page.locator('.discover-page')).toBeVisible();
+    await expect(page.locator('#nav-homepage')).toHaveClass(/is-active/);
+
+    // 4. Switch to Downloads tab
     await page.click('#nav-downloads');
     await expect(page).toHaveURL(/.*downloads/);
     await expect(page).toHaveTitle(/Downloads · Svorrent/);
     await expect(page.locator('#open-downloads-folder')).toBeVisible();
 
-    // 4. Switch to Networks tab
+    // 5. Switch to Networks tab
     await page.click('#nav-networks');
     await expect(page).toHaveURL(/.*networks/);
     await expect(page).toHaveTitle(/Networks · Svorrent/);
     await expect(page.locator('#refresh-networks')).toBeVisible();
     await expect(page.locator('.network-kpi-grid .mini-sparkline')).toHaveCount(2);
 
-    // 5. Switch to Discover page via top-left brand link
-    await page.click('#nav-discover');
-    await expect(page).toHaveURL(/.*discover/);
-    await expect(page).toHaveTitle(/Discover · Svorrent/);
+    // 6. Clicking svorrent brand link takes you to the Homepage section
+    await page.click('#brand-homepage');
+    await expect(page).toHaveURL(/.*homepage/);
+    await expect(page).toHaveTitle(/Homepage · Svorrent/);
     await expect(page.locator('.discover-page')).toBeVisible();
+    await expect(page.locator('#nav-homepage')).toHaveClass(/is-active/);
 
-    // 6. Switch back to Search tab
+    // 7. Switch back to Search tab
     await page.click('#nav-search');
     await expect(page).toHaveURL(/\//);
     await expect(page).toHaveTitle('Svorrent');
     await expect(page.locator('#search-input')).toBeVisible();
 
-    // 7. Assert zero runtime errors or unhandled exceptions occurred
+    // 8. Legacy /discover URL still routes cleanly to Homepage
+    await page.goto('/discover');
+    await expect(page).toHaveTitle(/Homepage · Svorrent/);
+    await expect(page.locator('.discover-page')).toBeVisible();
+    await expect(page.locator('#nav-homepage')).toHaveClass(/is-active/);
+
+    // 9. Assert zero runtime errors or unhandled exceptions occurred
     expect(runtimeErrors).toEqual([]);
   });
 });

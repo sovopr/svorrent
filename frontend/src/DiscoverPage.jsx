@@ -197,10 +197,10 @@ export function DiscoverPage({ notify, onDownloadAdded, onGoSearch, isActive = f
       : `Trending Movies · ${windowHeading}`;
 
   return (
-    <section className="discover-page" aria-label="Discover trending torrents">
+    <section className="discover-page" aria-label="Homepage trending torrents">
       <div className="discover-header">
         <div>
-          <h1 className="page-title">Discover</h1>
+          <h1 className="page-title">Homepage</h1>
           <p className="page-subtitle">Popular {categoryLabel.toLowerCase()} and trending releases {windowHeading.toLowerCase()}</p>
         </div>
 

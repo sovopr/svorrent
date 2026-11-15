@@ -45,7 +45,14 @@ import {
   launchMediaPlayer,
 } from './lib/playability.js';
 import { AutoUpdater } from './lib/updater.js';
-import { searchFederated, resolveMagnet } from './lib/indexer.js';
+import {
+  searchFederated,
+  resolveMagnet,
+  discoverTorrents,
+  fetchDiscoverPoster,
+  isAllowedPosterUrl,
+  warmDiscoverCache,
+} from './lib/indexer.js';
 
 function parseClientString(v) {
   if (!v) return 'Unknown';
@@ -697,6 +704,31 @@ async function addTorrent(magnetURI, opts = {}) {
 // ---------------------------------------------------------------------------
 
 // 1. Search federated indexers with bounded provider timeouts and deduplication
+function enrichSearchResults(results) {
+  const completedHashes = new Set();
+  if (client && client.torrents) {
+    for (const t of client.torrents) {
+      if (t.infoHash && (t.done || t.progress === 1)) {
+        completedHashes.add(t.infoHash.toLowerCase());
+      }
+    }
+  }
+
+  return results.map((item) => {
+    const hash = (item.infoHash || extractInfoHash(item.magnet) || '').toLowerCase();
+    const isDownloaded = Boolean(
+      (hash && completedHashes.has(hash)) ||
+      downloadHistory.has(hash, item.title, item.size)
+    );
+    return {
+      ...item,
+      infoHash: hash,
+      downloaded: isDownloaded,
+    };
+  });
+}
+
+// 1. Search Torrents across multiple providers
 app.get('/api/search', async (req, res) => {
   const query = req.query.q;
   if (!query) {
@@ -717,32 +749,74 @@ app.get('/api/search', async (req, res) => {
     });
     clearTimeout(timeoutId);
 
-    const completedHashes = new Set();
-    if (client && client.torrents) {
-      for (const t of client.torrents) {
-        if (t.infoHash && (t.done || t.progress === 1)) {
-          completedHashes.add(t.infoHash.toLowerCase());
-        }
-      }
-    }
-
-    const enriched = results.map((item) => {
-      const hash = (item.infoHash || extractInfoHash(item.magnet) || '').toLowerCase();
-      const isDownloaded = Boolean(
-        (hash && completedHashes.has(hash)) ||
-        downloadHistory.has(hash, item.title, item.size)
-      );
-      return {
-        ...item,
-        infoHash: hash,
-        downloaded: isDownloaded,
-      };
-    });
-
-    res.json(enriched);
+    res.json(enrichSearchResults(results));
   } catch (error) {
     console.error('Search error:', error);
     res.status(500).json({ error: 'Failed to search torrents' });
+  }
+});
+
+// 1b. Discover trending movies, TV & anime releases
+app.get('/api/discover', async (req, res) => {
+  try {
+    const category = typeof req.query.category === 'string' ? req.query.category : 'movies';
+    const window = typeof req.query.window === 'string' ? req.query.window : '7D';
+    const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+
+    if (disablePublicDiscovery) {
+      return res.json({
+        category: String(category).toLowerCase(),
+        window: String(window).toUpperCase(),
+        spotlight: [],
+        torrents: [],
+      });
+    }
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 9000);
+
+    const payload = await discoverTorrents({ category, window, forceRefresh, signal: controller.signal });
+    clearTimeout(timeoutId);
+
+    const spotlight = (Array.isArray(payload.spotlight) ? payload.spotlight : []).map((card) => ({
+      ...card,
+      poster: isAllowedPosterUrl(card.poster)
+        ? `/api/discover/poster?u=${encodeURIComponent(card.poster)}`
+        : '',
+    }));
+
+    res.json({
+      category: payload.category,
+      window: payload.window,
+      spotlight,
+      torrents: enrichSearchResults(payload.torrents),
+    });
+  } catch (error) {
+    console.error('Discover error:', error);
+    res.status(500).json({ error: 'Failed to load trending torrents' });
+  }
+});
+
+// 1c. Cached Discover poster proxy (allowlisted CDNs only)
+app.get('/api/discover/poster', async (req, res) => {
+  const url = typeof req.query.u === 'string' ? req.query.u : '';
+  if (!isAllowedPosterUrl(url)) {
+    return res.status(400).end();
+  }
+
+  const controller = new AbortController();
+  req.on('close', () => controller.abort());
+
+  try {
+    const result = await fetchDiscoverPoster(url, { signal: controller.signal });
+    if (!result) {
+      return res.status(404).end();
+    }
+    res.setHeader('Content-Type', result.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=1800');
+    return res.send(result.buffer);
+  } catch {
+    return res.status(404).end();
   }
 });
 
@@ -765,7 +839,7 @@ app.get('/api/search/doh-check', async (req, res) => {
 
 // 2. Resolve magnet link
 app.get('/api/magnet', async (req, res) => {
-  const { provider, desc, link, magnet } = req.query;
+  const { provider, desc, link, magnet, title } = req.query;
 
   if (typeof magnet === 'string' && magnet.startsWith('magnet:?xt=urn:btih:')) {
     return res.json({ magnet });
@@ -775,7 +849,8 @@ app.get('/api/magnet', async (req, res) => {
     const safeProvider = typeof provider === 'string' ? provider : '';
     const safeDesc = typeof desc === 'string' ? desc : '';
     const safeLink = typeof link === 'string' ? link : '';
-    const resolvedMagnet = await resolveMagnet({ provider: safeProvider, desc: safeDesc, link: safeLink });
+    const safeTitle = typeof title === 'string' ? title : '';
+    const resolvedMagnet = await resolveMagnet({ provider: safeProvider, desc: safeDesc, link: safeLink, title: safeTitle });
     if (!resolvedMagnet) {
       return res.status(404).json({ error: 'Magnet link could not be found' });
     }
@@ -1541,6 +1616,14 @@ const httpServer = app.listen(port, host, () => {
     restoringSession = false;
     saveSession();
   });
+  if (!disablePublicDiscovery) {
+    setTimeout(() => {
+      warmDiscoverCache().catch((err) => console.warn('[discover] warm error:', err.message));
+    }, 300).unref();
+    setInterval(() => {
+      warmDiscoverCache().catch((err) => console.warn('[discover] periodic warm error:', err.message));
+    }, 10 * 60 * 1000).unref();
+  }
 });
 httpServer.on('error', (err) => {
   console.error('[server] HTTP listener failed:', err.message);

@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { SearchPage } from './SearchPage';
+import { DiscoverPage } from './DiscoverPage';
 import { DownloadsManager } from './DownloadsManager';
 import { NetworksPage } from './NetworksPage';
 import { Icon } from './Icon';
-import { apiGet, apiPost, formatSpeed } from './lib';
+import { apiGet, apiPost, formatSpeed, prefetchDiscoverFeed } from './lib';
 
 const routeFromPath = () => {
   const p = window.location.pathname.replace(/\/+$/, '') || '/';
   const h = window.location.hash.replace(/^#\/?/, '').split(/[?&]/)[0];
+  if (p === '/discover' || (p === '/' && h === 'discover')) return 'discover';
   if (p === '/downloads' || (p === '/' && h === 'downloads')) return 'downloads';
   if (p === '/networks' || (p === '/' && h === 'networks')) return 'networks';
   return 'search';
@@ -86,7 +88,9 @@ function App() {
 
   useEffect(() => {
     document.title =
-      route === 'downloads'
+      route === 'discover'
+        ? 'Discover · Svorrent'
+        : route === 'downloads'
         ? 'Downloads · Svorrent'
         : route === 'networks'
         ? 'Networks · Svorrent'
@@ -95,9 +99,35 @@ function App() {
     previousRoute.current = route;
   }, [route]);
 
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      prefetchDiscoverFeed('movies', '7D', { signal: controller.signal })
+        .then(() => {
+          if (controller.signal.aborted) return;
+          prefetchDiscoverFeed('movies', '1D', { signal: controller.signal }).catch(() => {});
+          prefetchDiscoverFeed('movies', '30D', { signal: controller.signal }).catch(() => {});
+          prefetchDiscoverFeed('tv', '7D', { signal: controller.signal }).catch(() => {});
+          prefetchDiscoverFeed('anime', '7D', { signal: controller.signal }).catch(() => {});
+        })
+        .catch(() => {});
+    }, 350);
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, []);
+
   const navigate = (next) => {
     if (next === route) return;
-    const path = next === 'downloads' ? '/downloads' : next === 'networks' ? '/networks' : '/';
+    const path =
+      next === 'discover'
+        ? '/discover'
+        : next === 'downloads'
+        ? '/downloads'
+        : next === 'networks'
+        ? '/networks'
+        : '/';
     window.history.pushState(null, '', path);
     setRoute(next);
   };
@@ -121,7 +151,7 @@ function App() {
   const down = downloads.reduce((sum, t) => sum + speed(t.downloadSpeed), 0);
   const up = downloads.reduce((sum, t) => sum + speed(t.uploadSpeed), 0);
 
-  const [searchTerm, setSearchTerm] = useState('');
+  const [searchRequest, setSearchRequest] = useState({ query: '', seq: 0 });
   const [repoUpdate, setRepoUpdate] = useState(null);
   const [dismissedCommit, setDismissedCommit] = useState(null);
   const [applyingRepoUpdate, setApplyingRepoUpdate] = useState(false);
@@ -162,7 +192,9 @@ function App() {
   };
 
   const handleGoSearch = (term) => {
-    if (typeof term === 'string') setSearchTerm(term);
+    if (typeof term === 'string') {
+      setSearchRequest((prev) => ({ query: term, seq: prev.seq + 1 }));
+    }
     navigate('search');
   };
 
@@ -177,9 +209,12 @@ function App() {
       <header className="topbar">
         <div className="topbar-inner">
           <a
-            href="/"
-            className="wordmark"
-            onClick={(e) => followRoute(e, 'search')}
+            id="nav-discover"
+            href="/discover"
+            aria-current={route === 'discover' ? 'page' : undefined}
+            className={`wordmark ${route === 'discover' ? 'is-active' : ''}`}
+            title="Discover trending movies and torrents"
+            onClick={(e) => followRoute(e, 'discover')}
           >
             <img src="/favicon.svg" alt="" className="brand-logo" width="20" height="20" />
             <span>svorrent</span>
@@ -283,11 +318,29 @@ function App() {
         ref={mainRef}
         tabIndex={-1}
         style={{ outline: 'none' }}
-        aria-label={route === 'search' ? 'Search' : route === 'downloads' ? 'Downloads' : 'Networks'}
+        aria-label={
+          route === 'discover'
+            ? 'Discover'
+            : route === 'search'
+            ? 'Search'
+            : route === 'downloads'
+            ? 'Downloads'
+            : 'Networks'
+        }
       >
+        <div style={{ display: route === 'discover' ? 'block' : 'none' }}>
+          <DiscoverPage
+            isActive={route === 'discover'}
+            notify={notify}
+            onDownloadAdded={refreshTorrents}
+            onGoSearch={handleGoSearch}
+            downloads={torrents}
+          />
+        </div>
         <div style={{ display: route === 'search' ? 'block' : 'none' }}>
           <SearchPage
-            initialQuery={searchTerm}
+            initialQuery={searchRequest.query}
+            initialQuerySeq={searchRequest.seq}
             isActive={route === 'search'}
             notify={notify}
             onDownloadAdded={refreshTorrents}

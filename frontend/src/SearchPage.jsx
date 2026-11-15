@@ -1,51 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from './Icon';
-import { apiGet, apiPost, getPageNumbers, parseSize } from './lib';
+import { TorrentTable } from './TorrentTable';
+import { useTorrentRowActions } from './useTorrentRowActions';
+import {
+  SEARCH_QUALITY_FILTERS,
+  SEARCH_TAG_FILTERS,
+  apiGet,
+  filterSearchResults,
+  getCompletedHashSet,
+  getPageNumbers,
+  getSearchFilterCounts,
+  nextSortState,
+  normalizeTorrentItems,
+  sortTorrentRows,
+} from './lib';
 
-const COLUMNS = [
-  { key: 'title', label: 'Name', className: 'col-name' },
-  { key: 'size', label: 'Size', className: 'col-num' },
-  { key: 'seeds', label: 'Seeds', className: 'col-num' },
-  { key: 'peers', label: 'Leech', className: 'col-num' },
-  { key: 'provider', label: 'Source', className: 'col-source' },
-];
-
-function seedClass(seeds) {
-  if (seeds >= 50) return 'seeds-good';
-  if (seeds >= 5) return 'seeds-ok';
-  return 'seeds-low';
-}
-
-function safeLink(value) {
-  if (typeof value !== 'string') return '';
-  try {
-    const url = new URL(value);
-    return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
-  } catch {
-    return '';
-  }
-}
-
-function validMagnet(value) {
-  if (typeof value !== 'string') return false;
-  try {
-    const url = new URL(value);
-    return url.protocol === 'magnet:' && !!url.searchParams.get('xt');
-  } catch {
-    return false;
-  }
-}
-
-function formatSwarmCount(val) {
-  if (!Number.isFinite(val) || val <= 0) return 0;
-  if (val > 500000) {
-    const masked = val >>> 0;
-    return masked > 500000 ? 0 : masked;
-  }
-  return val;
-}
-
-export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = true, downloads = [] }) {
+export function SearchPage({
+  notify,
+  onDownloadAdded,
+  initialQuery,
+  initialQuerySeq = 0,
+  isActive = true,
+  downloads = [],
+}) {
   const [query, setQuery] = useState(initialQuery || '');
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -53,31 +30,29 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
   const [error, setError] = useState('');
   const [sort, setSort] = useState({ key: 'relevance', dir: 'desc' });
   const [source, setSource] = useState('all');
-  const [rowState, setRowState] = useState({});
+  const [qualityFilter, setQualityFilter] = useState('all');
+  const [selectedTags, setSelectedTags] = useState([]);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(25);
 
-  const activeCompletedHashes = useMemo(() => {
-    const set = new Set();
-    if (Array.isArray(downloads)) {
-      for (const d of downloads) {
-        if (d && d.infoHash && (d.done || d.progress === 1)) {
-          set.add(d.infoHash.toLowerCase());
-        }
-      }
-    }
-    return set;
-  }, [downloads]);
+  const activeCompletedHashes = useMemo(() => getCompletedHashSet(downloads), [downloads]);
 
   const inputRef = useRef(null);
   const tableRef = useRef(null);
   const searchId = useRef(0);
   const searchController = useRef(null);
   const resultId = useRef(0);
-  const mounted = useRef(false);
-  const active = useRef(isActive);
-  const actions = useRef(new Map());
   const debounce = useRef(null);
+
+  const { rowState, clearRowState, handleAction } = useTorrentRowActions({
+    setItems: setResults,
+    generationRef: resultId,
+    isActive,
+    notify,
+    onDownloadAdded,
+  });
+
+  const mounted = useRef(false);
 
   const cancelSearch = useCallback(() => {
     clearTimeout(debounce.current);
@@ -102,29 +77,12 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
       if (!Array.isArray(data) || data.some((r) => !r || typeof r.title !== 'string' || typeof r.provider !== 'string')) {
         throw new Error('The server returned invalid search results. Please try again.');
       }
-      const count = (value) => {
-        const number = Number(typeof value === 'string' ? value.replace(/,/g, '') : value);
-        return Number.isFinite(number) ? Math.max(0, number) : 0;
-      };
       resultId.current = id;
-      const validResults = data.filter((r) => {
-        if (!r || typeof r.title !== 'string') return false;
-        const lower = r.title.trim().toLowerCase();
-        return lower !== 'no results returned' && lower !== 'no results found';
-      });
-      setResults(validResults.map((r, index) => ({
-        ...r,
-        _id: `${id}:${index}`,
-        _generation: id,
-        size: typeof r.size === 'string' ? r.size : '',
-        seeds: count(r.seeds),
-        peers: count(r.peers),
-        magnet: validMagnet(r.magnet) ? r.magnet : '',
-        desc: typeof r.desc === 'string' ? r.desc : '',
-        link: safeLink(r.link),
-      })));
-      setRowState({});
+      setResults(normalizeTorrentItems(data, id));
+      clearRowState();
       setSource('all');
+      setQualityFilter('all');
+      setSelectedTags([]);
       setPage(1);
       setSearchedTerm(term);
     } catch (err) {
@@ -134,39 +92,36 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
     } finally {
       if (mounted.current && searchId.current === id) setLoading(false);
     }
-  }, [cancelSearch]);
-
-  useEffect(() => {
-    active.current = isActive;
-  }, [isActive]);
+  }, [cancelSearch, clearRowState]);
 
   useEffect(() => {
     mounted.current = true;
-    const pending = actions.current;
     return () => {
       mounted.current = false;
       cancelSearch();
-      for (const controller of pending.values()) controller.abort();
-      pending.clear();
     };
   }, [cancelSearch]);
 
   useEffect(() => {
-    if (typeof initialQuery === 'string') {
-      cancelSearch();
-      setLoading(false);
-      setQuery(initialQuery.trim());
-      if (!initialQuery.trim()) {
-        resultId.current = searchId.current;
-        setResults([]);
-        setSearchedTerm('');
-        setError('');
-        setRowState({});
-        setSource('all');
-        setPage(1);
-      }
+    if (typeof initialQuery !== 'string') return;
+    const trimmed = initialQuery.trim();
+    cancelSearch();
+    setLoading(false);
+    setQuery(trimmed);
+    if (!trimmed) {
+      resultId.current = searchId.current;
+      setResults([]);
+      setSearchedTerm('');
+      setError('');
+      clearRowState();
+      setSource('all');
+      setQualityFilter('all');
+      setSelectedTags([]);
+      setPage(1);
+    } else if (initialQuerySeq > 0) {
+      runSearch(trimmed);
     }
-  }, [initialQuery, cancelSearch]);
+  }, [initialQuery, initialQuerySeq, cancelSearch, clearRowState, runSearch]);
 
   // Search after user stops typing
   useEffect(() => {
@@ -195,21 +150,45 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
 
   const sources = useMemo(() => [...new Set(results.map((r) => r.provider).filter(Boolean))].sort(), [results]);
 
+  const filterCounts = useMemo(
+    () => getSearchFilterCounts(results, { source, quality: qualityFilter, tags: selectedTags }),
+    [results, source, qualityFilter, selectedTags],
+  );
+
+  const qualityPills = useMemo(() => {
+    const specific = SEARCH_QUALITY_FILTERS.filter(
+      (f) => f.id !== 'all' && (filterCounts.availableQualities[f.id] || qualityFilter === f.id),
+    );
+    return specific.length > 0 ? [SEARCH_QUALITY_FILTERS[0], ...specific] : [];
+  }, [filterCounts, qualityFilter]);
+
+  const tagPills = useMemo(
+    () => SEARCH_TAG_FILTERS.filter((f) => filterCounts.tagCounts[f.id] > 0 || selectedTags.includes(f.id)),
+    [filterCounts, selectedTags],
+  );
+
+  const hasActiveFilters = source !== 'all' || qualityFilter !== 'all' || selectedTags.length > 0;
+
+  const resetFilters = () => {
+    setSource('all');
+    setQualityFilter('all');
+    setSelectedTags([]);
+    setPage(1);
+  };
+
+  const toggleTag = (tagId) => {
+    setSelectedTags((prev) => (prev.includes(tagId) ? prev.filter((id) => id !== tagId) : [...prev, tagId]));
+    setPage(1);
+  };
+
   const rows = useMemo(() => {
-    const list = results
-      .map((r) => ({ ...r, _bytes: parseSize(r.size) }))
-      .filter((r) => source === 'all' || r.provider === source);
-
-    if (sort.key === 'relevance') return list;
-
-    const dir = sort.dir === 'asc' ? 1 : -1;
-    list.sort((a, b) => {
-      if (sort.key === 'size') return (a._bytes - b._bytes) * dir;
-      if (sort.key === 'seeds' || sort.key === 'peers') return ((a[sort.key] || 0) - (b[sort.key] || 0)) * dir;
-      return String(a[sort.key] || '').localeCompare(String(b[sort.key] || '')) * dir;
+    const filtered = filterSearchResults(results, {
+      source,
+      quality: qualityFilter,
+      tags: selectedTags,
     });
-    return list;
-  }, [results, sort, source]);
+    return sortTorrentRows(filtered, sort, 'relevance');
+  }, [results, sort, source, qualityFilter, selectedTags]);
 
   const totalResults = rows.length;
   const totalPages = Math.max(1, Math.ceil(totalResults / pageSize));
@@ -232,68 +211,7 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
 
   const toggleSort = (key) => {
     setPage(1);
-    setSort((prev) => {
-      const defaultDir = key === 'title' || key === 'provider' ? 'asc' : 'desc';
-      if (prev.key !== key) return { key, dir: defaultDir };
-      if (prev.dir === defaultDir) return { key, dir: defaultDir === 'asc' ? 'desc' : 'asc' };
-      return { key: 'relevance', dir: 'desc' };
-    });
-  };
-
-  const isCurrent = (t, controller) => mounted.current && !controller.signal.aborted && resultId.current === t._generation;
-  const setRow = (t, controller, value) => {
-    if (isCurrent(t, controller)) setRowState((prev) => ({ ...prev, [t._id]: value }));
-  };
-
-  const resolveMagnet = async (t, controller) => {
-    if (validMagnet(t.magnet)) return t.magnet;
-    const params = new URLSearchParams({ provider: t.provider, desc: t.desc || '', link: t.link || '' });
-    const data = await apiGet(`/magnet?${params}`, { signal: controller.signal });
-    if (!validMagnet(data.magnet)) throw new Error('The server did not return a valid magnet link.');
-    if (isCurrent(t, controller)) {
-      setResults((prev) => prev.map((r) => (r._id === t._id ? { ...r, magnet: data.magnet } : r)));
-    }
-    return data.magnet;
-  };
-
-  const handleAction = async (t, action) => {
-    if (actions.current.has(t._id) || (action === 'adding' && rowState[t._id] === 'added')) return;
-    const controller = new AbortController();
-    const previous = rowState[t._id];
-    actions.current.set(t._id, controller);
-    setRow(t, controller, action);
-    try {
-      if (action === 'adding') {
-        const data = await apiPost(
-          '/torrent/download',
-          {
-            magnet: t.magnet,
-            provider: t.provider,
-            desc: t.desc,
-            link: t.link,
-            infoHash: t.infoHash,
-            title: t.title,
-          },
-          { signal: controller.signal }
-        );
-        if (data.success !== true || typeof data.infoHash !== 'string') throw new Error('The server did not confirm the download. Check Downloads before retrying.');
-        setRow(t, controller, 'added');
-        if (mounted.current && !controller.signal.aborted) {
-          notify('Added to downloads.');
-          onDownloadAdded?.();
-        }
-      } else if (action === 'opening') {
-        const magnet = await resolveMagnet(t, controller);
-        if (!isCurrent(t, controller) || !active.current) return;
-        window.location.assign(magnet);
-      }
-    } catch (err) {
-      setRow(t, controller, previous || null);
-      if (isCurrent(t, controller)) notify(err.message || 'Could not complete the action.', 'error');
-    } finally {
-      if (action !== 'adding') setRow(t, controller, previous || null);
-      if (actions.current.get(t._id) === controller) actions.current.delete(t._id);
-    }
+    setSort((prev) => nextSortState(prev, key, 'relevance'));
   };
 
   const clear = () => {
@@ -303,9 +221,11 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
     setResults([]);
     setSearchedTerm('');
     setError('');
-    setRowState({});
+    clearRowState();
     setSort({ key: 'relevance', dir: 'desc' });
     setSource('all');
+    setQualityFilter('all');
+    setSelectedTags([]);
     setPage(1);
     setLoading(false);
     inputRef.current?.focus();
@@ -360,152 +280,135 @@ export function SearchPage({ notify, onDownloadAdded, initialQuery, isActive = t
       {error && <div className="notice notice-error" role="alert">{error}</div>}
 
       {hasResults && (
-        <div className="toolbar">
-          <span className="toolbar-summary" role="status">
-            {loading
-              ? 'Searching…'
-              : totalResults > pageSize
-              ? `Showing ${startIndex + 1}–${endIndex} of ${totalResults} results for “${searchedTerm}”`
-              : `${totalResults} result${totalResults === 1 ? '' : 's'} for “${searchedTerm}”`}
-          </span>
-          <div className="toolbar-actions">
-            {sources.length > 1 && (
-              <label className="select-wrap">
-                <span className="sr-only">Filter by source</span>
-                <select
-                  id="source-filter"
-                  value={source}
-                  onChange={(e) => {
-                    setSource(e.target.value);
-                    setPage(1);
-                  }}
-                >
-                  <option value="all">All sources ({sources.length})</option>
-                  {sources.map((s) => (
-                    <option key={s} value={s}>
-                      {s}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {totalResults > 20 && (
-              <label className="select-wrap">
-                <span className="sr-only">Results per page</span>
-                <select
-                  id="page-size-select"
-                  value={pageSize}
-                  onChange={(e) => {
-                    setPageSize(Number(e.target.value));
-                    setPage(1);
-                  }}
-                >
-                  <option value={20}>20 / page</option>
-                  <option value={25}>25 / page</option>
-                  <option value={50}>50 / page</option>
-                  <option value={100}>100 / page</option>
-                </select>
-              </label>
-            )}
+        <>
+          <div className="toolbar">
+            <span className="toolbar-summary" role="status">
+              {loading
+                ? 'Searching…'
+                : totalResults > pageSize
+                ? `Showing ${startIndex + 1}–${endIndex} of ${totalResults} results for “${searchedTerm}”`
+                : `${totalResults} result${totalResults === 1 ? '' : 's'} for “${searchedTerm}”`}
+            </span>
+            <div className="toolbar-actions">
+              {hasActiveFilters && (
+                <button type="button" className="btn btn-outline btn-sm search-filter-reset" onClick={resetFilters}>
+                  Reset filters
+                </button>
+              )}
+              {sources.length > 1 && (
+                <label className="select-wrap">
+                  <span className="sr-only">Filter by source</span>
+                  <select
+                    id="source-filter"
+                    value={source}
+                    onChange={(e) => {
+                      setSource(e.target.value);
+                      setPage(1);
+                    }}
+                  >
+                    <option value="all">All sources ({sources.length})</option>
+                    {sources.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              {(results.length > 20 || totalResults > 20) && (
+                <label className="select-wrap">
+                  <span className="sr-only">Results per page</span>
+                  <select
+                    id="page-size-select"
+                    value={pageSize}
+                    onChange={(e) => {
+                      setPageSize(Number(e.target.value));
+                      setPage(1);
+                    }}
+                  >
+                    <option value={20}>20 / page</option>
+                    <option value={25}>25 / page</option>
+                    <option value={50}>50 / page</option>
+                    <option value={100}>100 / page</option>
+                  </select>
+                </label>
+              )}
+            </div>
           </div>
-        </div>
+
+          {(qualityPills.length > 0 || tagPills.length > 0) && (
+            <div className="search-filters" role="region" aria-label="Filter search results">
+              {qualityPills.length > 0 && (
+                <div className="search-filter-row">
+                  <div className="segmented quality-segmented" role="group" aria-label="Quality filter">
+                    {qualityPills.map((f) => {
+                      const active = qualityFilter === f.id;
+                      return (
+                        <button
+                          key={f.id}
+                          type="button"
+                          className={`segment quality-segment ${active ? 'is-active' : ''}`}
+                          aria-pressed={active}
+                          onClick={() => {
+                            setQualityFilter(active && f.id !== 'all' ? 'all' : f.id);
+                            setPage(1);
+                          }}
+                        >
+                          <span>{f.label}</span>
+                          <span className="segment-count">{filterCounts.qualityCounts[f.id]}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {tagPills.length > 0 && (
+                <div className="search-filter-row" role="group" aria-label="Release tag filters">
+                  {tagPills.map((f) => {
+                    const active = selectedTags.includes(f.id);
+                    return (
+                      <button
+                        key={f.id}
+                        type="button"
+                        className={`filter-pill ${active ? 'is-active' : ''}`}
+                        aria-pressed={active}
+                        onClick={() => toggleTag(f.id)}
+                      >
+                        <span>{f.label}</span>
+                        <span className="filter-pill-count">{filterCounts.tagCounts[f.id]}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
 
       {hasResults ? (
         <>
-          <div ref={tableRef} className={`table-wrap ${loading ? 'is-stale' : ''}`} aria-busy={loading}>
-            <table className="table results-table">
-              <thead>
-                <tr>
-                  {COLUMNS.map((c) => (
-                    <th key={c.key} className={c.className} aria-sort={sort.key === c.key ? (sort.dir === 'asc' ? 'ascending' : 'descending') : 'none'}>
-                      <button className="th-btn" onClick={() => toggleSort(c.key)}>
-                        {c.label}
-                        <span className={`sort-caret ${sort.key === c.key ? 'is-on' : ''}`}>{sort.key === c.key && sort.dir === 'asc' ? '▴' : '▾'}</span>
-                      </button>
-                    </th>
-                  ))}
-                  <th className="col-actions">
-                    <span className="sr-only">Actions</span>
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {paginatedRows.map((t) => {
-                  const state = rowState[t._id];
-                  const busy = state === 'adding' || state === 'opening';
-                  const isDownloaded = Boolean(
-                    t.downloaded ||
-                    (t.infoHash && activeCompletedHashes.has(t.infoHash.toLowerCase()))
-                  );
-                  return (
-                    <tr key={t._id}>
-                      <td className="col-name">
-                        <div className="title-with-badge">
-                          <span className="cell-title" title={t.title}>
-                            {t.title}
-                          </span>
-                          {isDownloaded && (
-                            <span className="downloaded-badge" title="Previously downloaded">
-                              <Icon name="check" size={11} /> Downloaded
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="col-num mono">{t.size || '—'}</td>
-                      <td className={`col-num mono ${seedClass(formatSwarmCount(t.seeds))}`}>{formatSwarmCount(t.seeds)}</td>
-                      <td className="col-num mono muted">{formatSwarmCount(t.peers)}</td>
-                      <td className="col-source">
-                        <span className="provider-pill">{t.provider}</span>
-                      </td>
-                      <td className="col-actions">
-                        <div className="row-actions">
-                          <button
-                            className={`btn btn-sm ${
-                              state === 'added'
-                                ? 'btn-done'
-                                : isDownloaded
-                                ? 'btn-download-again'
-                                : 'btn-outline'
-                            }`}
-                            onClick={() => handleAction(t, 'adding')}
-                            disabled={busy || state === 'added'}
-                            aria-label={`${
-                              state === 'added'
-                                ? 'Added'
-                                : isDownloaded
-                                ? 'Download again'
-                                : 'Download'
-                            } ${t.title}`}
-                          >
-                            {state === 'added' ? (
-                              <>
-                                <Icon name="check" size={14} /> Added
-                              </>
-                            ) : state === 'adding' ? (
-                              'Adding…'
-                            ) : isDownloaded ? (
-                              <>
-                                <Icon name="refresh" size={13} /> Download again
-                              </>
-                            ) : (
-                              <>
-                                <Icon name="download" size={14} /> Download
-                              </>
-                            )}
-                          </button>
-                          <button className="icon-btn" disabled={busy} onClick={() => handleAction(t, 'opening')} title="Open magnet in desktop client" aria-label={`Open magnet for ${t.title}`}>
-                            <Icon name="magnet" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {rows.length === 0 && <p className="empty">No results match the current source filter.</p>}
-          </div>
+          <TorrentTable
+            rows={paginatedRows}
+            sort={sort}
+            onToggleSort={toggleSort}
+            rowState={rowState}
+            onAction={handleAction}
+            activeCompletedHashes={activeCompletedHashes}
+            loading={loading}
+            tableRef={tableRef}
+            emptyView={
+              <div className="empty empty-filtered">
+                <p>No results match the current filters.</p>
+                {hasActiveFilters && (
+                  <button type="button" className="btn btn-outline btn-sm" onClick={resetFilters}>
+                    Reset filters
+                  </button>
+                )}
+              </div>
+            }
+          />
 
           {totalPages > 1 && (
             <nav className="pagination" aria-label="Search results pagination">

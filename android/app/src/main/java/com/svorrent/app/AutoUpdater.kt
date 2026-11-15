@@ -24,7 +24,7 @@ data class UpdateState(
     val currentVersion: String = BuildConfig.VERSION_NAME,
     val currentSha: String = BuildConfig.GIT_SHA,
     val latestSha: String = BuildConfig.GIT_SHA,
-    val latestMessage: String = "Up to date · v${BuildConfig.VERSION_NAME} (${BuildConfig.GIT_SHA})",
+    val latestMessage: String = "Checking update status…",
     val downloadProgress: Int = 0,
     val apkDownloadUrl: String? = null,
     val browserReleaseApkUrl: String = AutoUpdater.PUBLIC_LATEST_APK_URL
@@ -353,6 +353,7 @@ object AutoUpdater {
     }
 
     suspend fun downloadAndInstallApk(context: Context, url: String) = withContext(Dispatchers.IO) {
+        if (_state.value.status == "downloading") return@withContext
         try {
             _state.value = _state.value.copy(
                 status = "downloading",
@@ -393,7 +394,11 @@ object AutoUpdater {
 
                 if (code !in 200..299) {
                     conn.disconnect()
-                    _state.value = _state.value.copy(status = "error", latestMessage = "Download failed (HTTP $code)")
+                    _state.value = _state.value.copy(
+                        status = "error",
+                        downloadProgress = 0,
+                        latestMessage = "Download failed (HTTP $code)"
+                    )
                     return@withContext
                 }
 
@@ -402,13 +407,18 @@ object AutoUpdater {
             }
 
             val conn = finalConnection ?: run {
-                _state.value = _state.value.copy(status = "error", latestMessage = "Too many redirects")
+                _state.value = _state.value.copy(
+                    status = "error",
+                    downloadProgress = 0,
+                    latestMessage = "Too many redirects"
+                )
                 return@withContext
             }
 
             val totalBytes = conn.contentLengthLong
             val totalBytesKnown = totalBytes > 0
             val outFile = getDownloadedApkFile(context)
+            outFile.parentFile?.mkdirs()
             if (outFile.exists()) outFile.delete()
 
             val buffer = ByteArray(64 * 1024)
@@ -462,7 +472,11 @@ object AutoUpdater {
                 triggerApkInstall(context, outFile)
             }
         } catch (e: Throwable) {
-            _state.value = _state.value.copy(status = "error", latestMessage = "Update failed: ${e.message}")
+            _state.value = _state.value.copy(
+                status = "error",
+                downloadProgress = 0,
+                latestMessage = "Update failed: ${e.message}"
+            )
         }
     }
 

@@ -18,6 +18,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
@@ -25,6 +26,9 @@ import java.net.InetAddress
 import java.net.Socket
 import java.net.URL
 import java.net.URLEncoder
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.TimeZone
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -48,9 +52,29 @@ object SearchRepository {
 
     private val INDEXER_HOSTS = listOf(
         "apibay.org",
+        "api.knaben.org",
         "bitsearch.eu",
         "torrents-csv.com",
-        "nyaa.si"
+        "nyaa.si",
+        "extto.org",
+        "eztvx.to"
+    )
+
+    private val KNABEN_TRACKER_LABELS = mapOf(
+        "1337x" to "1337x",
+        "thepiratebay" to "ThePirateBay",
+        "tpb" to "ThePirateBay",
+        "yts" to "YTS",
+        "eztv" to "EZTV",
+        "rarbg" to "RARBG",
+        "rutracker" to "RuTracker",
+        "nyaa" to "Nyaa",
+        "torrentgalaxy" to "TorrentGalaxy",
+        "tgx" to "TorrentGalaxy",
+        "solidtorrents" to "SolidTorrents",
+        "kickass" to "KickAss",
+        "limetorrents" to "Limetorrents",
+        "ext" to "extto.org"
     )
 
     // Precompiled regular expressions to avoid per-item Pattern.compile overhead
@@ -385,18 +409,27 @@ object SearchRepository {
         parsed: URL,
         headers: Map<String, String>,
         connectMs: Int,
-        readMs: Int
+        readMs: Int,
+        method: String = "GET",
+        bodyBytes: ByteArray? = null
     ): String {
         var conn: HttpURLConnection? = null
         try {
             conn = (parsed.openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
+                requestMethod = method
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile; Svorrent/${BuildConfig.VERSION_NAME})")
                 for ((k, v) in headers) {
                     setRequestProperty(k, v)
                 }
                 connectTimeout = connectMs
                 readTimeout = readMs
+                if (bodyBytes != null) {
+                    doOutput = true
+                    setFixedLengthStreamingMode(bodyBytes.size)
+                }
+            }
+            if (bodyBytes != null) {
+                conn.outputStream.use { it.write(bodyBytes) }
             }
             val code = conn.responseCode
             if (code !in 200..299) {
@@ -413,7 +446,9 @@ object SearchRepository {
         resolvedIp: String,
         headers: Map<String, String>,
         connectMs: Int,
-        readMs: Int
+        readMs: Int,
+        method: String = "GET",
+        bodyBytes: ByteArray? = null
     ): String {
         val sniHost = parsed.host
         val baseFactory = SSLSocketFactory.getDefault() as SSLSocketFactory
@@ -443,6 +478,7 @@ object SearchRepository {
         try {
             httpsConn = (ipUrl.openConnection() as HttpsURLConnection).apply {
                 sslSocketFactory = sniFactory
+                requestMethod = method
                 setRequestProperty("Host", sniHost)
                 setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile; Svorrent/${BuildConfig.VERSION_NAME})")
                 for ((k, v) in headers) {
@@ -453,6 +489,13 @@ object SearchRepository {
                 }
                 connectTimeout = connectMs
                 readTimeout = readMs
+                if (bodyBytes != null) {
+                    doOutput = true
+                    setFixedLengthStreamingMode(bodyBytes.size)
+                }
+            }
+            if (bodyBytes != null) {
+                httpsConn.outputStream.use { it.write(bodyBytes) }
             }
             val code = httpsConn.responseCode
             if (code !in 200..299) {
@@ -462,6 +505,65 @@ object SearchRepository {
         } finally {
             runCatching { httpsConn?.disconnect() }
         }
+    }
+
+    internal suspend fun fetchBytesWithLimit(
+        targetUrl: String,
+        maxBytes: Int = 1_500_000,
+        connectMs: Int = 3500,
+        readMs: Int = 4500
+    ): ByteArray? = withContext(Dispatchers.IO) {
+        var currentUrl = targetUrl
+        var hops = 0
+        while (hops < 4) {
+            var conn: HttpURLConnection? = null
+            try {
+                val parsed = URL(currentUrl)
+                if (!parsed.protocol.equals("https", ignoreCase = true)) return@withContext null
+                conn = (parsed.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "GET"
+                    instanceFollowRedirects = false
+                    setRequestProperty("User-Agent", "Mozilla/5.0 (Android; Mobile; Svorrent/${BuildConfig.VERSION_NAME})")
+                    setRequestProperty("Accept", "image/webp,image/jpeg,image/png,image/*;q=0.8")
+                    connectTimeout = connectMs
+                    readTimeout = readMs
+                }
+                val code = conn.responseCode
+                if (code in 300..399) {
+                    val location = conn.getHeaderField("Location") ?: return@withContext null
+                    val nextUrl = URL(parsed, location).toString()
+                    if (!DiscoverRepository.isAllowedPosterUrl(nextUrl)) return@withContext null
+                    currentUrl = nextUrl
+                    hops++
+                    continue
+                }
+                if (code !in 200..299) return@withContext null
+                val contentType = conn.contentType ?: ""
+                if (contentType.isNotBlank() && !contentType.startsWith("image/", ignoreCase = true)) {
+                    return@withContext null
+                }
+                val declaredLen = conn.contentLength
+                if (declaredLen > maxBytes) return@withContext null
+                val buffer = ByteArray(16 * 1024)
+                val out = ByteArrayOutputStream(if (declaredLen in 1..maxBytes) declaredLen else 32 * 1024)
+                conn.inputStream.use { input ->
+                    var total = 0
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read <= 0) break
+                        total += read
+                        if (total > maxBytes) return@withContext null
+                        out.write(buffer, 0, read)
+                    }
+                }
+                return@withContext out.toByteArray()
+            } catch (_: Throwable) {
+                return@withContext null
+            } finally {
+                runCatching { conn?.disconnect() }
+            }
+        }
+        null
     }
 
     fun fetchUrlWithDoHFallback(targetUrl: String, headers: Map<String, String> = emptyMap()): String {
@@ -482,9 +584,34 @@ object SearchRepository {
         return fetchViaDoHIp(parsed, resolvedIp, headers, connectMs = 2200, readMs = 3200)
     }
 
-    private suspend fun fetchUrlFast(
+    internal suspend fun fetchUrlFast(
         targetUrl: String,
         headers: Map<String, String> = emptyMap()
+    ): String = requestUrlFast(targetUrl, headers, method = "GET", bodyBytes = null)
+
+    internal suspend fun postJsonFast(
+        targetUrl: String,
+        jsonBody: String,
+        headers: Map<String, String> = emptyMap()
+    ): String {
+        val mergedHeaders = LinkedHashMap<String, String>(headers.size + 2).apply {
+            put("Content-Type", "application/json")
+            put("Accept", "application/json")
+            putAll(headers)
+        }
+        return requestUrlFast(
+            targetUrl = targetUrl,
+            headers = mergedHeaders,
+            method = "POST",
+            bodyBytes = jsonBody.toByteArray(Charsets.UTF_8)
+        )
+    }
+
+    private suspend fun requestUrlFast(
+        targetUrl: String,
+        headers: Map<String, String> = emptyMap(),
+        method: String = "GET",
+        bodyBytes: ByteArray? = null
     ): String = withContext(Dispatchers.IO) {
         val parsed = URL(targetUrl)
         val host = parsed.host
@@ -503,7 +630,7 @@ object SearchRepository {
             return@withContext try {
                 val ip = resolveViaDoH(host)
                     ?: throw IOException("Could not resolve $host via DoH")
-                fetchViaDoHIp(parsed, ip, headers, connectMs = 2000, readMs = 2800)
+                fetchViaDoHIp(parsed, ip, headers, connectMs = 2000, readMs = 3000, method = method, bodyBytes = bodyBytes)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -517,7 +644,7 @@ object SearchRepository {
 
         val directJob = networkRaceScope.launch {
             val res = runCatching {
-                fetchDirect(parsed, headers, connectMs = 1500, readMs = 2500)
+                fetchDirect(parsed, headers, connectMs = 1500, readMs = 2800, method = method, bodyBytes = bodyBytes)
             }
             if (res.exceptionOrNull() is CancellationException) return@launch
             if (res.isFailure) {
@@ -536,7 +663,7 @@ object SearchRepository {
             val res = runCatching {
                 val ip = resolveViaDoH(host)
                     ?: throw IOException("Could not resolve $host via DoH")
-                fetchViaDoHIp(parsed, ip, headers, connectMs = 2000, readMs = 2800)
+                fetchViaDoHIp(parsed, ip, headers, connectMs = 2000, readMs = 3000, method = method, bodyBytes = bodyBytes)
             }
             if (!isActive || res.exceptionOrNull() is CancellationException) return@launch
             outcome.trySend(res)
@@ -564,11 +691,12 @@ object SearchRepository {
     }
 
     // 1. ThePirateBay (apibay.org JSON API)
-    private fun parseThePirateBayJson(raw: String): List<SearchResultItem> {
+    internal fun parseThePirateBayJson(raw: String, maxItems: Int = Int.MAX_VALUE): List<SearchResultItem> {
         val arr = JSONArray(raw)
-        val results = ArrayList<SearchResultItem>(arr.length())
+        val cap = minOf(arr.length(), maxItems)
+        val results = ArrayList<SearchResultItem>(cap)
 
-        for (i in 0 until arr.length()) {
+        for (i in 0 until cap) {
             val obj = arr.getJSONObject(i)
             val name = decodeHtmlEntities(stripHtmlTags(obj.optString("name", "")))
             val infoHash = obj.optString("info_hash", "").trim().lowercase()
@@ -579,6 +707,9 @@ object SearchRepository {
             val sizeBytes = obj.optString("size", "0").toLongOrNull() ?: 0L
             val seeds = sanitizeSwarmCount(obj.opt("seeders"))
             val leechers = sanitizeSwarmCount(obj.opt("leechers"))
+            val addedSec = obj.optString("added", "0").toLongOrNull() ?: 0L
+            val age = if (addedSec > 1_000_000_000L) Formatters.formatRelativeAgeFromMs(addedSec * 1000L) else ""
+            val imdbId = obj.optString("imdb", "").trim().takeIf { it.matches(Regex("""^tt\d+$""", RegexOption.IGNORE_CASE)) } ?: ""
             val catCode = obj.optString("category", "200").toIntOrNull() ?: 200
             val catName = when (catCode / 100) {
                 1 -> "Audio"
@@ -599,7 +730,9 @@ object SearchRepository {
                     provider = "ThePirateBay",
                     infoHash = infoHash,
                     magnet = buildMagnetUri(infoHash, name),
-                    category = catName
+                    category = catName,
+                    age = age,
+                    imdbId = imdbId
                 )
             )
         }
@@ -733,10 +866,11 @@ object SearchRepository {
     }
 
     // 4. Nyaa (Anime & Media RSS Feed)
-    private fun parseNyaaXml(xml: String): List<SearchResultItem> {
+    internal fun parseNyaaXml(xml: String, maxItems: Int = Int.MAX_VALUE): List<SearchResultItem> {
         val results = mutableListOf<SearchResultItem>()
 
         for (match in NYAA_ITEM_REGEX.findAll(xml)) {
+            if (results.size >= maxItems) break
             val item = match.groupValues[1]
 
             val titleMatch = NYAA_TITLE_REGEX.find(item)
@@ -782,6 +916,132 @@ object SearchRepository {
         return parseNyaaXml(xml)
     }
 
+    // 5. Knaben (Aggregated Public Indexer JSON API)
+    internal fun parseIsoDateMs(raw: String?): Long? {
+        if (raw.isNullOrBlank()) return null
+        val trimmed = raw.trim()
+        val formats = arrayOf(
+            "yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+            "yyyy-MM-dd'T'HH:mm:ss'Z'",
+            "yyyy-MM-dd'T'HH:mm:ssXXX",
+            "yyyy-MM-dd HH:mm:ss"
+        )
+        for (pattern in formats) {
+            try {
+                val sdf = SimpleDateFormat(pattern, Locale.US).apply {
+                    timeZone = TimeZone.getTimeZone("UTC")
+                }
+                val parsed = sdf.parse(trimmed)
+                if (parsed != null) return parsed.time
+            } catch (_: Throwable) {
+            }
+        }
+        return null
+    }
+
+    internal fun parseKnabenHits(rawJson: String, categoryFilter: Regex? = null): List<SearchResultItem> {
+        val root = JSONObject(rawJson)
+        val hits = root.optJSONArray("hits") ?: return emptyList()
+        val results = ArrayList<SearchResultItem>(hits.length())
+
+        for (i in 0 until hits.length()) {
+            val hit = hits.optJSONObject(i) ?: continue
+            val title = decodeHtmlEntities(stripHtmlTags(hit.optString("title", ""))).trim()
+            if (title.isEmpty()) continue
+            val categoryStr = hit.optString("category", "")
+            if (categoryFilter != null && !categoryFilter.containsMatchIn(categoryStr)) continue
+
+            val trackerKey = hit.optString("trackerId", "").trim().lowercase(Locale.US)
+            val provider = KNABEN_TRACKER_LABELS[trackerKey]
+                ?: hit.optString("tracker", "Knaben").trim().ifEmpty { "Knaben" }
+
+            val seeds = maxOf(
+                sanitizeSwarmCount(hit.opt("liveSeeders")),
+                sanitizeSwarmCount(hit.opt("seeders"))
+            )
+            val peers = maxOf(
+                sanitizeSwarmCount(hit.opt("livePeers")),
+                sanitizeSwarmCount(hit.opt("peers"))
+            )
+            val sizeBytes = hit.optLong("bytes", 0L).coerceAtLeast(0L)
+            val rawHash = hit.optString("hash", "").trim().lowercase(Locale.US)
+            val magnetCandidate = hit.optString("magnetUrl", hit.optString("link", "")).trim()
+            val resolvedHash = extractInfoHash(rawHash).ifEmpty { extractInfoHash(magnetCandidate) }
+            val magnet = when {
+                magnetCandidate.startsWith("magnet:?xt=urn:btih:", ignoreCase = true) -> magnetCandidate
+                resolvedHash.length == 40 -> buildMagnetUri(resolvedHash, title)
+                else -> ""
+            }
+            if (magnet.isEmpty() && resolvedHash.isEmpty()) continue
+
+            val parsedMs = parseIsoDateMs(hit.optString("date", ""))
+            val age = if (parsedMs != null) Formatters.formatRelativeAgeFromMs(parsedMs) else ""
+            val detailUrl = hit.optString("details", "").trim()
+            val id = resolvedHash.ifEmpty { hit.optString("id", title) }
+
+            results.add(
+                SearchResultItem(
+                    id = id,
+                    title = title,
+                    sizeBytes = sizeBytes,
+                    sizeFormatted = Formatters.formatBytes(sizeBytes),
+                    seeds = seeds,
+                    leechers = peers,
+                    provider = provider,
+                    infoHash = resolvedHash,
+                    magnet = magnet,
+                    category = "Video",
+                    age = age,
+                    detailUrl = detailUrl
+                )
+            )
+        }
+        return results
+    }
+
+    internal suspend fun queryKnabenRaw(bodyJson: String): String {
+        return postJsonFast("https://api.knaben.org/v1", bodyJson)
+    }
+
+    private suspend fun searchKnabenFast(query: String, size: Int = 100): List<SearchResultItem> {
+        val body = JSONObject().apply {
+            put("search_field", "title")
+            put("query", query.trim())
+            put("order_by", "seeders")
+            put("order_direction", "desc")
+            put("from", 0)
+            put("size", size.coerceIn(1, 150))
+            put("hide_unsafe", false)
+            put("hide_xxx", false)
+        }.toString()
+        return parseKnabenHits(queryKnabenRaw(body))
+    }
+
+    suspend fun resolveMagnet(item: SearchResultItem): String {
+        if (item.magnet.startsWith("magnet:?xt=urn:btih:", ignoreCase = true)) {
+            return item.magnet
+        }
+        if (item.infoHash.length == 40) {
+            return buildMagnetUri(item.infoHash, item.title)
+        }
+        val detail = item.detailUrl.trim()
+        val exttoPathRegex = Regex("""^https://extto\.org(/post-detail/[a-zA-Z0-9_-]+(?:/[a-zA-Z0-9._-]+)?/?)$""")
+        val match = exttoPathRegex.matchEntire(detail)
+        if (match != null) {
+            val safeUrl = "https://extto.org${match.groupValues[1]}"
+            val html = fetchUrlFast(safeUrl, mapOf("Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"))
+            val magnetMatch = Regex("""href="(magnet:\?[^"]+)"""", RegexOption.IGNORE_CASE).find(html)
+            if (magnetMatch != null) {
+                return decodeHtmlEntities(magnetMatch.groupValues[1]).trim()
+            }
+            val hashMatch = Regex("""\b([a-fA-F0-9]{40})\b""").find(html)
+            if (hashMatch != null) {
+                return buildMagnetUri(hashMatch.groupValues[1].lowercase(Locale.US), item.title)
+            }
+        }
+        return ""
+    }
+
     private fun deduplicateAndRank(
         rawResults: List<SearchResultItem>,
         lowerQuery: String,
@@ -813,11 +1073,12 @@ object SearchRepository {
 
             if (existing != null) {
                 if (item.seeds > existing.seeds) {
-                    val merged = if (item.magnet.isEmpty() && existing.magnet.isNotEmpty()) {
-                        item.copy(magnet = existing.magnet)
-                    } else {
-                        item
-                    }
+                    val merged = item.copy(
+                        magnet = if (item.magnet.isEmpty()) existing.magnet else item.magnet,
+                        age = item.age.ifEmpty { existing.age },
+                        imdbId = item.imdbId.ifEmpty { existing.imdbId },
+                        detailUrl = item.detailUrl.ifEmpty { existing.detailUrl }
+                    )
                     if (infoHash.isNotEmpty()) seenByHash[infoHash] = merged
                     if (titleKey.isNotEmpty()) seenByTitle[titleKey] = merged
                 }
@@ -888,8 +1149,8 @@ object SearchRepository {
             val successfulProviders = AtomicInteger(0)
 
             val batchChannel = Channel<List<SearchResultItem>>(Channel.UNLIMITED)
-            val remainingProviders = AtomicInteger(4)
-            val providerJobs = ArrayList<Job>(4)
+            val remainingProviders = AtomicInteger(5)
+            val providerJobs = ArrayList<Job>(5)
 
             fun markProviderFinished() {
                 if (remainingProviders.decrementAndGet() == 0) {
@@ -960,6 +1221,22 @@ object SearchRepository {
                 try {
                     val list = runCatching {
                         val res = searchBitSearchFast(clean, page = 1)
+                        successfulProviders.incrementAndGet()
+                        res
+                    }.getOrDefault(emptyList())
+                    if (isActive && list.isNotEmpty()) {
+                        batchChannel.trySend(list)
+                    }
+                } finally {
+                    markProviderFinished()
+                }
+            })
+
+            // 5. Knaben (Aggregated public tracker JSON API)
+            providerJobs.add(networkRaceScope.launch {
+                try {
+                    val list = runCatching {
+                        val res = searchKnabenFast(clean)
                         successfulProviders.incrementAndGet()
                         res
                     }.getOrDefault(emptyList())

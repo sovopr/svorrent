@@ -278,12 +278,23 @@ fun SvorrentApp() {
     val updateState by AutoUpdater.state.collectAsState()
 
     var currentTab by remember { mutableStateOf("search") }
+    var externalSearchQuery by remember { mutableStateOf<String?>(null) }
+    var externalSearchNonce by remember { mutableStateOf(0) }
     var swarmTarget by remember { mutableStateOf<TorrentItem?>(null) }
     var detailsTarget by remember { mutableStateOf<TorrentItem?>(null) }
     var showUpdateModal by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         launch { SearchRepository.prewarmIndexers() }
+        launch {
+            delay(350L)
+            DiscoverRepository.warmCacheInBackground()
+        }
+        launch {
+            SvorrentEngine.reconcileMessages.collect { msg ->
+                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+            }
+        }
         val st = AutoUpdater.checkForUpdatesIfStale()
         if (st.status == "idle") {
             delay(6000L)
@@ -322,7 +333,7 @@ fun SvorrentApp() {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        modifier = Modifier.clickable { currentTab = "search" }
+                        modifier = Modifier.clickable { currentTab = "homepage" }
                     ) {
                         SigmaBrandLogo(size = 20.dp)
                         Text(
@@ -387,10 +398,17 @@ fun SvorrentApp() {
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(38.dp)
+                        .horizontalScroll(rememberScrollState())
                         .padding(horizontal = 10.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    TopNavTab(
+                        label = "Homepage",
+                        badgeCount = null,
+                        selected = currentTab == "homepage",
+                        onClick = { currentTab = "homepage" }
+                    )
                     TopNavTab(
                         label = "Search",
                         badgeCount = null,
@@ -422,7 +440,19 @@ fun SvorrentApp() {
                 .background(BgDark)
         ) {
             when (currentTab) {
+                "homepage" -> HomepageScreen(
+                    onNavigateToSearch = { searchQuery ->
+                        externalSearchQuery = searchQuery
+                        externalSearchNonce++
+                        currentTab = "search"
+                    },
+                    onMagnetAdded = {
+                        currentTab = "downloads"
+                    }
+                )
                 "search" -> SearchScreen(
+                    externalQuery = externalSearchQuery,
+                    externalQueryNonce = externalSearchNonce,
                     onMagnetAdded = {
                         currentTab = "downloads"
                     }
@@ -498,7 +528,7 @@ private fun TopNavTab(
         modifier = Modifier
             .fillMaxHeight()
             .clickable(onClick = onClick)
-            .padding(horizontal = 10.dp),
+            .padding(horizontal = 8.dp),
         verticalArrangement = Arrangement.SpaceBetween,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
@@ -541,14 +571,26 @@ private fun TopNavTab(
 }
 
 @Composable
-fun SearchScreen(onMagnetAdded: () -> Unit) {
+fun SearchScreen(
+    externalQuery: String? = null,
+    externalQueryNonce: Int = 0,
+    onMagnetAdded: () -> Unit
+) {
     val context = LocalContext.current
     val focusManager = LocalFocusManager.current
     val scope = rememberCoroutineScope()
+    val completedHashes by DownloadHistoryManager.completedHashes.collectAsState()
+    val liveTorrents by SvorrentEngine.torrents.collectAsState()
+    val activeDownloadHashes = remember(liveTorrents) {
+        liveTorrents.filter { it.done }.map { it.infoHash }.toSet()
+    }
 
     var query by remember { mutableStateOf("") }
     var searchedQuery by remember { mutableStateOf("") }
     var sortBy by remember { mutableStateOf("relevance") }
+    var qualityFilter by remember { mutableStateOf("all") }
+    var tagFilters by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var sourceFilter by remember { mutableStateOf("all") }
     var currentPage by remember { mutableStateOf(1) }
     val pageSize = 20
     var loading by remember { mutableStateOf(false) }
@@ -559,8 +601,15 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
     var activeSearchGen by remember { mutableStateOf(0) }
     val hexHashRegex = remember { Regex("^[0-9a-fA-F]{40}$") }
 
-    fun triggerSearch() {
-        val term = query.trim()
+    fun resetFilters() {
+        qualityFilter = "all"
+        tagFilters = emptySet()
+        sourceFilter = "all"
+        currentPage = 1
+    }
+
+    fun triggerSearch(overrideTerm: String? = null) {
+        val term = (overrideTerm ?: query).trim()
         if (term.isEmpty()) return
         if (term.startsWith("magnet:?", ignoreCase = true) || term.matches(hexHashRegex)) {
             SvorrentEngine.addMagnet(term).onSuccess {
@@ -581,6 +630,9 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
         loading = true
         syncingMore = true
         error = null
+        qualityFilter = "all"
+        tagFilters = emptySet()
+        sourceFilter = "all"
         currentPage = 1
         results = emptyList()
         searchedQuery = ""
@@ -613,11 +665,39 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
         }
     }
 
-    val sortedResults = remember(results, sortBy) {
+    LaunchedEffect(externalQueryNonce) {
+        if (externalQueryNonce > 0 && !externalQuery.isNullOrBlank()) {
+            query = externalQuery
+            triggerSearch(externalQuery)
+        }
+    }
+
+    val sources = remember(results) {
+        results.map { it.provider }.filter { it.isNotBlank() }.distinct()
+    }
+    val filterCounts = remember(results, sourceFilter, qualityFilter, tagFilters) {
+        SearchFilterHelper.getFilterCounts(
+            results = results,
+            source = sourceFilter,
+            quality = qualityFilter,
+            tags = tagFilters
+        )
+    }
+    val filteredResults = remember(results, sourceFilter, qualityFilter, tagFilters) {
+        SearchFilterHelper.filterResults(
+            results = results,
+            source = sourceFilter,
+            quality = qualityFilter,
+            tags = tagFilters
+        )
+    }
+    val hasActiveFilters = qualityFilter != "all" || tagFilters.isNotEmpty() || sourceFilter != "all"
+
+    val sortedResults = remember(filteredResults, sortBy) {
         when (sortBy) {
-            "size" -> results.sortedByDescending { it.sizeBytes }
-            "seeds" -> results.sortedByDescending { it.seeds }
-            else -> results
+            "size" -> filteredResults.sortedByDescending { it.sizeBytes }
+            "seeds" -> filteredResults.sortedByDescending { it.seeds }
+            else -> filteredResults
         }
     }
 
@@ -769,6 +849,99 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
                     }
                 }
             }
+
+            if (results.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(7.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    SearchFilterHelper.QUALITY_FILTERS.forEach { qf ->
+                        val count = filterCounts.qualityCounts[qf.id] ?: 0
+                        val available = qf.id == "all" || (filterCounts.availableQualities[qf.id] == true)
+                        if (available || qualityFilter == qf.id) {
+                            val active = qualityFilter == qf.id
+                            FilterPillChip(
+                                label = if (qf.id == "all") qf.label else "${qf.label} $count",
+                                active = active,
+                                onClick = {
+                                    qualityFilter = if (active && qf.id != "all") "all" else qf.id
+                                    currentPage = 1
+                                }
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(5.dp))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    SearchFilterHelper.TAG_FILTERS.forEach { tf ->
+                        val count = filterCounts.tagCounts[tf.id] ?: 0
+                        val active = tagFilters.contains(tf.id)
+                        if (count > 0 || active) {
+                            FilterPillChip(
+                                label = "${tf.label} $count",
+                                active = active,
+                                accent = true,
+                                onClick = {
+                                    tagFilters = if (active) tagFilters - tf.id else tagFilters + tf.id
+                                    currentPage = 1
+                                }
+                            )
+                        }
+                    }
+
+                    if (sources.size > 1) {
+                        FilterPillChip(
+                            label = "All sources",
+                            active = sourceFilter == "all",
+                            onClick = {
+                                sourceFilter = "all"
+                                currentPage = 1
+                            }
+                        )
+                        sources.forEach { src ->
+                            val active = sourceFilter == src
+                            FilterPillChip(
+                                label = src,
+                                active = active,
+                                onClick = {
+                                    sourceFilter = if (active) "all" else src
+                                    currentPage = 1
+                                }
+                            )
+                        }
+                    }
+
+                    if (hasActiveFilters) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(4.dp))
+                                .border(1.dp, AccentBlue.copy(alpha = 0.5f), RoundedCornerShape(4.dp))
+                                .background(AccentBlue.copy(alpha = 0.12f))
+                                .clickable { resetFilters() }
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
+                        ) {
+                            Text(
+                                text = "Reset filters",
+                                color = AccentBlue,
+                                fontSize = 10.5.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                softWrap = false
+                            )
+                        }
+                    }
+                }
+            }
         }
 
         Spacer(modifier = Modifier.height(10.dp))
@@ -791,18 +964,29 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
                 CircularProgressIndicator(color = AccentBlue, strokeWidth = 2.dp, modifier = Modifier.size(28.dp))
             }
         } else if (searchedQuery.isNotEmpty() && sortedResults.isEmpty() && !syncingMore) {
-            Box(
+            Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(top = 56.dp, start = 16.dp, end = 16.dp),
-                contentAlignment = Alignment.Center
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 Text(
-                    text = "Nothing found for \"$searchedQuery\". Try fewer or different keywords.",
+                    text = if (results.isNotEmpty() && hasActiveFilters) {
+                        "No results match your selected filters."
+                    } else {
+                        "Nothing found for \"$searchedQuery\". Try fewer or different keywords."
+                    },
                     color = TextSecondary,
                     fontSize = 13.sp,
                     textAlign = TextAlign.Center
                 )
+                if (results.isNotEmpty() && hasActiveFilters) {
+                    CompactActionBtn(
+                        label = "Reset filters",
+                        onClick = { resetFilters() }
+                    )
+                }
             }
         } else if (searchedQuery.isNotEmpty()) {
             Column(
@@ -815,7 +999,11 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
                         .border(1.dp, BorderDark, RoundedCornerShape(6.dp))
                         .background(SurfaceDark, RoundedCornerShape(6.dp))
                 ) {
-                    items(pagedResults, key = { it.id }) { item ->
+                    itemsIndexed(pagedResults, key = { idx, it -> "$idx:${it.provider}:${it.id}:${it.sizeBytes}" }) { _, item ->
+                        val isDownloaded = remember(item, completedHashes, activeDownloadHashes) {
+                            (item.infoHash.isNotEmpty() && activeDownloadHashes.contains(item.infoHash.lowercase())) ||
+                                DownloadHistoryManager.isItemDownloaded(item)
+                        }
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -829,7 +1017,63 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis
                             )
-                            Spacer(modifier = Modifier.height(8.dp))
+                            Spacer(modifier = Modifier.height(6.dp))
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(Surface2Dark)
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = item.provider,
+                                        color = TextSecondary,
+                                        fontSize = 10.sp,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                                if (item.age.isNotEmpty()) {
+                                    Text(
+                                        text = item.age,
+                                        color = TextMuted,
+                                        fontSize = 10.5.sp,
+                                        maxLines = 1,
+                                        softWrap = false
+                                    )
+                                }
+                                if (isDownloaded) {
+                                    Row(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .border(1.dp, OkGreen.copy(alpha = 0.45f), RoundedCornerShape(4.dp))
+                                            .background(OkGreen.copy(alpha = 0.14f))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Check,
+                                            contentDescription = null,
+                                            tint = OkGreen,
+                                            modifier = Modifier.size(11.dp)
+                                        )
+                                        Text(
+                                            text = "Downloaded",
+                                            color = OkGreen,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1,
+                                            softWrap = false
+                                        )
+                                    }
+                                }
+                            }
+                            Spacer(modifier = Modifier.height(7.dp))
 
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
@@ -891,7 +1135,7 @@ fun SearchScreen(onMagnetAdded: () -> Unit) {
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
-                                        text = "↓ Download",
+                                        text = if (isDownloaded) "Download again" else "↓ Download",
                                         color = TextPrimary,
                                         fontSize = 11.5.sp,
                                         fontWeight = FontWeight.Medium,
@@ -1816,6 +2060,8 @@ fun UpdateDialog(
                         "ready" -> "The update APK has been downloaded. Tap “Install Update” to proceed with system installation."
                         "downloading" -> "Downloading Svorrent.apk update from GitHub Releases…"
                         "available" -> "A newer version of Svorrent is available. Tap “Download & Install” to update."
+                        "idle", "checking" -> "Checking repository for newer Android builds…"
+                        "error" -> "Update check encountered an error. Tap “Check” to retry or download manually below."
                         else -> "Your app is running the latest build. Tap “Download Latest APK” below to manually re-download if needed."
                     },
                     color = TextMuted,

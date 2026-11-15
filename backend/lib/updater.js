@@ -14,6 +14,56 @@ import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
 
+function resolveBackendDir() {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+}
+
+function readBundledPackageVersion() {
+  try {
+    const pkgPath = path.join(resolveBackendDir(), 'package.json');
+    const parsed = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+    if (typeof parsed?.version === 'string' && parsed.version.trim()) {
+      return parsed.version.trim();
+    }
+  } catch {
+    // Fall through if package.json cannot be read
+  }
+  return '0.0.0';
+}
+
+function combineSignals(primarySignal, timeoutMs) {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  if (typeof AbortSignal.any === 'function' && primarySignal) {
+    return AbortSignal.any([primarySignal, timeoutSignal]);
+  }
+  return primarySignal || timeoutSignal;
+}
+
+async function streamResponseToFile(response, fileStream, onChunk) {
+  if (!response.body) {
+    throw new Error('Response body is empty');
+  }
+  const reader = response.body.getReader();
+  const readable = new Readable({
+    async read() {
+      try {
+        const { done, value } = await reader.read();
+        if (done) {
+          this.push(null);
+        } else {
+          this.push(Buffer.from(value));
+        }
+      } catch (err) {
+        this.destroy(err);
+      }
+    },
+  });
+  if (onChunk) {
+    readable.on('data', onChunk);
+  }
+  await pipeline(readable, fileStream);
+}
+
 export function parseSemver(versionStr) {
   if (typeof versionStr !== 'string') return [0, 0, 0];
   const clean = versionStr.replace(/^v/i, '').trim();
@@ -38,7 +88,7 @@ export function isNewerVersion(currentVer, latestVer) {
 
 export class AutoUpdater {
   constructor(options = {}) {
-    this.currentVersion = options.currentVersion || '1.0.5';
+    this.currentVersion = options.currentVersion || readBundledPackageVersion();
     this.currentCommit = options.currentCommit || null;
     this.platform = options.platform || process.platform;
     this.repo = options.repo || 'sovopr/svorrent';
@@ -64,6 +114,13 @@ export class AutoUpdater {
     };
     this.checkTimer = null;
     this.abortController = null;
+    this._activeCheckPromise = null;
+    this._activeIntegration = null;
+  }
+
+  ensureCacheDir() {
+    fs.mkdirSync(this.cacheDir, { recursive: true });
+    return this.cacheDir;
   }
 
   resolveCacheDir() {
@@ -78,7 +135,7 @@ export class AutoUpdater {
   }
 
   start() {
-    fs.mkdirSync(this.cacheDir, { recursive: true });
+    this.ensureCacheDir();
     // Run an initial check 5 seconds after startup
     setTimeout(() => {
       this.checkForUpdates().catch(() => {});
@@ -179,17 +236,21 @@ export class AutoUpdater {
     return true;
   }
 
-  persistCurrentCommit(sha) {
+  persistCurrentCommit(sha, backendDir = resolveBackendDir()) {
     this.currentCommit = sha;
     try {
-      const currentBackendDir = path.resolve(__dirname, '..');
+      const currentBackendDir = backendDir;
       const currentAppRoot = path.resolve(currentBackendDir, '..');
-      const buildInfoPath = path.join(currentAppRoot, 'build-info.json');
-      if (fs.existsSync(buildInfoPath)) {
-        const existing = JSON.parse(fs.readFileSync(buildInfoPath, 'utf8'));
-        existing.commit = sha;
-        existing.updatedAt = new Date().toISOString();
-        fs.writeFileSync(buildInfoPath, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+      for (const buildInfoPath of [
+        path.join(currentBackendDir, 'build-info.json'),
+        path.join(currentAppRoot, 'build-info.json'),
+      ]) {
+        if (fs.existsSync(buildInfoPath)) {
+          const existing = JSON.parse(fs.readFileSync(buildInfoPath, 'utf8'));
+          existing.commit = sha;
+          existing.updatedAt = new Date().toISOString();
+          fs.writeFileSync(buildInfoPath, JSON.stringify(existing, null, 2) + '\n', 'utf8');
+        }
       }
     } catch {
       // Ignore if read-only
@@ -272,8 +333,78 @@ export class AutoUpdater {
   }
 
   async integrateRepoCommit(commitSha) {
+    const normalizedSha = String(commitSha || '').toLowerCase();
+    if (this._activeIntegration?.commitSha === normalizedSha) {
+      return this._activeIntegration.promise;
+    }
+    if (this._activeIntegration && this.abortController) {
+      this.abortController.abort(new Error('Superseded by newer commit'));
+    }
+    const runPromise = this._executeIntegrateRepoCommit(normalizedSha).finally(() => {
+      if (this._activeIntegration?.promise === runPromise) {
+        this._activeIntegration = null;
+      }
+    });
+    this._activeIntegration = { commitSha: normalizedSha, promise: runPromise };
+    return runPromise;
+  }
+
+  ensureStagedFrontendDeps(stagedFrontendDir, currentAppRoot, symlinkType, npmBin, buildEnv) {
+    const localRepoFrontendModules = path.join(currentAppRoot, 'frontend', 'node_modules');
+    const stagedFrontendModules = path.join(stagedFrontendDir, 'node_modules');
+    if (fs.existsSync(stagedFrontendModules)) return null;
+    if (fs.existsSync(localRepoFrontendModules)) {
+      fs.symlinkSync(localRepoFrontendModules, stagedFrontendModules, symlinkType);
+      return null;
+    }
+
+    const frontendDepsCache = path.join(this.cacheDir, 'frontend-deps');
+    const cachedFrontendModules = path.join(frontendDepsCache, 'node_modules');
+    const stagedPkgPath = path.join(stagedFrontendDir, 'package.json');
+    const cachedPkgPath = path.join(frontendDepsCache, 'package.json');
+    const stagedLockPath = path.join(stagedFrontendDir, 'package-lock.json');
+    const cachedLockPath = path.join(frontendDepsCache, 'package-lock.json');
+
+    const pkgMatches =
+      fs.existsSync(cachedPkgPath) &&
+      fs.readFileSync(cachedPkgPath, 'utf8') === fs.readFileSync(stagedPkgPath, 'utf8');
+    const hasLock = fs.existsSync(stagedLockPath);
+    const lockMatches = hasLock
+      ? fs.existsSync(cachedLockPath) && fs.readFileSync(cachedLockPath, 'utf8') === fs.readFileSync(stagedLockPath, 'utf8')
+      : !fs.existsSync(cachedLockPath);
+
+    if (fs.existsSync(cachedFrontendModules) && pkgMatches && lockMatches) {
+      fs.symlinkSync(cachedFrontendModules, stagedFrontendModules, symlinkType);
+      return null;
+    }
+
+    fs.mkdirSync(frontendDepsCache, { recursive: true });
+    fs.copyFileSync(stagedPkgPath, cachedPkgPath);
+    if (hasLock) {
+      fs.copyFileSync(stagedLockPath, cachedLockPath);
+    } else if (fs.existsSync(cachedLockPath)) {
+      fs.unlinkSync(cachedLockPath);
+    }
+
+    return execFileAsync(npmBin, ['install', '--no-audit', '--no-fund', '--ignore-scripts'], {
+      cwd: frontendDepsCache,
+      env: buildEnv,
+      shell: process.platform === 'win32',
+      timeout: 180000,
+    }).then(() => {
+      if (!fs.existsSync(stagedFrontendModules)) {
+        fs.symlinkSync(cachedFrontendModules, stagedFrontendModules, symlinkType);
+      }
+    });
+  }
+
+  async _executeIntegrateRepoCommit(commitSha) {
     const shortSha = commitSha.slice(0, 7);
+    this.ensureCacheDir();
     this.state.status = 'downloading';
+    this.state.error = null;
+    this.state.downloadedBytes = 0;
+    this.state.totalBytes = 0;
     this.state.downloadProgress = 10;
     this.state.step = `Downloading repo snapshot (${shortSha})…`;
     this.state.assetName = `main-${shortSha}.tar.gz`;
@@ -299,15 +430,31 @@ export class AutoUpdater {
       const tarballUrl = `https://codeload.github.com/${this.repo}/tar.gz/${commitSha}`;
       const response = await fetch(tarballUrl, {
         headers: { 'User-Agent': `Svorrent/${this.currentVersion}` },
-        signal: this.abortController.signal,
+        signal: combineSignals(this.abortController.signal, 120000),
       });
 
       if (!response.ok) {
         throw new Error(`Failed to fetch repo snapshot (${response.status})`);
       }
 
+      const total = Number(response.headers.get('content-length')) || 0;
+      this.state.totalBytes = total;
+      let downloaded = 0;
+
       const fileStream = fs.createWriteStream(tarballPath);
-      await pipeline(Readable.fromWeb(response.body), fileStream);
+      await streamResponseToFile(response, fileStream, (chunk) => {
+        downloaded += chunk.length;
+        this.state.downloadedBytes = downloaded;
+        if (total > 0) {
+          this.state.downloadProgress = Math.min(34, 10 + Math.round((downloaded / total) * 24));
+        } else {
+          // GitHub codeload omits Content-Length; ramp smoothly toward 34% as bytes arrive
+          const estimated = Math.round(24 * (1 - Math.exp(-downloaded / (3 * 1024 * 1024))));
+          this.state.downloadProgress = Math.min(34, Math.max(10, 10 + estimated));
+        }
+        const mb = (downloaded / (1024 * 1024)).toFixed(1);
+        this.state.step = `Downloading repo snapshot (${shortSha} · ${mb} MB)…`;
+      });
 
       this.state.downloadProgress = 35;
       this.state.step = `Extracting & preparing workspace (${shortSha})…`;
@@ -319,7 +466,7 @@ export class AutoUpdater {
         timeout: 30000,
       });
 
-      const currentBackendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+      const currentBackendDir = resolveBackendDir();
       const currentAppRoot = path.resolve(currentBackendDir, '..');
       const stagedBackendDir = path.join(stageDir, 'backend');
       const stagedFrontendDir = path.join(stageDir, 'frontend');
@@ -335,28 +482,15 @@ export class AutoUpdater {
       this.state.downloadProgress = 55;
       this.state.step = `Compiling frontend & integrating changes (${shortSha})…`;
 
-      const frontendDepsCache = path.join(this.cacheDir, 'frontend-deps');
-      const cachedFrontendModules = path.join(frontendDepsCache, 'node_modules');
-      const localRepoFrontendModules = path.join(currentAppRoot, 'frontend', 'node_modules');
-      const stagedFrontendModules = path.join(stagedFrontendDir, 'node_modules');
-
-      if (fs.existsSync(localRepoFrontendModules) && !fs.existsSync(stagedFrontendModules)) {
-        fs.symlinkSync(localRepoFrontendModules, stagedFrontendModules, symlinkType);
-      } else if (fs.existsSync(cachedFrontendModules) && !fs.existsSync(stagedFrontendModules)) {
-        fs.symlinkSync(cachedFrontendModules, stagedFrontendModules, symlinkType);
-      } else if (!fs.existsSync(stagedFrontendModules)) {
-        fs.mkdirSync(frontendDepsCache, { recursive: true });
-        fs.copyFileSync(path.join(stagedFrontendDir, 'package.json'), path.join(frontendDepsCache, 'package.json'));
-        if (fs.existsSync(path.join(stagedFrontendDir, 'package-lock.json'))) {
-          fs.copyFileSync(path.join(stagedFrontendDir, 'package-lock.json'), path.join(frontendDepsCache, 'package-lock.json'));
-        }
-        await execFileAsync(npmBin, ['install', '--no-audit', '--no-fund'], {
-          cwd: frontendDepsCache,
-          env: buildEnv,
-          shell: isWin,
-          timeout: 120000,
-        });
-        fs.symlinkSync(cachedFrontendModules, stagedFrontendModules, symlinkType);
+      const installPromise = this.ensureStagedFrontendDeps(
+        stagedFrontendDir,
+        currentAppRoot,
+        symlinkType,
+        npmBin,
+        buildEnv
+      );
+      if (installPromise) {
+        await installPromise;
       }
 
       await execFileAsync(npmBin, ['run', 'build'], {
@@ -401,7 +535,7 @@ export class AutoUpdater {
       await execFileAsync(process.execPath, ['--test'], {
         cwd: stagedBackendDir,
         env: buildEnv,
-        timeout: 30000,
+        timeout: 90000,
       });
 
       // Stamp verified commit into build-info.json
@@ -426,6 +560,7 @@ export class AutoUpdater {
       this.state.status = 'error';
       this.state.error = `Code verification failed: ${err.message}`;
       this.state.step = null;
+      this.state.downloadProgress = 0;
       throw err;
     } finally {
       this.abortController = null;
@@ -475,14 +610,28 @@ export class AutoUpdater {
     };
   }
 
-  async checkForUpdates() {
+  checkForUpdates() {
+    if (this._activeCheckPromise) {
+      return this._activeCheckPromise;
+    }
+    this._activeCheckPromise = this._runCheckForUpdates().finally(() => {
+      this._activeCheckPromise = null;
+    });
+    return this._activeCheckPromise;
+  }
+
+  async _runCheckForUpdates() {
     const isNewer = this.getStatus().updateAvailable;
     if (this.state.status === 'ready_to_install' && !isNewer) {
       this.state.status = 'idle';
       this.state.assetPath = null;
       this.state.stagedSourceDir = null;
     }
-    if (this.state.status === 'downloading' || (this.state.status === 'ready_to_install' && isNewer)) {
+    if (
+      this.state.status === 'downloading' ||
+      this._activeIntegration ||
+      (this.state.status === 'ready_to_install' && isNewer)
+    ) {
       return this.getStatus();
     }
 
@@ -552,7 +701,9 @@ export class AutoUpdater {
   }
 
   async downloadUpdate(asset) {
+    this.ensureCacheDir();
     this.state.status = 'downloading';
+    this.state.error = null;
     this.state.assetName = asset.name;
     this.state.assetDigest = asset.digest || null;
     this.state.totalBytes = asset.size || 0;
@@ -569,7 +720,7 @@ export class AutoUpdater {
         headers: {
           'User-Agent': `Svorrent/${this.currentVersion}`,
         },
-        signal: this.abortController.signal,
+        signal: combineSignals(this.abortController.signal, 300000),
       });
 
       if (!response.ok) {
@@ -581,24 +732,8 @@ export class AutoUpdater {
 
       const fileStream = fs.createWriteStream(tempFile);
       const hash = createHash('sha256');
-      const reader = response.body.getReader();
 
-      const progressStream = new Readable({
-        async read() {
-          try {
-            const { done, value } = await reader.read();
-            if (done) {
-              this.push(null);
-            } else {
-              this.push(Buffer.from(value));
-            }
-          } catch (e) {
-            this.destroy(e);
-          }
-        },
-      });
-
-      progressStream.on('data', (chunk) => {
+      await streamResponseToFile(response, fileStream, (chunk) => {
         hash.update(chunk);
         this.state.downloadedBytes += chunk.length;
         if (this.state.totalBytes > 0) {
@@ -608,8 +743,6 @@ export class AutoUpdater {
           );
         }
       });
-
-      await pipeline(progressStream, fileStream);
       const computedDigest = `sha256:${hash.digest('hex')}`;
       if (this.state.assetDigest && computedDigest !== this.state.assetDigest) {
         throw new Error('Downloaded update failed SHA-256 verification');
@@ -633,6 +766,7 @@ export class AutoUpdater {
       }
       this.state.status = 'error';
       this.state.error = err.message;
+      this.state.downloadProgress = 0;
       throw err;
     } finally {
       this.abortController = null;
@@ -651,7 +785,7 @@ export class AutoUpdater {
       throw new Error('Staged code is incomplete and cannot be applied');
     }
 
-    const currentBackendDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+    const currentBackendDir = resolveBackendDir();
     const currentAppRoot = path.resolve(currentBackendDir, '..');
     const targetFrontendDist = path.join(currentAppRoot, 'frontend', 'dist');
 

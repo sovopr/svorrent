@@ -67,6 +67,7 @@ export function NetworksPage({ notify, isActive = true }) {
   const requestRef = useRef(null);
   const notifyRef = useRef(notify);
 
+  const bundledVersion = import.meta.env?.VITE_APP_VERSION || '';
   const [updater, setUpdater] = useState(null);
   const [isCheckingUpdate, setIsCheckingUpdate] = useState(false);
   const [isRestartingUpdate, setIsRestartingUpdate] = useState(false);
@@ -79,13 +80,15 @@ export function NetworksPage({ notify, isActive = true }) {
       .catch(() => {});
   };
 
+  const hasUpdaterLoaded = Boolean(updater);
+
   useEffect(() => {
     if (!isActive) return;
     fetchUpdater();
-    const isBusy = updater?.status === 'checking' || updater?.status === 'available' || updater?.status === 'downloading' || isRestartingUpdate;
+    const isBusy = !hasUpdaterLoaded || updater?.status === 'checking' || updater?.status === 'available' || updater?.status === 'downloading' || isRestartingUpdate;
     const interval = setInterval(fetchUpdater, isBusy ? 1500 : 20000);
     return () => clearInterval(interval);
-  }, [isActive, updater?.status, isRestartingUpdate]);
+  }, [isActive, hasUpdaterLoaded, updater?.status, isRestartingUpdate]);
 
   const handleCheckUpdate = async () => {
     if (isCheckingUpdate) return;
@@ -99,7 +102,8 @@ export function NetworksPage({ notify, isActive = true }) {
         } else if (res.updateAvailable) {
           notifyRef.current?.('New update found — integrating…');
         } else {
-          notifyRef.current?.(`Up to date (v${res.currentVersion || '1.0.5'})`);
+          const resolvedVersion = res.currentVersion || bundledVersion;
+          notifyRef.current?.(`Up to date${resolvedVersion ? ` (v${resolvedVersion})` : ''}`);
         }
       }
     } catch (err) {
@@ -448,17 +452,23 @@ export function NetworksPage({ notify, isActive = true }) {
         <div className={`updates-bar ${updater?.updateAvailable || updater?.readyToInstall ? 'has-update' : ''}`}>
           <div className="updates-meta">
             <span className="updates-version mono">
-              Svorrent v{updater?.currentVersion || '1.0.5'}
+              {updater?.currentVersion || bundledVersion
+                ? `Svorrent v${updater?.currentVersion || bundledVersion}`
+                : 'Svorrent'}
             </span>
             <span className="dot-sep" />
             <span className="updates-status-text">
-              {updater?.readyToInstall
+              {!updater
+                ? 'Checking update status…'
+                : updater.readyToInstall
                 ? 'New update ready to integrate'
-                : updater?.status === 'downloading' || updater?.status === 'available'
-                ? `New update found · Integrating (${updater.downloadProgress || 0}%)…`
-                : updater?.status === 'error'
+                : updater.status === 'checking'
+                ? updater.step || 'Checking for updates…'
+                : updater.status === 'downloading' || updater.status === 'available'
+                ? `New update found · ${updater.step || `Integrating (${updater.downloadProgress || 0}%)…`}`
+                : updater.status === 'error'
                 ? `Update check failed: ${updater.error || 'Unknown error'}`
-                : updater?.updateAvailable
+                : updater.updateAvailable
                 ? 'New update available'
                 : 'Up to date'}
             </span>

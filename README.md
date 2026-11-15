@@ -18,7 +18,7 @@
 
 ---
 
-## Downloads (v1.0.11)
+## Downloads (v1.0.12)
 
 Svorrent runs locally and opens in your default web browser with zero external dependencies required.
 
@@ -36,24 +36,32 @@ Releases include `SHA256SUMS.txt` and support SHA-256-verified in-app updates fr
 
 ## Features & Interface Workflow
 
-### 1. Federated Torrent Search Engine
+### 1. Homepage & Trending Discovery
+Clicking **Homepage** or the **svorrent** brand mark opens the curated trending workspace, aggregating editorial and swarm telemetry across **Movies**, **TV**, and **Anime** over **Day (`1D`)**, **Week (`7D`)**, and **Month (`30D`)** windows:
+- **Spotlight Poster Carousel**: Pulls real artwork from IMDb suggestions, Apple iTunes RSS, and AniList GraphQL with strict HTTPS CDN validation and local poster caching. Clicking any poster card searches all indexers for that title automatically.
+- **Multi-Source Consensus Ranking**: Races `extto.org`, **Knaben**, **The Pirate Bay**, **EZTV**, and **Nyaa** concurrently, merging duplicate hashes/titles across providers, applying NSFW and CAM quality penalties, and balancing swarm velocity with timeframe freshness.
+- **Deferred Magnet Resolution & Quick Filters**: Resolves deferred detail-page magnets on demand when clicking **Download**, and provides inline quality pills (`4K`, `1080p`, `720p`, `SD`), release tag chips (`Remux`, `BluRay`, `WEB-DL`, `HDR`, `Dolby Vision`, `HEVC`), source filtering, and **Reset filters**.
+
+![Homepage Trending Interface](docs/screenshots/homepage.webp)
+
+### 2. Federated Torrent Search Engine
 The search interface aggregates results across multiple indexers and scrapers with bounded request timeouts and DNS-over-HTTPS (DoH) fallback:
-- **Intelligent Movie-First Relevance Ranking**: Ranks genuine video releases and movies ahead of game repacks, cracks, and small scrap files, with resolution-aware scoring (2160p / 1080p).
+- **Intelligent Movie-First Relevance Ranking**: Ranks genuine video releases and movies ahead of game repacks, cracks, and small scrap files, with resolution-aware scoring (`2160p` / `1080p`).
 - **Progressive Streaming & Dual DoH Racing**: Results stream into the UI progressively as each provider responds. Pre-warmed dual DNS-over-HTTPS (Cloudflare `1.1.1.1` and Google `8.8.8.8`) with Happy-Eyeballs socket racing and host circuit breakers bypasses ISP blocking with minimal latency.
-- **Federated Multi-Source Scraper**: Concurrently queries **BitSearch** (with multi-page scraper pagination), **The Pirate Bay** (apibay.org API), **Torrents.csv**, and **Nyaa** RSS.
-- **Un-Capped Exhaustive Results**: Search results are un-capped; queries return comprehensive result sets with pagination controls (20, 25, 50, 100 per page) and windowed page selectors.
-- **Title & Release Deduplication**: Duplicate releases across indexers are merged by info hash and normalized titles, keeping the highest seed/leech counts while filtering scraper fragments.
-- **Direct Download & Magnet Actions**: Single-click **Download** directly into the download pipeline or open magnet links in desktop clients without redundant copy buttons.
-- **Persistent Downloaded Status & One-Click Re-Download**: Tracks completed downloads indefinitely in `~/.svorrent/download-history.json`, surviving app restarts and file deletions. Search results automatically tag previously downloaded releases with a dedicated **Downloaded** badge and provide a single-click **Download again** button with automatic magnet and hash recovery.
+- **Federated Multi-Source Indexers**: Concurrently queries **BitSearch**, **The Pirate Bay**, **Knaben**, **Torrents.csv**, and **Nyaa** RSS.
+- **Inline Quality, Tag & Source Filters**: Narrow live results by resolution (`All`, `4K`, `1080p`, `720p`, `SD`), release tags (`Remux`, `BluRay`, `WEB-DL`, `HDR`, `Dolby Vision`, `HEVC`), or upstream provider with dynamic match counts and **Reset filters**.
+- **Un-Capped Exhaustive Results**: Search results support pagination controls (20, 25, 50, 100 per page) and windowed page selectors.
+- **Title & Release Deduplication**: Duplicate releases across indexers are merged by info hash and normalized titles, preserving the highest seed/leech counts while filtering scraper fragments.
+- **Persistent Downloaded Status & One-Click Re-Download**: Tracks completed downloads indefinitely in `~/.svorrent/download-history.json`, surviving app restarts and manual file deletions. Homepage and Search results automatically tag previously downloaded releases with a dedicated **Downloaded** badge and provide a single-click **Download again** button with automatic magnet and hash recovery.
 
 ![Search Interface](docs/screenshots/search.webp)
 
-### 2. Downloads Manager & Streaming Controls
+### 3. Downloads Manager & Streaming Controls
 The downloads dashboard manages active and completed transfers, supports an **Auto-stop seeding** toggle directly in the header, and can open a playable local video in VLC or your system's default media player.
 
 ![Downloads Manager](docs/screenshots/downloads.webp)
 
-#### 2.1 Sequential Piece Scheduling, Swarm Pipeline Acceleration & Crash Recovery
+#### 3.1 Sequential Piece Scheduling, Swarm Pipeline Acceleration & Crash Recovery
 - **Rolling Critical Frontier**: Forces sequential piece acquisition (from piece 0 to piece N) and continuously keeps a rolling window of the next 16 unverified pieces after the sequential playback frontier marked critical so immediate streaming never stalls.
 - **Swarm Pipeline Accelerator**: Dynamically scales the per-wire block request pipeline (`reqq`) 2.5× with live peer throughput (with a 256 KB/s floor up to 8 MB/s equivalent) so high-RTT internet and cellular peers never stall waiting for block request ACKs.
 - **Fast MP4 Head/Tail Inspection**: Inspects MP4 `ftyp`/`moov` atoms (`hasMoovAtBeginning`) so non-faststart MP4 containers automatically verify tail pieces before enabling playback.
@@ -61,12 +69,12 @@ The downloads dashboard manages active and completed transfers, supports an **Au
 - **Atomic Session Checkpointing & Orphan Scanner**: Stores torrent metadata and verified-piece bitfields in `~/.svorrent/session.json` and scans `~/Downloads/Svorrent` to detect halfway downloads for one-click resumption.
 - **Seamless Browser Download Adoption**: Automatically detects in-progress or interrupted browser downloads across all major web browsers (Safari `.download` bundle packages, Chrome/Chromium/Edge/Brave `.crdownload`, Firefox `.part`, and direct files in `~/Downloads/`). When adding matching magnet links or torrent files, Svorrent leverages instant Copy-on-Write (CoW) APFS/reflink cloning (< 15 ms, 0 additional disk space) to adopt existing bytes, verifies SHA-1 piece hashes via WebTorrent's bitfield rescan, and seamlessly downloads only the missing pieces from the BitTorrent swarm.
 
-#### 2.2 In-App Storage & File Deletion
-- Custom in-app confirmation modal prevents accidental deletions.
-- Option to remove torrent metadata only or permanently delete all associated files and downloaded folders from disk (`~/Downloads/Svorrent/`).
+#### 3.2 In-App Storage & Manual File Deletion Reconciliation
+- Custom in-app confirmation modal prevents accidental deletions, with options to remove torrent metadata only or delete all downloaded files and folders from `~/Downloads/Svorrent/`.
+- **Manual Disk Deletion Reconciliation**: If downloaded files are deleted manually outside the app (Finder, Windows Explorer, terminal, or Android Files app), Svorrent detects the missing payload on disk (while guarding disconnected external drives and unstarted magnets), immediately closes open file handles so disk space is released immediately, removes the stale queue item so it does not re-download, and preserves the historical **Downloaded** badge in Search/Homepage.
 - Invalidation hooks immediately clear file scanner caches and purge persisted session checkpoints.
 
-#### 2.3 Playback Readiness & Estimated Time to Play
+#### 3.3 Playback Readiness & Estimated Time to Play
 Before enabling playback of an incomplete file, Svorrent continuously evaluates whether the remaining download can finish ahead of playback consumption:
 $$\text{SafeDownloadedTarget} = \text{TotalLength} - \frac{\text{EffectiveSpeed} \times \text{Duration}}{\text{SafetyMargin}}$$
 
@@ -75,7 +83,7 @@ $$\text{SafeDownloadedTarget} = \text{TotalLength} - \frac{\text{EffectiveSpeed}
 - **Throughput Smoothing (EMA)**: Exponential moving average smoothing stabilizes the playability timer against momentary 1-second torrent chunk writing dips.
 - **Media Player Integration**: Once the buffer threshold passes, one-click launches the growing file in VLC or your system's default media player.
 
-#### 2.4 Swarm Telemetry Matrix & Peer Inspector
+#### 3.4 Swarm Telemetry Matrix & Peer Inspector
 Every download row includes a Swarm button opening a per-torrent inspector with a `Pieces` / `Map` view switcher:
 
 ![Swarm Telemetry Matrix and Peer Inspector](docs/screenshots/swarm_modal.webp)
@@ -86,7 +94,7 @@ Every download row includes a Swarm button opening a per-torrent inspector with 
 - **Connected Peers Table**: Filterable and sortable peer list displaying GeoIP country flags, IPv4/IPv6 addresses, client software, protocol badges, bound interface tags, and live transfer rates.
 - **Geographic Distribution (Map View)**: Toggle to the interactive vector SVG world map plotting remote peer coordinates and country contributions via offline `geoip-lite`.
 
-### 3. Multi-Network Pooling, Bandwidth Bonding & In-App Updates
+### 4. Multi-Network Pooling, Bandwidth Bonding & In-App Updates
 Svorrent distributes outgoing peer connections across multiple local network interfaces and manages application updates from the **Networks** page.
 
 ![Network Bonding Interface](docs/screenshots/networks.webp)
@@ -98,7 +106,7 @@ Svorrent distributes outgoing peer connections across multiple local network int
 - **iOS Hotspot UDP Keepalive**: Proactive background UDP heartbeats prevent iOS cellular hotspots from dropping during active peer connections.
 - **Android USB Tethering (macOS)**: Native `svorrent-tetherd` service automatically manages RNDIS virtual interface binding and DHCP configuration.
 - **Per-Adapter Controls & Live Telemetry**: Toggle routing per interface on the fly with live download and upload sparklines, peak speed tracking, traffic share percentages, and session data counters.
-- **In-App Updates & Continuous Code Integration**: The **Application** section checks for both tagged GitHub Releases and recent commits on `main`, verifies new code in a background staging directory (`node --check` + automated test suite), and prompts **Restart & Integrate** when verified.
+- **In-App Updates & Continuous Code Integration**: The **Application** section displays the bundled release version immediately, checks for both tagged GitHub Releases and recent commits on `main`, streams update archives with live MB/percentage telemetry (automatically recovering missing cache directories and resetting stale progress on failure), verifies new code in a background staging directory (`node --check` + automated test suite), and prompts **Restart & Integrate** when ready.
 
 #### iPhone USB tethering on macOS
 
@@ -120,11 +128,15 @@ svorrent/
 │   │   └── libusb-1.0.0.dylib  # USB dependency
 │   ├── tether/                  # C++ tether daemon source (RNDIS / libusb)
 │   ├── lib/
-│   │   ├── search.js            # Federated scraper engine (BitSearch, TPB, Torrents.csv, Nyaa) & pagination
+│   │   ├── indexer.js           # Trending discovery aggregator, artwork proxy & multi-source consensus
+│   │   ├── search.js            # Federated scraper engine (BitSearch, TPB, Knaben, Torrents.csv, Nyaa)
+│   │   ├── history.js           # Persistent download history store & completed hash/title lookup
+│   │   ├── reconcile.js         # Manual disk deletion detection & stale torrent handle cleanup
 │   │   ├── networks.js          # Throughput-weighted socket bonding & adapter telemetry
 │   │   ├── torrents.js          # Swarm pipeline accelerator, rolling frontier & pause recovery
 │   │   ├── updater.js           # In-app release & continuous repo code updater with self-tests
 │   │   ├── playability.js       # Buffer-free streaming math, MP4 atom checks & EMA smoothing
+│   │   ├── browser-adoption.js  # Copy-on-Write adoption of interrupted browser downloads
 │   │   ├── session.js           # Atomic bitfield checkpointing and recovery
 │   │   ├── settings.js          # Persistent user preferences (e.g. auto-stop seeding)
 │   │   ├── scanner.js           # Directory scanner for orphaned and halfway files
@@ -133,7 +145,7 @@ svorrent/
 │   │   ├── doh.js               # DNS-over-HTTPS anti-censorship lookup
 │   │   ├── trackers.js          # Dynamic public tracker fallback lists
 │   │   └── archive.js           # Torrent metadata storage
-│   ├── test/                    # 11 unit & regression test suites (networks, search, bonding, updater)
+│   ├── test/                    # 14 unit & regression test suites (discovery, reconcile, updater, etc.)
 │   └── scripts/
 │       ├── install-tetherd.sh   # Launchd service installer for macOS
 │       ├── uninstall-tetherd.sh # Service uninstaller
@@ -141,7 +153,10 @@ svorrent/
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx              # Navigation, update readiness prompt, and global polling loop
-│   │   ├── SearchPage.jsx       # Multi-tracker search query interface
+│   │   ├── DiscoverPage.jsx     # Homepage curated poster spotlight & trending torrent releases
+│   │   ├── SearchPage.jsx       # Multi-tracker search interface with quality, tag & source filters
+│   │   ├── TorrentTable.jsx     # Shared sortable results table with Downloaded badge & age tags
+│   │   ├── useTorrentRowActions.js # Shared download/re-download state hook across Homepage & Search
 │   │   ├── DownloadsManager.jsx # Download queue, auto-stop seeding toggle, and VLC triggers
 │   │   ├── SwarmModal.jsx       # Piece map, interface breakdown, and peer inspector
 │   │   ├── SwarmWorldMap.jsx    # SVG vector map with centroid peer plotting
@@ -150,20 +165,24 @@ svorrent/
 │   │   ├── Icon.jsx             # Accessible vector icon rendering component
 │   │   ├── countryUtils.js      # GeoIP country codes, names, and flag emojis
 │   │   ├── useDialog.js         # Accessible modal dialog state hook
-│   │   └── lib.js               # API client, units formatting, and speed calculations
+│   │   └── lib.js               # API client, filter predicates, units formatting, and speed helpers
 │   └── package.json
 ├── android/                     # Native Android Client (Jetpack Compose + libtorrent4j)
 │   ├── app/src/main/
 │   │   ├── java/com/svorrent/app/
-│   │   │   ├── MainActivity.kt               # Jetpack Compose UI (Search, Downloads, Networks, Settings)
-│   │   │   ├── SvorrentEngine.kt             # Torrent engine orchestration & libtorrent4j integration
+│   │   │   ├── MainActivity.kt               # Jetpack Compose UI (Homepage, Search, Downloads, Networks)
+│   │   │   ├── HomepageScreen.kt             # Trending Movies/TV/Anime poster carousel, filters & releases
+│   │   │   ├── SvorrentEngine.kt             # Torrent engine orchestration, libtorrent4j & reconciliation
 │   │   │   ├── SvorrentEngineService.kt      # Foreground service for persistent background swarms
 │   │   │   ├── MultiNetworkBondingManager.kt # ConnectivityManager dual-socket bonding (Wi-Fi + 5G/LTE)
-│   │   │   ├── SearchRepository.kt           # Federated multi-source scraper engine & DoH
+│   │   │   ├── SearchRepository.kt           # Federated scraper engine (TPB, BitSearch, Knaben, CSV, Nyaa) & DoH
+│   │   │   ├── DiscoverRepository.kt         # Trending discovery engine, artwork lookup & consensus ranking
+│   │   │   ├── DownloadHistoryManager.kt     # Persistent completed-download history & title/hash lookup
+│   │   │   ├── ReconcileHelper.kt            # Manual file deletion detection & safe leftover path cleanup
 │   │   │   ├── AutoUpdater.kt                # In-app APK update manager with SHA-256 verification
-│   │   │   └── Models.kt                     # Data models for torrents, peers, and adapters
+│   │   │   └── Models.kt                     # Data models, formatters & search quality/tag filters
 │   │   └── AndroidManifest.xml               # Foreground service & multi-network permissions
-│   └── app/src/test/java/                    # Unit test suite (swarm sanitization, queries, parsing)
+│   └── app/src/test/java/                    # Unit test suite (discovery, history, filters, reconciliation)
 └── scripts/
     ├── build-dmg.sh                 # macOS .app bundle and compressed DMG builder
     ├── build-windows.sh             # Windows Win32 launcher, NSIS installer, and portable ZIP builder
@@ -232,12 +251,12 @@ The following diagram details the interconnectivity between the client interface
 ```mermaid
 flowchart TD
     subgraph Client["1. Client Presentation Layer (React 19)"]
-        UI["<b>Single-Page Web Application</b><br/>Search Engine · Download Manager · Swarm Modal & Map · Networks Monitor"]
+        UI["<b>Single-Page Web Application</b><br/>Homepage & Trending · Search Engine · Download Manager · Swarm Modal & Map · Networks Monitor"]
     end
 
     subgraph Gateway["2. Ingress & Security Gateway (Express :3001)"]
         Firewall["<b>Loopback Firewall</b><br/>Host & origin validation (local-access.js)"]
-        API["<b>REST API Router</b><br/>/api/search · /api/torrents · /api/networks · /api/play"]
+        API["<b>REST API Router</b><br/>/api/discover · /api/search · /api/torrents · /api/history · /api/networks · /api/play"]
         SafePath["<b>SafePath Sandbox</b><br/>Directory traversal containment (safe-path.js)"]
         DoH["<b>DoH Resolver</b><br/>DNS-over-HTTPS anti-censorship lookup (doh.js)"]
 
@@ -247,10 +266,10 @@ flowchart TD
     end
 
     subgraph Core["3. Core Engine Subsystems"]
-        WT["<b>Torrent Engine</b><br/>• Rolling critical frontier & sequential assembly<br/>• 2.5× dynamic block pipeline accelerator<br/>• Atomic fast-resume checkpoints"]
+        WT["<b>Torrent Engine</b><br/>• Rolling critical frontier & sequential assembly<br/>• Manual deletion reconciliation & handle release<br/>• Atomic fast-resume checkpoints"]
         Play["<b>Buffer-Free Playability Engine</b><br/>• ffprobe & MP4 moov atom inspection<br/>• Throughput EMA playback safety gate<br/>• Native VLC player launch controller"]
         Bond["<b>Multi-Network Bonding Layer</b><br/>• Throughput-weighted localAddress routing<br/>• Harmonized download & upload attribution<br/>• Proactive cellular UDP keepalive"]
-        Updater["<b>In-App Updater Engine</b><br/>• GitHub Releases & main commit tracking<br/>• Staged self-test verification<br/>• One-click Restart & Integrate"]
+        Updater["<b>In-App Updater Engine</b><br/>• GitHub Releases & main commit tracking<br/>• Resilient streaming zip download & self-tests<br/>• One-click Restart & Integrate"]
     end
 
     subgraph OS["4. Operating System & Local Resources"]
@@ -294,18 +313,18 @@ The native Android client mirrors desktop capability through an unmanaged C++ Bi
 ```mermaid
 flowchart TD
     subgraph UI["1. Mobile Presentation Layer (Jetpack Compose)"]
-        Screens["<b>Material 3 Composable UI</b><br/>SearchTab · DownloadsTab · NetworksTab · SettingsTab"]
+        Screens["<b>Material 3 Composable UI</b><br/>HomepageTab · SearchTab · DownloadsTab · NetworksTab"]
     end
 
     subgraph ServiceLayer["2. Foreground Service & Lifecycle Manager"]
         Service["<b>SvorrentEngineService</b><br/>Sticky foreground service + PARTIAL_WAKE_LOCK"]
         BondMgr["<b>MultiNetworkBondingManager</b><br/>ConnectivityManager dual-network callbacks"]
-        SearchRepo["<b>SearchRepository</b><br/>Concurrent OkHttp coroutine scrapers + DoH"]
+        SearchRepo["<b>Search & Discover Repositories</b><br/>Concurrent coroutine scrapers · Trending spotlight · DoH"]
         AppUpdater["<b>AutoUpdater</b><br/>In-app APK download + SHA-256 verification"]
     end
 
     subgraph NativeCore["3. C++ Torrent Engine (libtorrent4j)"]
-        Engine["<b>SvorrentEngine</b><br/>SessionManager · TorrentHandle · AlertListener"]
+        Engine["<b>SvorrentEngine</b><br/>SessionManager · ReconcileHelper · DownloadHistory"]
         PiecePrio["<b>Sequential Piece Scheduler</b><br/>Head/Tail priority + deadline requests"]
     end
 
@@ -348,8 +367,9 @@ Prioritizes download pieces to enable instant, buffer-free video playback:
 - **Fast Container Inspection**: Checks MP4 headers (`moov` atoms) on the fly to verify index data before starting playback.
 - **Buffer Safety Equation**: Continuously calculates when enough buffer exists to play without interruptions, launching VLC or your default player the moment it is safe.
 
-#### 3. Federated Search & Anti-Censorship
-- **Multi-Source Scraping**: Concurrently queries BitSearch, The Pirate Bay, Torrents.csv, and Nyaa with un-capped pagination.
+#### 3. Federated Search, Trending Discovery & Anti-Censorship
+- **Multi-Source Trending & Spotlight (`Homepage`)**: Aggregates `extto.org`, Knaben, The Pirate Bay, EZTV, and Nyaa across `1D`, `7D`, and `30D` timeframes for Movies, TV, and Anime, with allowlisted HTTPS poster caching and deferred magnet resolution.
+- **Multi-Source Search Scraping**: Concurrently queries BitSearch, The Pirate Bay, Knaben, Torrents.csv, and Nyaa with quality/tag filters and un-capped pagination.
 - **DNS-over-HTTPS (DoH)**: Resolves tracker and indexer domains over encrypted Cloudflare and Google DoH, bypassing local ISP DNS censorship.
 - **Swarm Integrity**: Masks 64-bit tracker counter overflows and sanitizes HTML entities to ensure clean, valid magnet metadata.
 
@@ -374,7 +394,7 @@ Prioritizes download pieces to enable instant, buffer-free video playback:
 | Core Protocol & Swarm | WebTorrent, libtorrent4j (Android C++), P2P Wire Protocol, DHT, 2.5× dynamic block pipeline accelerator, rolling critical frontier |
 | Desktop & Mobile Architecture | Native Win32 / macOS browser-client launchers (~42–47 MB packages with bundled standalone Node.js runtime, zero Electron overhead) & Native Jetpack Compose Android client (~47 MB) |
 | In-App Updater | SHA-256 release verification + continuous `main` branch code integration with staged self-testing (Desktop) & in-app APK installer (Android) |
-| Search Engine | Federated multi-source scraper engine (BitSearch, The Pirate Bay, Torrents.csv, Nyaa) with un-capped pagination & DoH anti-censorship shield |
+| Search & Discovery | Federated multi-source search (BitSearch, The Pirate Bay, Knaben, Torrents.csv, Nyaa) + Multi-source Trending Homepage (`extto.org`, Knaben, TPB, EZTV, Nyaa) with quality/tag filters, persistent download history & DoH anti-censorship |
 | Network Routing & Bonding | Throughput-weighted multi-interface OS socket binding (macOS/Win) & Android ConnectivityManager multi-network socket bonding (Wi-Fi + 5G/LTE) |
 | Streaming Readiness Engine | ffprobe metadata extraction + MP4 `moov` atom inspection + dynamic buffer equation with EMA smoothing |
 | Swarm Telemetry | Piece bitfield availability heatmap, per-interface breakdown, and interactive vector SVG map |

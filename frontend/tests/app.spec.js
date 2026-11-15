@@ -1,4 +1,8 @@
 import { test, expect } from '@playwright/test';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
+const frontendPkg = require('../package.json');
 
 test.describe('Svorrent Web End-to-End Application Checks', () => {
   test('App loads cleanly and navigates through tabs without any console or runtime errors', async ({ page }) => {
@@ -48,6 +52,7 @@ test.describe('Svorrent Web End-to-End Application Checks', () => {
     await expect(page).toHaveTitle(/Networks · Svorrent/);
     await expect(page.locator('#refresh-networks')).toBeVisible();
     await expect(page.locator('.network-kpi-grid .mini-sparkline')).toHaveCount(2);
+    await expect(page.locator('.updates-version')).toHaveText(`Svorrent v${frontendPkg.version}`);
 
     // 6. Clicking svorrent brand link takes you to the Homepage section
     await page.click('#brand-homepage');
@@ -70,5 +75,44 @@ test.describe('Svorrent Web End-to-End Application Checks', () => {
 
     // 9. Assert zero runtime errors or unhandled exceptions occurred
     expect(runtimeErrors).toEqual([]);
+  });
+
+  test('Networks updater shows bundled version before API resolves and surfaces live integration step', async ({ page }) => {
+    let releasePending;
+    const pendingGate = new Promise((resolve) => {
+      releasePending = resolve;
+    });
+    let phase = 'pending';
+
+    await page.route('**/api/updater/status', async (route) => {
+      if (phase === 'pending') {
+        await pendingGate;
+      }
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          currentVersion: frontendPkg.version,
+          status: 'downloading',
+          downloadProgress: 24,
+          step: 'Downloading repo snapshot (885c468 · 1.4 MB)…',
+          lastChecked: new Date().toISOString(),
+          updateAvailable: true,
+          readyToInstall: false,
+        }),
+      });
+    });
+
+    await page.goto('/networks');
+    await expect(page.locator('.updates-version')).toHaveText(`Svorrent v${frontendPkg.version}`);
+    await expect(page.locator('.updates-status-text')).toHaveText('Checking update status…');
+
+    phase = 'downloading';
+    releasePending();
+
+    await expect(page.locator('.updates-status-text')).toHaveText(
+      'New update found · Downloading repo snapshot (885c468 · 1.4 MB)…'
+    );
+    await expect(page.locator('#btn-check-update')).toContainText('Integrating (24%)');
   });
 });

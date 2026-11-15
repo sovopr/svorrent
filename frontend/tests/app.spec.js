@@ -40,13 +40,19 @@ test.describe('Svorrent Web End-to-End Application Checks', () => {
     await expect(page.locator('#refresh-networks')).toBeVisible();
     await expect(page.locator('.network-kpi-grid .mini-sparkline')).toHaveCount(2);
 
-    // 5. Switch back to Search tab
+    // 5. Switch to Discover page via top-left brand link
+    await page.click('#nav-discover');
+    await expect(page).toHaveURL(/.*discover/);
+    await expect(page).toHaveTitle(/Discover · Svorrent/);
+    await expect(page.locator('.discover-page')).toBeVisible();
+
+    // 6. Switch back to Search tab
     await page.click('#nav-search');
     await expect(page).toHaveURL(/\//);
     await expect(page).toHaveTitle('Svorrent');
     await expect(page.locator('#search-input')).toBeVisible();
 
-    // 6. Assert zero runtime errors or unhandled exceptions occurred
+    // 7. Assert zero runtime errors or unhandled exceptions occurred
     expect(runtimeErrors).toEqual([]);
   });
 });

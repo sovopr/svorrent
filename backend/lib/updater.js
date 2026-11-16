@@ -458,7 +458,7 @@ export class AutoUpdater {
     const stagedFrontendModules = path.join(stagedFrontendDir, 'node_modules');
     if (
       fs.existsSync(stagedFrontendModules) &&
-      frontendDepsHaveRequiredBins(stagedFrontendModules, stagedPkgJson, this.platform)
+      frontendDepsHaveRequiredBins(stagedFrontendModules, stagedPkgJson, process.platform)
     ) {
       return null;
     }
@@ -471,7 +471,7 @@ export class AutoUpdater {
       fs.existsSync(localRepoFrontendModules) &&
       filesMatchIfPresent(localRepoPkgPath, stagedPkgPath) &&
       filesMatchIfPresent(localRepoLockPath, stagedLockPath) &&
-      frontendDepsHaveRequiredBins(localRepoFrontendModules, stagedPkgJson, this.platform)
+      frontendDepsHaveRequiredBins(localRepoFrontendModules, stagedPkgJson, process.platform)
     ) {
       replaceWithSymlink(localRepoFrontendModules, stagedFrontendModules, symlinkType);
       return null;
@@ -491,7 +491,7 @@ export class AutoUpdater {
       fs.existsSync(cachedFrontendModules) &&
       pkgMatches &&
       lockMatches &&
-      frontendDepsHaveRequiredBins(cachedFrontendModules, stagedPkgJson, this.platform)
+      frontendDepsHaveRequiredBins(cachedFrontendModules, stagedPkgJson, process.platform)
     ) {
       replaceWithSymlink(cachedFrontendModules, stagedFrontendModules, symlinkType);
       return null;
@@ -518,12 +518,12 @@ export class AutoUpdater {
     return execFileAsync(npmBin, ['install', '--include=dev', '--no-audit', '--no-fund', '--ignore-scripts'], {
       cwd: frontendDepsCache,
       env: installEnv,
-      shell: this.platform === 'win32',
+      shell: process.platform === 'win32',
       signal: signal || undefined,
       timeout: 180000,
     }).then(() => {
       if (fs.existsSync(cachedFrontendModules)) {
-        if (!frontendDepsHaveRequiredBins(cachedFrontendModules, stagedPkgJson, this.platform)) {
+        if (!frontendDepsHaveRequiredBins(cachedFrontendModules, stagedPkgJson, process.platform)) {
           throw new Error('Frontend dependencies installed without required build tools');
         }
         fs.writeFileSync(
@@ -571,7 +571,7 @@ export class AutoUpdater {
 
     const tarballPath = path.join(this.cacheDir, `repo-${shortSha}.tar.gz`);
     const stageDir = path.join(this.cacheDir, `stage-${shortSha}`);
-    const hostIsWin = this.platform === 'win32';
+    const hostIsWin = process.platform === 'win32';
     const npmBin = hostIsWin ? 'npm.cmd' : 'npm';
     const symlinkType = hostIsWin ? 'junction' : 'dir';
     const extraPaths = hostIsWin

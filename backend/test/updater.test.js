@@ -341,3 +341,167 @@ test('persistCurrentCommit updates backend build-info.json', () => {
     fs.rmSync(baseDir, { recursive: true, force: true });
   }
 });
+
+test('ensureStagedFrontendDeps replaces broken symlinks and heals incomplete node_modules caches', async () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'svorrent-updater-deps-'));
+  const cacheDir = path.join(baseDir, 'cache');
+  const appRoot = path.join(baseDir, 'app');
+  const stagedFrontend = path.join(baseDir, 'stage-abc1234', 'frontend');
+  const symlinkType = process.platform === 'win32' ? 'junction' : 'dir';
+  fs.mkdirSync(stagedFrontend, { recursive: true });
+  fs.mkdirSync(appRoot, { recursive: true });
+
+  const frontendPkg = JSON.stringify({
+    name: 'frontend',
+    private: true,
+    dependencies: { react: '^19.0.0' },
+    devDependencies: { vite: '^8.0.0' },
+  });
+  fs.writeFileSync(path.join(stagedFrontend, 'package.json'), frontendPkg);
+
+  // Simulate a dangling symlink at stage/frontend/node_modules AND a corrupted cache missing vite
+  const depsCache = path.join(cacheDir, 'frontend-deps');
+  fs.mkdirSync(path.join(depsCache, 'node_modules', 'react'), { recursive: true });
+  fs.writeFileSync(path.join(depsCache, 'package.json'), frontendPkg);
+  fs.symlinkSync(path.join(baseDir, 'nonexistent-target'), path.join(stagedFrontend, 'node_modules'), symlinkType);
+
+  // Cross-platform fake npm script that populates react + vite and verifies NODE_ENV=development
+  const binDir = path.join(baseDir, 'bin');
+  fs.mkdirSync(binDir, { recursive: true });
+  const fakeScript = path.join(binDir, 'fake-npm.js');
+  const markerFile = path.join(baseDir, 'install-ran.json');
+  fs.writeFileSync(
+    fakeScript,
+    `const fs = require('node:fs');
+const path = require('node:path');
+if (process.argv[2] === 'fail') process.exit(1);
+fs.writeFileSync(${JSON.stringify(markerFile)}, JSON.stringify({ nodeEnv: process.env.NODE_ENV, args: process.argv.slice(2) }));
+fs.mkdirSync(path.join(process.cwd(), 'node_modules', 'react'), { recursive: true });
+fs.mkdirSync(path.join(process.cwd(), 'node_modules', 'vite', 'bin'), { recursive: true });
+fs.mkdirSync(path.join(process.cwd(), 'node_modules', '.bin'), { recursive: true });
+fs.writeFileSync(path.join(process.cwd(), 'node_modules', 'vite', 'bin', 'vite.js'), '// vite');
+fs.writeFileSync(path.join(process.cwd(), 'node_modules', '.bin', process.platform === 'win32' ? 'vite.cmd' : 'vite'), '// bin', { mode: 0o755 });
+`
+  );
+  let npmBin;
+  if (process.platform === 'win32') {
+    npmBin = path.join(binDir, 'npm.cmd');
+    fs.writeFileSync(npmBin, `@echo off\r\n"${process.execPath}" "${fakeScript}" %*\r\n`);
+  } else {
+    npmBin = path.join(binDir, 'npm');
+    fs.writeFileSync(npmBin, `#!/bin/sh\n"${process.execPath}" "${fakeScript}" "$@"\n`, { mode: 0o755 });
+  }
+
+  const updater = new AutoUpdater({ platform: process.platform, cacheDir, currentVersion: '1.0.12' });
+  try {
+    await updater.ensureStagedFrontendDeps(
+      stagedFrontend,
+      appRoot,
+      symlinkType,
+      npmBin,
+      { ...process.env, NODE_ENV: 'production' }
+    );
+
+    const ran = JSON.parse(fs.readFileSync(markerFile, 'utf8'));
+    assert.equal(ran.nodeEnv, 'development');
+    assert.ok(ran.args.includes('--include=dev'));
+    assert.equal(fs.existsSync(path.join(depsCache, '.svorrent-install-ok.json')), true);
+    assert.equal(fs.existsSync(path.join(stagedFrontend, 'node_modules', 'vite', 'bin', 'vite.js')), true);
+
+    // Second run with dangling symlink at another stage directory reuses stamped cache without invoking npm
+    fs.unlinkSync(markerFile);
+    const secondStage = path.join(baseDir, 'stage-def5678', 'frontend');
+    fs.mkdirSync(secondStage, { recursive: true });
+    fs.writeFileSync(path.join(secondStage, 'package.json'), frontendPkg);
+    fs.symlinkSync(path.join(baseDir, 'nonexistent-target-2'), path.join(secondStage, 'node_modules'), symlinkType);
+
+    await updater.ensureStagedFrontendDeps(secondStage, appRoot, symlinkType, npmBin, process.env);
+    assert.equal(fs.existsSync(markerFile), false);
+    assert.equal(fs.existsSync(path.join(secondStage, 'node_modules', 'vite', 'bin', 'vite.js')), true);
+  } finally {
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test('integrateRepoCommit superseding waits for aborted run without clobbering newer state and prunes old stages', async () => {
+  const baseDir = fs.mkdtempSync(path.join(os.tmpdir(), 'svorrent-updater-supersede-'));
+  const srcRoot = path.join(baseDir, 'snap-src');
+  fs.mkdirSync(path.join(srcRoot, 'snap', 'backend', 'test'), { recursive: true });
+  fs.mkdirSync(path.join(srcRoot, 'snap', 'frontend'), { recursive: true });
+  fs.writeFileSync(
+    path.join(srcRoot, 'snap', 'backend', 'package.json'),
+    JSON.stringify({ name: 'backend', version: '1.0.12', type: 'module' })
+  );
+  fs.writeFileSync(path.join(srcRoot, 'snap', 'backend', 'server.js'), 'export const ok = true;\n');
+  fs.writeFileSync(
+    path.join(srcRoot, 'snap', 'backend', 'test', 'smoke.test.js'),
+    "import test from 'node:test';\nimport assert from 'node:assert/strict';\ntest('smoke', () => assert.ok(true));\n"
+  );
+  fs.writeFileSync(
+    path.join(srcRoot, 'snap', 'frontend', 'package.json'),
+    JSON.stringify({
+      name: 'frontend',
+      private: true,
+      scripts: {
+        build: "node -e \"const fs=require('node:fs');fs.mkdirSync('dist',{recursive:true});fs.writeFileSync('dist/index.html','<html></html>')\"",
+      },
+    })
+  );
+
+  const tarballFile = path.join(baseDir, 'snapshot.tar.gz');
+  execFileSync(resolveTarBinary(), ['-czf', 'snapshot.tar.gz', '-C', 'snap-src', 'snap'], { cwd: baseDir });
+  const tarballBytes = fs.readFileSync(tarballFile);
+
+  const cacheDir = path.join(baseDir, 'updates');
+  fs.mkdirSync(path.join(cacheDir, 'stage-0000000'), { recursive: true });
+
+  const sha1 = 'cccccccccccccccccccccccccccccccccccccccc';
+  const sha2 = 'dddddddddddddddddddddddddddddddddddddddd';
+  const updater = new AutoUpdater({
+    platform: 'linux',
+    cacheDir,
+    currentVersion: '1.0.12',
+    currentCommit: '1111111111111111111111111111111111111111',
+  });
+
+  const originalFetch = globalThis.fetch;
+  let releaseFirstFetch;
+  const firstFetchStarted = new Promise((resolve) => {
+    releaseFirstFetch = resolve;
+  });
+
+  globalThis.fetch = async (url, init = {}) => {
+    if (String(url).endsWith(sha1)) {
+      releaseFirstFetch();
+      return await new Promise((resolve, reject) => {
+        if (init.signal?.aborted) {
+          reject(init.signal.reason || new Error('Aborted'));
+          return;
+        }
+        init.signal?.addEventListener('abort', () => {
+          reject(init.signal.reason || new Error('Aborted'));
+        }, { once: true });
+      });
+    }
+    return new Response(tarballBytes, {
+      status: 200,
+      headers: { 'content-length': String(tarballBytes.length) },
+    });
+  };
+
+  try {
+    const firstPromise = updater.integrateRepoCommit(sha1).catch(() => {});
+    await firstFetchStarted;
+    const secondPromise = updater.integrateRepoCommit(sha2);
+    await Promise.all([firstPromise, secondPromise]);
+
+    const status = updater.getStatus();
+    assert.equal(status.status, 'ready_to_install');
+    assert.equal(status.downloadProgress, 100);
+    assert.equal(fs.existsSync(path.join(cacheDir, 'stage-0000000')), false);
+    assert.equal(fs.existsSync(path.join(cacheDir, `stage-${sha2.slice(0, 7)}`, 'frontend', 'dist', 'index.html')), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    fs.rmSync(baseDir, { recursive: true, force: true });
+  }
+});

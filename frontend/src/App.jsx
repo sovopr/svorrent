@@ -293,7 +293,7 @@ function App() {
               <span className="repo-update-text">
                 {repoUpdate.readyToInstall
                   ? 'A new update has been verified and is ready to integrate.'
-                  : `New update found · Integrating update (${repoUpdate.downloadProgress || 0}%)…`}
+                  : repoUpdate.step || `New update found · Integrating update (${repoUpdate.downloadProgress || 0}%)…`}
               </span>
             </div>
             <div className="repo-update-actions">

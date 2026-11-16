@@ -14,6 +14,73 @@ import { fileURLToPath } from 'node:url';
 
 const execFileAsync = promisify(execFile);
 
+function removePathIfExists(targetPath) {
+  try {
+    const stat = fs.lstatSync(targetPath);
+    if (stat.isSymbolicLink() || stat.isFile()) {
+      fs.unlinkSync(targetPath);
+    } else {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+    }
+  } catch (err) {
+    if (err?.code !== 'ENOENT') {
+      throw err;
+    }
+  }
+}
+
+function replaceWithSymlink(target, linkPath, symlinkType) {
+  removePathIfExists(linkPath);
+  fs.symlinkSync(target, linkPath, symlinkType);
+}
+
+function readJsonSafe(filePath) {
+  try {
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function filesMatchIfPresent(pathA, pathB) {
+  const hasA = fs.existsSync(pathA);
+  const hasB = fs.existsSync(pathB);
+  if (!hasA && !hasB) return true;
+  if (!hasA || !hasB) return false;
+  return fs.readFileSync(pathA, 'utf8') === fs.readFileSync(pathB, 'utf8');
+}
+
+function frontendDepsHaveRequiredBins(modulesDir, pkgJson, platform = process.platform) {
+  try {
+    if (!fs.statSync(modulesDir).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+
+  const allDeps = {
+    ...(pkgJson?.dependencies || {}),
+    ...(pkgJson?.devDependencies || {}),
+  };
+  for (const depName of Object.keys(allDeps)) {
+    const depDir = path.join(modulesDir, ...depName.split('/'));
+    if (!fs.existsSync(depDir)) return false;
+  }
+
+  if (allDeps.vite) {
+    if (!fs.existsSync(path.join(modulesDir, 'vite', 'bin', 'vite.js'))) {
+      return false;
+    }
+    const viteBin = platform === 'win32'
+      ? path.join(modulesDir, '.bin', 'vite.cmd')
+      : path.join(modulesDir, '.bin', 'vite');
+    if (!fs.existsSync(viteBin)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function resolveBackendDir() {
   return path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 }
@@ -349,68 +416,149 @@ export class AutoUpdater {
     if (this._activeIntegration?.commitSha === normalizedSha) {
       return this._activeIntegration.promise;
     }
-    if (this._activeIntegration && this.abortController) {
-      this.abortController.abort(new Error('Superseded by newer commit'));
+
+    const previous = this._activeIntegration;
+    if (previous) {
+      previous.superseded = true;
+      previous.controller.abort(new Error('Superseded by newer commit'));
     }
-    const runPromise = this._executeIntegrateRepoCommit(normalizedSha).finally(() => {
-      if (this._activeIntegration?.promise === runPromise) {
-        this._activeIntegration = null;
-      }
-    });
-    this._activeIntegration = { commitSha: normalizedSha, promise: runPromise };
+
+    const controller = new AbortController();
+    const token = {
+      commitSha: normalizedSha,
+      controller,
+      superseded: false,
+      promise: null,
+    };
+    const runPromise = this._executeIntegrateRepoCommit(normalizedSha, token, previous?.promise)
+      .finally(() => {
+        if (this._activeIntegration === token) {
+          this._activeIntegration = null;
+        }
+        if (this.abortController === controller) {
+          this.abortController = null;
+        }
+      });
+    token.promise = runPromise;
+    this._activeIntegration = token;
+    this.abortController = controller;
     return runPromise;
   }
 
-  ensureStagedFrontendDeps(stagedFrontendDir, currentAppRoot, symlinkType, npmBin, buildEnv) {
-    const localRepoFrontendModules = path.join(currentAppRoot, 'frontend', 'node_modules');
+  ensureStagedFrontendDeps(stagedFrontendDir, currentAppRoot, symlinkType, npmBin, buildEnv, signal = null) {
+    const stagedPkgPath = path.join(stagedFrontendDir, 'package.json');
+    if (!fs.existsSync(stagedPkgPath)) return null;
+
+    const stagedPkgJson = readJsonSafe(stagedPkgPath);
+    const depCount =
+      Object.keys(stagedPkgJson?.dependencies || {}).length +
+      Object.keys(stagedPkgJson?.devDependencies || {}).length;
+    if (depCount === 0) return null;
+
     const stagedFrontendModules = path.join(stagedFrontendDir, 'node_modules');
-    if (fs.existsSync(stagedFrontendModules)) return null;
-    if (fs.existsSync(localRepoFrontendModules)) {
-      fs.symlinkSync(localRepoFrontendModules, stagedFrontendModules, symlinkType);
+    if (
+      fs.existsSync(stagedFrontendModules) &&
+      frontendDepsHaveRequiredBins(stagedFrontendModules, stagedPkgJson, process.platform)
+    ) {
+      return null;
+    }
+
+    const stagedLockPath = path.join(stagedFrontendDir, 'package-lock.json');
+    const localRepoFrontendModules = path.join(currentAppRoot, 'frontend', 'node_modules');
+    const localRepoPkgPath = path.join(currentAppRoot, 'frontend', 'package.json');
+    const localRepoLockPath = path.join(currentAppRoot, 'frontend', 'package-lock.json');
+    if (
+      fs.existsSync(localRepoFrontendModules) &&
+      filesMatchIfPresent(localRepoPkgPath, stagedPkgPath) &&
+      filesMatchIfPresent(localRepoLockPath, stagedLockPath) &&
+      frontendDepsHaveRequiredBins(localRepoFrontendModules, stagedPkgJson, process.platform)
+    ) {
+      replaceWithSymlink(localRepoFrontendModules, stagedFrontendModules, symlinkType);
       return null;
     }
 
     const frontendDepsCache = path.join(this.cacheDir, 'frontend-deps');
     const cachedFrontendModules = path.join(frontendDepsCache, 'node_modules');
-    const stagedPkgPath = path.join(stagedFrontendDir, 'package.json');
     const cachedPkgPath = path.join(frontendDepsCache, 'package.json');
-    const stagedLockPath = path.join(stagedFrontendDir, 'package-lock.json');
     const cachedLockPath = path.join(frontendDepsCache, 'package-lock.json');
+    const installStampPath = path.join(frontendDepsCache, '.svorrent-install-ok.json');
 
-    const pkgMatches =
-      fs.existsSync(cachedPkgPath) &&
-      fs.readFileSync(cachedPkgPath, 'utf8') === fs.readFileSync(stagedPkgPath, 'utf8');
-    const hasLock = fs.existsSync(stagedLockPath);
-    const lockMatches = hasLock
-      ? fs.existsSync(cachedLockPath) && fs.readFileSync(cachedLockPath, 'utf8') === fs.readFileSync(stagedLockPath, 'utf8')
-      : !fs.existsSync(cachedLockPath);
+    const pkgMatches = filesMatchIfPresent(cachedPkgPath, stagedPkgPath);
+    const lockMatches = filesMatchIfPresent(cachedLockPath, stagedLockPath);
 
-    if (fs.existsSync(cachedFrontendModules) && pkgMatches && lockMatches) {
-      fs.symlinkSync(cachedFrontendModules, stagedFrontendModules, symlinkType);
+    if (
+      fs.existsSync(installStampPath) &&
+      fs.existsSync(cachedFrontendModules) &&
+      pkgMatches &&
+      lockMatches &&
+      frontendDepsHaveRequiredBins(cachedFrontendModules, stagedPkgJson, process.platform)
+    ) {
+      replaceWithSymlink(cachedFrontendModules, stagedFrontendModules, symlinkType);
       return null;
     }
 
+    // Wipe incomplete/stale cache state so interrupted installs can never poison future attempts.
+    removePathIfExists(installStampPath);
+    removePathIfExists(cachedFrontendModules);
     fs.mkdirSync(frontendDepsCache, { recursive: true });
     fs.copyFileSync(stagedPkgPath, cachedPkgPath);
-    if (hasLock) {
+    if (fs.existsSync(stagedLockPath)) {
       fs.copyFileSync(stagedLockPath, cachedLockPath);
-    } else if (fs.existsSync(cachedLockPath)) {
-      fs.unlinkSync(cachedLockPath);
+    } else {
+      removePathIfExists(cachedLockPath);
     }
 
-    return execFileAsync(npmBin, ['install', '--no-audit', '--no-fund', '--ignore-scripts'], {
+    const installEnv = {
+      ...buildEnv,
+      NODE_ENV: 'development',
+      CI: 'true',
+      npm_config_update_notifier: 'false',
+    };
+
+    return execFileAsync(npmBin, ['install', '--include=dev', '--no-audit', '--no-fund', '--ignore-scripts'], {
       cwd: frontendDepsCache,
-      env: buildEnv,
+      env: installEnv,
       shell: process.platform === 'win32',
+      signal: signal || undefined,
       timeout: 180000,
     }).then(() => {
-      if (!fs.existsSync(stagedFrontendModules)) {
-        fs.symlinkSync(cachedFrontendModules, stagedFrontendModules, symlinkType);
+      if (fs.existsSync(cachedFrontendModules)) {
+        if (!frontendDepsHaveRequiredBins(cachedFrontendModules, stagedPkgJson, process.platform)) {
+          throw new Error('Frontend dependencies installed without required build tools');
+        }
+        fs.writeFileSync(
+          installStampPath,
+          `${JSON.stringify({ installedAt: new Date().toISOString() })}\n`,
+          'utf8'
+        );
+        replaceWithSymlink(cachedFrontendModules, stagedFrontendModules, symlinkType);
       }
+    }).catch((err) => {
+      removePathIfExists(installStampPath);
+      removePathIfExists(cachedFrontendModules);
+      throw err;
     });
   }
 
-  async _executeIntegrateRepoCommit(commitSha) {
+  cleanupOldStageDirs(keepStageDir) {
+    try {
+      const keepName = path.basename(keepStageDir);
+      for (const entry of fs.readdirSync(this.cacheDir)) {
+        if (entry.startsWith('stage-') && entry !== keepName) {
+          removePathIfExists(path.join(this.cacheDir, entry));
+        }
+      }
+    } catch {}
+  }
+
+  async _executeIntegrateRepoCommit(commitSha, token, previousPromise = null) {
+    if (previousPromise) {
+      await previousPromise.catch(() => {});
+    }
+    if (token?.superseded || token?.controller?.signal?.aborted) {
+      return this.getStatus();
+    }
+
     const shortSha = commitSha.slice(0, 7);
     this.ensureCacheDir();
     this.state.status = 'downloading';
@@ -431,18 +579,19 @@ export class AutoUpdater {
       : ['/opt/homebrew/bin', '/usr/local/bin', path.dirname(process.execPath)];
     const buildEnv = {
       ...process.env,
+      CI: 'true',
+      npm_config_update_notifier: 'false',
       PATH: [...extraPaths, process.env.PATH || (hostIsWin ? '' : '/usr/bin:/bin:/usr/sbin:/sbin')]
         .filter(Boolean)
         .join(path.delimiter),
     };
-
-    this.abortController = new AbortController();
+    const signal = token?.controller?.signal;
 
     try {
       const tarballUrl = `https://codeload.github.com/${this.repo}/tar.gz/${commitSha}`;
       const response = await fetch(tarballUrl, {
         headers: { 'User-Agent': `Svorrent/${this.currentVersion}` },
-        signal: combineSignals(this.abortController.signal, 120000),
+        signal: combineSignals(signal, 120000),
       });
 
       if (!response.ok) {
@@ -471,7 +620,7 @@ export class AutoUpdater {
       this.state.downloadProgress = 35;
       this.state.step = `Extracting & preparing workspace (${shortSha})…`;
 
-      fs.rmSync(stageDir, { recursive: true, force: true });
+      removePathIfExists(stageDir);
       fs.mkdirSync(stageDir, { recursive: true });
       await execFileAsync(
         resolveTarBinary(),
@@ -479,6 +628,7 @@ export class AutoUpdater {
         {
           cwd: this.cacheDir,
           env: buildEnv,
+          signal,
           timeout: 30000,
         }
       );
@@ -491,29 +641,35 @@ export class AutoUpdater {
       // Link or install backend node_modules
       const currentBackendModules = path.join(currentBackendDir, 'node_modules');
       const stagedBackendModules = path.join(stagedBackendDir, 'node_modules');
-      if (fs.existsSync(currentBackendModules) && !fs.existsSync(stagedBackendModules)) {
-        fs.symlinkSync(currentBackendModules, stagedBackendModules, symlinkType);
+      if (fs.existsSync(currentBackendModules)) {
+        replaceWithSymlink(currentBackendModules, stagedBackendModules, symlinkType);
       }
 
-      // Build frontend bundle
+      // Prepare frontend dependencies
       this.state.downloadProgress = 55;
-      this.state.step = `Compiling frontend & integrating changes (${shortSha})…`;
+      this.state.step = `Preparing frontend dependencies (${shortSha})…`;
 
       const installPromise = this.ensureStagedFrontendDeps(
         stagedFrontendDir,
         currentAppRoot,
         symlinkType,
         npmBin,
-        buildEnv
+        buildEnv,
+        signal
       );
       if (installPromise) {
         await installPromise;
       }
 
+      // Build frontend bundle
+      this.state.downloadProgress = 68;
+      this.state.step = `Compiling frontend bundle (${shortSha})…`;
+
       await execFileAsync(npmBin, ['run', 'build'], {
         cwd: stagedFrontendDir,
         env: buildEnv,
         shell: hostIsWin,
+        signal,
         timeout: 60000,
       });
 
@@ -523,6 +679,8 @@ export class AutoUpdater {
 
       // Build native macOS tether daemon if source and dylibs are available
       if (this.platform === 'darwin' && fs.existsSync(path.join(stagedBackendDir, 'tether', 'Makefile'))) {
+        this.state.downloadProgress = 76;
+        this.state.step = `Building native helpers (${shortSha})…`;
         const currentBinDir = path.join(currentBackendDir, 'bin');
         const stagedBinDir = path.join(stagedBackendDir, 'bin');
         if (fs.existsSync(currentBinDir)) {
@@ -531,9 +689,11 @@ export class AutoUpdater {
             fs.cpSync(currentBinDir, stagedBinDir, { recursive: true, force: true, verbatimSymlinks: true });
             await execFileAsync('make', ['-C', path.join(stagedBackendDir, 'tether'), 'clean', 'all'], {
               env: buildEnv,
+              signal,
               timeout: 30000,
             });
           } catch (tetherErr) {
+            if (signal?.aborted) throw tetherErr;
             console.warn('[Updater] Native tether build warning:', tetherErr.message);
           }
         }
@@ -546,12 +706,14 @@ export class AutoUpdater {
       await execFileAsync(process.execPath, ['--check', path.join(stagedBackendDir, 'server.js')], {
         cwd: stagedBackendDir,
         env: buildEnv,
+        signal,
         timeout: 15000,
       });
 
       await execFileAsync(process.execPath, ['--test'], {
         cwd: stagedBackendDir,
         env: buildEnv,
+        signal,
         timeout: 90000,
       });
 
@@ -572,18 +734,19 @@ export class AutoUpdater {
       this.state.downloadProgress = 100;
       this.state.status = 'ready_to_install';
       this.state.step = `Verified (${shortSha}) — all checks passed, ready to integrate`;
+      this.cleanupOldStageDirs(stageDir);
       console.log(`[Updater] Repo commit ${shortSha} verified and staged at ${stageDir}`);
     } catch (err) {
+      if (token?.superseded) {
+        return this.getStatus();
+      }
       this.state.status = 'error';
       this.state.error = `Code verification failed: ${err.message}`;
       this.state.step = null;
       this.state.downloadProgress = 0;
       throw err;
     } finally {
-      this.abortController = null;
-      if (fs.existsSync(tarballPath)) {
-        try { fs.unlinkSync(tarballPath); } catch {}
-      }
+      removePathIfExists(tarballPath);
     }
   }
 
@@ -654,6 +817,7 @@ export class AutoUpdater {
 
     this.state.status = 'checking';
     this.state.error = null;
+    this.state.downloadProgress = 0;
     this.state.step = 'Checking repository for recent code changes…';
     this.state.lastChecked = new Date().toISOString();
 
@@ -875,7 +1039,7 @@ export class AutoUpdater {
       const logDir = path.join(os.homedir(), 'Library', 'Logs', 'Svorrent');
       fs.mkdirSync(logDir, { recursive: true });
       const logFd = fs.openSync(path.join(logDir, 'update.log'), 'a');
-      const relaunchCmd = `sleep 0.6; osascript -e 'tell application id "com.sovopr.svorrent" to quit' >/dev/null 2>&1 || true; sleep 0.5; lsof -ti :3001 | xargs kill -9 2>/dev/null || true; sleep 0.5; open -g "${appPath}" || open "${appPath}"`;
+      const relaunchCmd = `sleep 0.6; osascript -e 'tell application id "com.sovopr.svorrent" to quit' >/dev/null 2>&1 || true; for i in 1 2 3 4 5 6; do pgrep -x Svorrent >/dev/null 2>&1 || break; sleep 0.25; done; lsof -ti :3001 | xargs kill -9 2>/dev/null || true; sleep 0.3; open -g "${appPath}" || open "${appPath}"`;
       const helper = spawn('/bin/bash', ['-c', relaunchCmd], {
         detached: true,
         stdio: ['ignore', logFd, logFd],
